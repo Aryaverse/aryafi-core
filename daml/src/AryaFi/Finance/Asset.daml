@@ -1,49 +1,124 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Generic asset holding interface for all asset types in AryaFi.
+-- AssetHolding is an abstract representation that can model any fungible
+-- or non-fungible asset (equity, fund share, commodity, digital asset).
+-- For institutional fixed-income and cash, use the specialized
+-- SecurityPosition and CashPosition templates respectively.
 module AryaFi.Finance.Asset where
 
-import AryaFi.Common.Identifiers (AccountId, ReferenceId)
-import AryaFi.Common.Types (Amount)
+import AryaFi.Common.Identifiers (AccountId, ExternalRef)
+import AryaFi.Common.Types (Amount, AssetClass)
+import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
 
--- | Asset classification.
-data AssetClass
-  = CashAsset
-  | DebtSecurity
-  | EquitySecurity
-  | FundShare
-  | StructuredProduct
-  | DigitalCommodity
-  deriving (Eq, Show)
+-- ---------------------------------------------------------------------------
+-- AssetHolding Template
+-- ---------------------------------------------------------------------------
 
--- | Core holding interface representation.
+-- | Generic position record for any asset type.
+-- Three-party signatory model: issuer (maintains asset integrity),
+-- custodian (controls physical or ledger safekeeping),
+-- and owner (beneficial owner with economic rights).
+--
+-- Authorization model:
+--   - Transfer requires owner + custodian (economic consent + operational approval).
+--   - Lock/Unlock requires owner + custodian (bilateral agreement to restrict asset).
+--   - Only custodian can update external references (CSD, core banking refs).
+--
+-- Privacy: issuer, custodian, and owner always see this contract.
+-- Additional observers (e.g. collateral receiver, tri-party agent) can be added.
 template AssetHolding
   with
     issuer : Party
+    -- ^ Party that created or issued this asset (e.g. central bank for CBDCs,
+    --   fund manager for fund shares, custodian as asset administrator).
     custodian : Party
+    -- ^ Institution providing safekeeping (must be different from issuer in most cases).
     owner : Party
+    -- ^ Beneficial owner of this asset with economic rights.
     accountId : AccountId
+    -- ^ Account this holding belongs to. Must match an existing Account contract.
     assetClass : AssetClass
-    assetId : ReferenceId
+    -- ^ High-level classification for eligibility and reporting purposes.
+    assetId : Text
+    -- ^ Internal identifier for this specific asset or instrument.
     quantity : Amount
+    -- ^ Quantity of the asset held (face value, units, lots, etc.).
     isLocked : Bool
-    lockReason : Optional Text
+    -- ^ Whether this asset is encumbered (e.g. pledged, in settlement, margined).
+    lockReference : Optional Text
+    -- ^ Reference to the contract or obligation that locked this asset.
+    externalRef : Optional ExternalRef
+    -- ^ Reference to the holding in an external custody or CSD system.
+    observers : [Party]
+    -- ^ Additional parties with read access (e.g. collateral receiver, settlement agent).
   where
     signatory issuer, custodian, owner
+    observer observers
 
-    controller owner, custodian can
-      LockAsset : ContractId AssetHolding
-        with
-          reason : Text
-        do
-          assertMsg "Asset is already locked" (not isLocked)
-          create this with
-            isLocked = True
-            lockReason = Some reason
+    ensure quantity > 0.0
 
-      UnlockAsset : ContractId AssetHolding
-        do
-          assertMsg "Asset is not locked" isLocked
-          create this with
-            isLocked = False
-            lockReason = None
+    -- | Lock this asset, preventing transfer or further encumbrance.
+    -- Used for: pledging as collateral, initiating settlement, margin posting.
+    -- Requires joint agreement of owner and custodian.
+    choice LockAsset : ContractId AssetHolding
+      with
+        lockRef : Text
+        lockingParty : Party
+      controller owner, custodian
+      do
+        require (not isLocked) "Asset is already locked"
+        requireNonEmpty lockRef "lockReference"
+        create this with
+          isLocked = True
+          lockReference = Some lockRef
+
+    -- | Unlock a previously locked asset, making it freely transferable again.
+    -- Requires joint agreement of owner and custodian.
+    choice UnlockAsset : ContractId AssetHolding
+      controller owner, custodian
+      do
+        require isLocked "Asset is not currently locked"
+        create this with
+          isLocked = False
+          lockReference = None
+
+    -- | Transfer ownership of this asset to a new owner and account.
+    -- Asset must not be locked before transfer.
+    -- Requires joint authorization of current owner and custodian.
+    choice TransferAsset : ContractId AssetHolding
+      with
+        newOwner : Party
+        newAccountId : AccountId
+      controller owner, custodian
+      do
+        require (not isLocked) "Cannot transfer a locked asset"
+        require (newOwner /= owner) "New owner must be different from current owner"
+        create this with
+          owner = newOwner
+          accountId = newAccountId
+
+    -- | Update the external custody or CSD system reference.
+    -- Only the custodian can update this reference.
+    choice UpdateExternalRef : ContractId AssetHolding
+      with
+        newRef : ExternalRef
+      controller custodian
+      do
+        create this with externalRef = Some newRef
+
+    -- | Add an observer to this holding (e.g. collateral receiver, tri-party agent).
+    choice AddObserver : ContractId AssetHolding
+      with
+        newObserver : Party
+      controller owner
+      do
+        require (newObserver `notElem` observers) "Party is already an observer"
+        create this with observers = newObserver :: observers
+
+    -- | Nonconsuming check: verify if this asset can be freely transferred.
+    nonconsuming choice IsTransferable : Bool
+      controller custodian
+      do
+        pure (not isLocked)
