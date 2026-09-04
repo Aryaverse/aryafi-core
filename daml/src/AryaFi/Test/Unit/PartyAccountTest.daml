@@ -1,0 +1,422 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Unit tests for AryaFi.Finance.Party and AryaFi.Finance.Account.
+-- Covers: party lifecycle, role management, account freeze/unfreeze,
+-- observer scoping, and unauthorized access prevention.
+module AryaFi.Test.Unit.PartyAccountTest where
+
+import Daml.Script
+import AryaFi.Finance.Party
+import AryaFi.Finance.Account
+import AryaFi.Common.Identifiers
+
+-- ---------------------------------------------------------------------------
+-- Party Tests
+-- ---------------------------------------------------------------------------
+
+testCreateInstitutionalParty : Script ()
+testCreateInstitutionalParty = script do
+  operator <- allocateParty "AryaFiOperator"
+  bankA    <- allocateParty "BankAlpha"
+
+  partyCid <- submitMulti [operator, bankA] [] do
+    createCmd InstitutionalParty with
+      operator = operator
+      party = bankA
+      displayName = "Bank Alpha N.A."
+      legalEntityIdentifier = Some (LEI "5493006MHB84DD0ZWV18")
+      roles = [Bank, BrokerDealer]
+      jurisdictionCode = "US"
+      isActive = True
+      observers = []
+
+  partyData <- queryContractId bankA partyCid
+  case partyData of
+    None -> abort "InstitutionalParty should be visible to the party itself"
+    Some p -> do
+      assertMsg "Display name" (p.displayName == "Bank Alpha N.A.")
+      assertMsg "2 roles" (length p.roles == 2)
+      assertMsg "Active" (p.isActive == True)
+
+testUpdatePartyProfile : Script ()
+testUpdatePartyProfile = script do
+  operator <- allocateParty "AryaFiOperator"
+  bankA    <- allocateParty "BankAlpha"
+
+  partyCid <- submitMulti [operator, bankA] [] do
+    createCmd InstitutionalParty with
+      operator = operator
+      party = bankA
+      displayName = "Bank Alpha N.A."
+      legalEntityIdentifier = None
+      roles = [Bank]
+      jurisdictionCode = "US"
+      isActive = True
+      observers = []
+
+  updatedCid <- submit bankA do
+    exerciseCmd partyCid UpdateProfile with
+      newDisplayName = "Bank Alpha International N.A."
+      newJurisdiction = "GB"
+
+  updated <- queryContractId bankA updatedCid
+  case updated of
+    None -> abort "Updated party not found"
+    Some p -> do
+      assertMsg "New display name" (p.displayName == "Bank Alpha International N.A.")
+      assertMsg "New jurisdiction" (p.jurisdictionCode == "GB")
+
+testAddAndRemoveRole : Script ()
+testAddAndRemoveRole = script do
+  operator <- allocateParty "AryaFiOperator"
+  bankA    <- allocateParty "BankAlpha"
+
+  partyCid <- submitMulti [operator, bankA] [] do
+    createCmd InstitutionalParty with
+      operator = operator
+      party = bankA
+      displayName = "Bank Alpha N.A."
+      legalEntityIdentifier = None
+      roles = [Bank]
+      jurisdictionCode = "US"
+      isActive = True
+      observers = []
+
+  -- Add Custodian role
+  withCustodianCid <- submit operator do
+    exerciseCmd partyCid AddRole with newRole = Custodian
+
+  withCustodian <- queryContractId bankA withCustodianCid
+  case withCustodian of
+    None -> abort "Not found after AddRole"
+    Some p -> assertMsg "Has custodian role" (Custodian `elem` p.roles)
+
+  -- Remove Bank role
+  withoutBankCid <- submit operator do
+    exerciseCmd withCustodianCid RemoveRole with roleToRemove = Bank
+
+  withoutBank <- queryContractId bankA withoutBankCid
+  case withoutBank of
+    None -> abort "Not found after RemoveRole"
+    Some p -> do
+      assertMsg "No longer has Bank role" (Bank `notElem` p.roles)
+      assertMsg "Still has Custodian role" (Custodian `elem` p.roles)
+
+testSetPartyStatus : Script ()
+testSetPartyStatus = script do
+  operator <- allocateParty "AryaFiOperator"
+  bankA    <- allocateParty "BankAlpha"
+
+  partyCid <- submitMulti [operator, bankA] [] do
+    createCmd InstitutionalParty with
+      operator = operator
+      party = bankA
+      displayName = "Bank Alpha"
+      legalEntityIdentifier = None
+      roles = [Bank]
+      jurisdictionCode = "US"
+      isActive = True
+      observers = []
+
+  deactivatedCid <- submit operator do
+    exerciseCmd partyCid SetPartyStatus with
+      active = False
+      reason = "Regulatory suspension order received"
+
+  deactivated <- queryContractId bankA deactivatedCid
+  case deactivated of
+    None -> abort "Deactivated party not found"
+    Some p -> assertMsg "Party is inactive" (p.isActive == False)
+
+testPartyObserverScoping : Script ()
+testPartyObserverScoping = script do
+  operator  <- allocateParty "AryaFiOperator"
+  bankA     <- allocateParty "BankAlpha"
+  counterparty <- allocateParty "CounterpartyBank"
+  outsider  <- allocateParty "OutsiderCorp"
+
+  partyCid <- submitMulti [operator, bankA] [] do
+    createCmd InstitutionalParty with
+      operator = operator
+      party = bankA
+      displayName = "Bank Alpha N.A."
+      legalEntityIdentifier = None
+      roles = [Bank]
+      jurisdictionCode = "US"
+      isActive = True
+      observers = []
+
+  -- Outsider cannot see it
+  outsiderView <- queryContractId outsider partyCid
+  assertMsg "Outsider cannot see party profile" (outsiderView == None)
+
+  -- Add counterparty as observer
+  withCounterpartyCid <- submit bankA do
+    exerciseCmd partyCid AddObserver with newObserver = counterparty
+
+  -- Counterparty can now see it
+  cpView <- queryContractId counterparty withCounterpartyCid
+  assertMsg "Counterparty can see party profile" (cpView /= None)
+
+  -- Outsider still cannot see it
+  outsiderView2 <- queryContractId outsider withCounterpartyCid
+  assertMsg "Outsider still cannot see party profile" (outsiderView2 == None)
+
+-- Negative: only operator can add roles
+testOnlyOperatorCanAddRole : Script ()
+testOnlyOperatorCanAddRole = script do
+  operator <- allocateParty "AryaFiOperator"
+  bankA    <- allocateParty "BankAlpha"
+  hacker   <- allocateParty "Hacker"
+
+  partyCid <- submitMulti [operator, bankA] [] do
+    createCmd InstitutionalParty with
+      operator = operator
+      party = bankA
+      displayName = "Bank Alpha"
+      legalEntityIdentifier = None
+      roles = [Bank]
+      jurisdictionCode = "US"
+      isActive = True
+      observers = []
+
+  -- Hacker tries to add a role — must fail
+  submitMustFail hacker do
+    exerciseCmd partyCid AddRole with newRole = Regulator
+
+-- Negative: duplicate roles are rejected
+testDuplicateRoleRejected : Script ()
+testDuplicateRoleRejected = script do
+  operator <- allocateParty "AryaFiOperator"
+  bankA    <- allocateParty "BankAlpha"
+
+  partyCid <- submitMulti [operator, bankA] [] do
+    createCmd InstitutionalParty with
+      operator = operator
+      party = bankA
+      displayName = "Bank Alpha"
+      legalEntityIdentifier = None
+      roles = [Bank]
+      jurisdictionCode = "US"
+      isActive = True
+      observers = []
+
+  -- Try to add Bank role again — must fail
+  submitMustFail operator do
+    exerciseCmd partyCid AddRole with newRole = Bank
+
+-- ---------------------------------------------------------------------------
+-- Account Tests
+-- ---------------------------------------------------------------------------
+
+testCreateAccount : Script ()
+testCreateAccount = script do
+  custodian <- allocateParty "StateCustodianBank"
+  owner     <- allocateParty "InvestmentFundAlpha"
+
+  let accId = AccountId "ACC-ALPHA-USD-SEG-001"
+
+  accCid <- submitMulti [custodian, owner] [] do
+    createCmd Account with
+      custodian = custodian
+      owner = owner
+      accountId = accId
+      accountType = SegregatedCustody
+      description = "Alpha Fund USD Segregated Custody Account"
+      isFrozen = False
+      freezeReason = None
+      observers = []
+
+  accData <- queryContractId owner accCid
+  case accData of
+    None -> abort "Account not visible to owner"
+    Some a -> do
+      assertMsg "Account ID" (a.accountId == accId)
+      assertMsg "Not frozen" (a.isFrozen == False)
+      assertMsg "Segregated type" (a.accountType == SegregatedCustody)
+
+testFreezeAndUnfreeze : Script ()
+testFreezeAndUnfreeze = script do
+  custodian <- allocateParty "StateCustodianBank"
+  owner     <- allocateParty "InvestmentFundAlpha"
+
+  let accId = AccountId "ACC-FREEZE-TEST-001"
+
+  accCid <- submitMulti [custodian, owner] [] do
+    createCmd Account with
+      custodian = custodian
+      owner = owner
+      accountId = accId
+      accountType = SegregatedCustody
+      description = "Test Account"
+      isFrozen = False
+      freezeReason = None
+      observers = []
+
+  -- Freeze it
+  frozenCid <- submit custodian do
+    exerciseCmd accCid FreezeAccount with reason = "REGULATORY_HOLD"
+
+  frozenData <- queryContractId owner frozenCid
+  case frozenData of
+    None -> abort "Frozen account not visible to owner"
+    Some a -> do
+      assertMsg "Account is frozen" (a.isFrozen == True)
+      assertMsg "Freeze reason set" (a.freezeReason == Some "REGULATORY_HOLD")
+
+  -- Unfreeze it
+  unfrozenCid <- submit custodian do
+    exerciseCmd frozenCid UnfreezeAccount
+
+  unfrozenData <- queryContractId owner unfrozenCid
+  case unfrozenData of
+    None -> abort "Unfrozen account not visible"
+    Some a -> do
+      assertMsg "Account is no longer frozen" (a.isFrozen == False)
+      assertMsg "Freeze reason cleared" (a.freezeReason == None)
+
+testAccountObserverManagement : Script ()
+testAccountObserverManagement = script do
+  custodian <- allocateParty "StateCustodianBank"
+  owner     <- allocateParty "InvestmentFundAlpha"
+  auditor   <- allocateParty "RegulatoryAuditor"
+  outsider  <- allocateParty "OutsiderCorp"
+
+  let accId = AccountId "ACC-OBSERVER-TEST-001"
+
+  accCid <- submitMulti [custodian, owner] [] do
+    createCmd Account with
+      custodian = custodian
+      owner = owner
+      accountId = accId
+      accountType = SegregatedCustody
+      description = "Segregated Account"
+      isFrozen = False
+      freezeReason = None
+      observers = []
+
+  -- Outsider should not see the account
+  outsiderView <- queryContractId outsider accCid
+  assertMsg "Outsider blind to account" (outsiderView == None)
+
+  -- Add auditor as observer
+  withAuditorCid <- submit owner do
+    exerciseCmd accCid AddObserver with newObserver = auditor
+
+  -- Auditor can now see the account
+  auditorView <- queryContractId auditor withAuditorCid
+  assertMsg "Auditor can see account" (auditorView /= None)
+
+  -- Remove auditor
+  withoutAuditorCid <- submit owner do
+    exerciseCmd withAuditorCid RemoveObserver with observerToRemove = auditor
+
+  -- Auditor no longer sees it
+  auditorView2 <- queryContractId auditor withoutAuditorCid
+  assertMsg "Auditor can no longer see account" (auditorView2 == None)
+
+-- Negative: only custodian can freeze
+testOnlyCustodianCanFreeze : Script ()
+testOnlyCustodianCanFreeze = script do
+  custodian <- allocateParty "StateCustodianBank"
+  owner     <- allocateParty "InvestmentFundAlpha"
+
+  accCid <- submitMulti [custodian, owner] [] do
+    createCmd Account with
+      custodian = custodian
+      owner = owner
+      accountId = AccountId "ACC-NEG-001"
+      accountType = SettlementAccount
+      description = "Test"
+      isFrozen = False
+      freezeReason = None
+      observers = []
+
+  -- Owner tries to freeze — must fail (only custodian can)
+  submitMustFail owner do
+    exerciseCmd accCid FreezeAccount with reason = "unauthorized"
+
+-- Negative: cannot freeze already-frozen account
+testCannotDoubleFreezeAccount : Script ()
+testCannotDoubleFreezeAccount = script do
+  custodian <- allocateParty "StateCustodianBank"
+  owner     <- allocateParty "InvestmentFundAlpha"
+
+  accCid <- submitMulti [custodian, owner] [] do
+    createCmd Account with
+      custodian = custodian
+      owner = owner
+      accountId = AccountId "ACC-DOUBLE-FREEZE-001"
+      accountType = MarginAccount
+      description = "Margin account"
+      isFrozen = False
+      freezeReason = None
+      observers = []
+
+  frozenCid <- submit custodian do
+    exerciseCmd accCid FreezeAccount with reason = "FIRST_FREEZE"
+
+  -- Try to freeze again — must fail
+  submitMustFail custodian do
+    exerciseCmd frozenCid FreezeAccount with reason = "SECOND_FREEZE"
+
+-- Negative: cannot unfreeze already-active account
+testCannotUnfreezeActiveAccount : Script ()
+testCannotUnfreezeActiveAccount = script do
+  custodian <- allocateParty "StateCustodianBank"
+  owner     <- allocateParty "InvestmentFundAlpha"
+
+  accCid <- submitMulti [custodian, owner] [] do
+    createCmd Account with
+      custodian = custodian
+      owner = owner
+      accountId = AccountId "ACC-UNFREEZE-NEG-001"
+      accountType = ClearingAccount
+      description = "Clearing account"
+      isFrozen = False
+      freezeReason = None
+      observers = []
+
+  -- Try to unfreeze already-active account — must fail
+  submitMustFail custodian do
+    exerciseCmd accCid UnfreezeAccount
+
+-- Negative: only one party cannot create account (dual signatory)
+testAccountRequiresDualSignatory : Script ()
+testAccountRequiresDualSignatory = script do
+  custodian <- allocateParty "StateCustodianBank"
+  owner     <- allocateParty "InvestmentFundAlpha"
+
+  -- Custodian alone cannot create an Account — must fail
+  submitMustFail custodian do
+    createCmd Account with
+      custodian = custodian
+      owner = owner
+      accountId = AccountId "ACC-SINGLE-SIG-001"
+      accountType = SegregatedCustody
+      description = "Should fail"
+      isFrozen = False
+      freezeReason = None
+      observers = []
+
+-- ---------------------------------------------------------------------------
+-- Entry Point
+-- ---------------------------------------------------------------------------
+
+runPartyAccountTests : Script ()
+runPartyAccountTests = script do
+  testCreateInstitutionalParty
+  testUpdatePartyProfile
+  testAddAndRemoveRole
+  testSetPartyStatus
+  testPartyObserverScoping
+  testOnlyOperatorCanAddRole
+  testDuplicateRoleRejected
+  testCreateAccount
+  testFreezeAndUnfreeze
+  testAccountObserverManagement
+  testOnlyCustodianCanFreeze
+  testCannotDoubleFreezeAccount
+  testCannotUnfreezeActiveAccount
+  testAccountRequiresDualSignatory
