@@ -1,0 +1,84 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Finance.Cash where
+
+import AryaFi.Common.Identifiers (AccountId)
+import AryaFi.Common.Types (Amount, Currency)
+
+-- | Cash position holding contract representing institutional deposit / tokenized fiat currency.
+template CashPosition
+  with
+    bank : Party
+    owner : Party
+    accountId : AccountId
+    currency : Currency
+    amount : Amount
+    isLocked : Bool
+    lockReference : Optional Text
+  where
+    signatory bank, owner
+
+    ensure amount > 0.0
+
+    key (bank, accountId, currency) : (Party, AccountId, Currency)
+    maintainer key._1
+
+    -- | Split cash position into two separate positions
+    controller owner can
+      SplitCash : (ContractId CashPosition, ContractId CashPosition)
+        with
+          splitAmount : Amount
+        do
+          assertMsg "Split amount must be greater than zero" (splitAmount > 0.0)
+          assertMsg "Split amount must be less than total amount" (splitAmount < amount)
+          assertMsg "Cannot split locked cash" (not isLocked)
+          c1 <- create this with amount = splitAmount
+          c2 <- create this with amount = amount - splitAmount
+          pure (c1, c2)
+
+    -- | Merge another cash position of same bank, account, and currency
+    controller owner can
+      MergeCash : ContractId CashPosition
+        with
+          otherCid : ContractId CashPosition
+        do
+          assertMsg "Cannot merge locked cash" (not isLocked)
+          other <- fetch otherCid
+          assertMsg "Bank mismatch" (other.bank == bank)
+          assertMsg "Owner mismatch" (other.owner == owner)
+          assertMsg "Account mismatch" (other.accountId == accountId)
+          assertMsg "Currency mismatch" (other.currency == currency)
+          assertMsg "Other cash is locked" (not other.isLocked)
+          archive otherCid
+          create this with amount = amount + other.amount
+
+    -- | Transfer cash to another owner account at the same bank
+    controller owner, bank can
+      TransferCash : ContractId CashPosition
+        with
+          newOwner : Party
+          newAccountId : AccountId
+        do
+          assertMsg "Cannot transfer locked cash" (not isLocked)
+          create this with
+            owner = newOwner
+            accountId = newAccountId
+
+    -- | Lock cash position for settlement or collateral escrow
+    controller owner, bank can
+      LockCash : ContractId CashPosition
+        with
+          reference : Text
+        do
+          assertMsg "Cash is already locked" (not isLocked)
+          create this with
+            isLocked = True
+            lockReference = Some reference
+
+      UnlockCash : ContractId CashPosition
+        do
+          assertMsg "Cash is not locked" isLocked
+          create this with
+            isLocked = False
+            lockReference = None

@@ -1,0 +1,42 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Compliance.TransferRestrictions where
+
+import AryaFi.Common.Identifiers (ISIN)
+
+-- | Regulatory exemption types and categories.
+data RegulatoryCategory
+  = RegD_506c
+  | RegS
+  | Rule144A
+  | QualifiedPurchaserOnly
+  | AccreditedInvestorOnly
+  | RetailUnrestricted
+  deriving (Eq, Show)
+
+-- | Transfer restriction rule definition linked to an asset or security.
+template TransferRestrictionRule
+  with
+    complianceOfficer : Party
+    isin : ISIN
+    regulatoryCategory : RegulatoryCategory
+    holdingPeriodDays : Int
+    whitelistRequired : Bool
+    lockupExpiry : Optional Time
+    isActive : Bool
+  where
+    signatory complianceOfficer
+
+    key (complianceOfficer, isin) : (Party, ISIN)
+    maintainer key._1
+
+    controller complianceOfficer can
+      UpdateRestriction : ContractId TransferRestrictionRule
+        with
+          newCategory : RegulatoryCategory
+          newLockup : Optional Time
+        do
+          create this with
+            regulatoryCategory = newCategory
+            lockupExpiry = newLockup

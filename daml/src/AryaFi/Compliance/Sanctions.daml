@@ -1,0 +1,40 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Compliance.Sanctions where
+
+import AryaFi.Common.Identifiers (LEI)
+
+-- | Institutional sanctions clearance status.
+data SanctionsStatus
+  = SanctionsClear
+  | SanctionsFlagged Text
+  | SanctionsBlocked Text
+  deriving (Eq, Show)
+
+-- | Sanctions screening attestation issued by an authorized screening authority.
+template SanctionsAttestation
+  with
+    screeningAuthority : Party
+    subjectParty : Party
+    lei : Optional LEI
+    status : SanctionsStatus
+    screeningTimestamp : Time
+    expiryTimestamp : Time
+    screeningProviderRef : Text
+  where
+    signatory screeningAuthority
+    observer subjectParty
+
+    key (screeningAuthority, subjectParty) : (Party, Party)
+    maintainer key._1
+
+    controller screeningAuthority can
+      UpdateSanctionsStatus : ContractId SanctionsAttestation
+        with
+          newStatus : SanctionsStatus
+          newExpiry : Time
+        do
+          create this with
+            status = newStatus
+            expiryTimestamp = newExpiry

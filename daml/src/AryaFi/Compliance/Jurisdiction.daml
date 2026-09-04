@@ -1,0 +1,23 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Compliance.Jurisdiction where
+
+-- | Cross-border legal jurisdiction profile.
+template JurisdictionProfile
+  with
+    regulator : Party
+    institution : Party
+    countryCode : Text  -- ISO 3166-1 alpha-2 (e.g., "US", "GB", "CH", "SG", "AE")
+    regulatoryFramework : Text
+    permittedAssetClasses : [Text]
+    isActive : Bool
+  where
+    signatory regulator, institution
+
+    controller regulator can
+      SetJurisdictionActive : ContractId JurisdictionProfile
+        with
+          active : Bool
+        do
+          create this with isActive = active

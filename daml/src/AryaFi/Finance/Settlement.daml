@@ -1,0 +1,37 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Finance.Settlement where
+
+import AryaFi.Common.Types (Amount, Currency, SettlementStatus)
+import AryaFi.Common.Identifiers (AccountId, ISIN, CorrelationId)
+
+-- | Settlement model representing Delivery-versus-Payment (DvP) instruction between counterparties.
+template DvpInstruction
+  with
+    settlementAgent : Party
+    seller : Party
+    buyer : Party
+    isin : ISIN
+    securityQuantity : Amount
+    sellerSecurityAccount : AccountId
+    buyerSecurityAccount : AccountId
+    currency : Currency
+    cashAmount : Amount
+    sellerCashAccount : AccountId
+    buyerCashAccount : AccountId
+    correlationId : CorrelationId
+    status : SettlementStatus
+  where
+    signatory settlementAgent, seller, buyer
+
+    controller settlementAgent can
+      ExecuteDvpSettlement : ContractId DvpInstruction
+        do
+          create this with status = Settled
+
+      CancelDvpSettlement : ContractId DvpInstruction
+        with
+          reason : Text
+        do
+          create this with status = Cancelled reason

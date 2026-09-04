@@ -1,0 +1,38 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Contracts.Repo where
+
+import AryaFi.Common.Types (Amount, Currency, Rate, LifecycleStatus(..))
+import AryaFi.Common.Identifiers (ISIN, ReferenceId)
+
+-- | Institutional Repurchase Agreement (Repo) Contract Interface.
+template RepoAgreement
+  with
+    repoId : ReferenceId
+    seller : Party  -- Cash borrower / Security seller
+    buyer : Party   -- Cash lender / Security buyer
+    tripartyAgent : Optional Party
+    isin : ISIN
+    collateralQuantity : Amount
+    currency : Currency
+    purchasePrice : Amount
+    repurchasePrice : Amount
+    repoRate : Rate
+    startDate : Time
+    endDate : Time
+    status : LifecycleStatus
+  where
+    signatory seller, buyer
+
+    controller seller, buyer can
+      CloseoutRepo : ContractId RepoAgreement
+        do
+          create this with status = Closed
+
+    controller buyer can
+      DeclareRepoDefault : ContractId RepoAgreement
+        with
+          reason : Text
+        do
+          create this with status = Defaulted

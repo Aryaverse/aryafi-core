@@ -1,0 +1,37 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Test.Scenarios.RepoScenario where
+
+import Daml.Script
+import AryaFi.Contracts.Repo
+import AryaFi.Common.Identifiers
+import AryaFi.Common.Types
+
+repoLifecycleScenario : Script ()
+repoLifecycleScenario = script do
+  dealer <- allocateParty "DealerSeller"
+  cashLender <- allocateParty "CashLender"
+
+  let isin = ISIN "GB00BN65R313" -- UK Gilt
+
+  repoCid <- submitMulti [dealer, cashLender] [] do
+    createCmd RepoAgreement with
+      repoId = "REPO-2026-UKGILT-01"
+      seller = dealer
+      buyer = cashLender
+      tripartyAgent = None
+      isin = isin
+      collateralQuantity = 5000000.0
+      currency = "GBP"
+      purchasePrice = 4900000.0
+      repurchasePrice = 4910000.0
+      repoRate = 0.0510
+      startDate = time (date 2026 Feb 24) 10 0 0
+      endDate = time (date 2026 Feb 25) 10 0 0
+      status = Active
+
+  closedRepoCid <- submitMulti [dealer, cashLender] [] do
+    exerciseCmd repoCid CloseoutRepo
+
+  pure ()

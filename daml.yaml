@@ -1,0 +1,11 @@
+sdk-version: 2.10.0
+name: aryafi-core
+source: daml/src
+init-script: AryaFi.Test.Scenarios.DvpTreasuryScenario:initLedger
+version: 0.1.0
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - daml-script
+build-options:
+  - --ghc-option=-Werror

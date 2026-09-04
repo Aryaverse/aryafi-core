@@ -1,0 +1,39 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Test.Unit.FinanceTest where
+
+import Daml.Script
+import AryaFi.Finance.Cash
+import AryaFi.Common.Identifiers
+
+unitTestCashSplitMerge : Script ()
+unitTestCashSplitMerge = script do
+  bank <- allocateParty "Bank"
+  alice <- allocateParty "Alice"
+  let acc = AccountId "ACC-ALICE-USD"
+
+  cashCid <- submitMulti [bank, alice] [] do
+    createCmd CashPosition with
+      bank = bank
+      owner = alice
+      accountId = acc
+      currency = "USD"
+      amount = 1000000.0
+      isLocked = False
+      lockReference = None
+
+  (c1, c2) <- submit alice do
+    exerciseCmd cashCid SplitCash with splitAmount = 400000.0
+
+  mergedCid <- submit alice do
+    exerciseCmd c1 MergeCash with otherCid = c2
+
+  merged <- submit alice do
+    queryContractId alice mergedCid
+
+  case merged of
+    Some pos -> assert (pos.amount == 1000000.0)
+    None -> abort "Merged cash position not found"
+
+  pure ()

@@ -1,0 +1,74 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Test.Scenarios.DvpTreasuryScenario where
+
+import Daml.Script
+import AryaFi.Finance.Cash
+import AryaFi.Finance.Security
+import AryaFi.Finance.Settlement
+import AryaFi.Common.Identifiers
+import AryaFi.Common.Types
+
+initLedger : Script ()
+initLedger = dvpTreasuryScenario
+
+dvpTreasuryScenario : Script ()
+dvpTreasuryScenario = script do
+  custodian <- allocateParty "FederalCustodian"
+  settlementAgent <- allocateParty "SettlementAgent"
+  bankA <- allocateParty "DealerBankA"
+  bankB <- allocateParty "DealerBankB"
+
+  let usdtIsin = ISIN "US912828ZM24"
+  let corrId = CorrelationId "CORR-DVP-2026-001"
+
+  -- Dealer A has Tokenized US Treasury Position
+  secCid <- submitMulti [custodian, bankA] [] do
+    createCmd SecurityPosition with
+      custodian = custodian
+      issuer = custodian
+      owner = bankA
+      accountId = AccountId "ACC-SEC-BANK-A"
+      isin = usdtIsin
+      cusip = Some (CUSIP "912828ZM2")
+      instrumentName = "US Treasury 4.250% 2028"
+      quantity = 10000000.0
+      couponRate = Some 0.0425
+      maturityTimestamp = None
+      isLocked = False
+      lockReference = None
+
+  -- Dealer B has Tokenized Cash Position
+  cashCid <- submitMulti [custodian, bankB] [] do
+    createCmd CashPosition with
+      bank = custodian
+      owner = bankB
+      accountId = AccountId "ACC-CASH-BANK-B"
+      currency = "USD"
+      amount = 9950000.0
+      isLocked = False
+      lockReference = None
+
+  -- Create DvP Settlement Instruction
+  dvpCid <- submitMulti [settlementAgent, bankA, bankB] [] do
+    createCmd DvpInstruction with
+      settlementAgent = settlementAgent
+      seller = bankA
+      buyer = bankB
+      isin = usdtIsin
+      securityQuantity = 10000000.0
+      sellerSecurityAccount = AccountId "ACC-SEC-BANK-A"
+      buyerSecurityAccount = AccountId "ACC-SEC-BANK-B"
+      currency = "USD"
+      cashAmount = 9950000.0
+      sellerCashAccount = AccountId "ACC-CASH-BANK-A"
+      buyerCashAccount = AccountId "ACC-CASH-BANK-B"
+      correlationId = corrId
+      status = PendingSettlement
+
+  -- Settlement Agent executes synchronized DvP
+  settledDvpCid <- submit settlementAgent do
+    exerciseCmd dvpCid ExecuteDvpSettlement
+
+  pure ()

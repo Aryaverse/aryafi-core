@@ -1,0 +1,60 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Common.Types where
+
+-- | Financial currency code (ISO 4217 standard e.g., USD, EUR, GBP, JPY).
+type Currency = Text
+
+-- | Monetary and asset quantities represented as high-precision decimals.
+type Amount = Decimal
+
+-- | Interest or haircut rate represented as decimal (e.g. 0.0525 for 5.25%).
+type Rate = Decimal
+
+-- | Unique contract or asset reference tag.
+type ReferenceId = Text
+
+-- | Standard Day Count conventions in institutional finance.
+data DayCountConvention
+  = Act360
+  | Act365Fixed
+  | ActActISDA
+  | Thirty360
+  deriving (Eq, Show)
+
+-- | Rounding modes for monetary and interest calculations.
+data RoundingMode
+  = RoundNearest
+  | RoundUp
+  | RoundDown
+  | RoundBankers
+  deriving (Eq, Show)
+
+-- | High-level lifecycle states for institutional financial contracts.
+data LifecycleStatus
+  = Draft
+  | Active
+  | Suspended
+  | Matured
+  | Terminated
+  | Defaulted
+  | Closed
+  deriving (Eq, Show)
+
+-- | Settlement status states for multi-leg transactions.
+data SettlementStatus
+  = PendingSettlement
+  | Settled
+  | Failed Text
+  | Cancelled Text
+  deriving (Eq, Show)
+
+-- | Tenor representation for financial agreements.
+data Tenor
+  = Overnight
+  | SpotNext
+  | TermDays Int
+  | TermMonths Int
+  | TermYears Int
+  deriving (Eq, Show)

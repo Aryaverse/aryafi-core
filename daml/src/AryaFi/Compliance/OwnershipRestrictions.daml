@@ -1,0 +1,32 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Compliance.OwnershipRestrictions where
+
+import AryaFi.Common.Types (Amount)
+import AryaFi.Common.Identifiers (ISIN)
+
+-- | Maximum holding cap and investor concentration restrictions.
+template OwnershipRestriction
+  with
+    regulator : Party
+    isin : ISIN
+    maxOwnershipPercentage : Decimal
+    maxHoldingQuantity : Amount
+    disallowedJurisdictions : [Text]
+    isActive : Bool
+  where
+    signatory regulator
+
+    key (regulator, isin) : (Party, ISIN)
+    maintainer key._1
+
+    controller regulator can
+      UpdateCaps : ContractId OwnershipRestriction
+        with
+          newMaxPercentage : Decimal
+          newMaxQuantity : Amount
+        do
+          create this with
+            maxOwnershipPercentage = newMaxPercentage
+            maxHoldingQuantity = newMaxQuantity

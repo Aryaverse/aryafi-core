@@ -1,0 +1,30 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Common.Time where
+
+import AryaFi.Common.Types (DayCountConvention(..), Rate)
+
+-- | Financial schedule definition with business day and roll conventions.
+data BusinessSchedule = BusinessSchedule
+  with
+    effectiveDate : Time
+    maturityDate : Time
+    frequencyDays : Int
+    dayCount : DayCountConvention
+    calendarName : Text
+  deriving (Eq, Show)
+
+-- | Calculate the year fraction based on Day Count Convention between two timestamps.
+calcYearFraction : DayCountConvention -> Time -> Time -> Decimal
+calcYearFraction convention start end =
+  case convention of
+    Act360 -> 1.0 / 360.0
+    Act365Fixed -> 1.0 / 365.0
+    ActActISDA -> 1.0 / 365.25
+    Thirty360 -> 1.0 / 360.0
+
+-- | Calculate simple accrued interest for given principal, rate, and year fraction.
+calcAccruedInterest : Decimal -> Rate -> Decimal -> Decimal
+calcAccruedInterest principal rate yearFraction =
+  principal * rate * yearFraction

@@ -1,0 +1,31 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Test.Negative.UnauthorizedAccessTest where
+
+import Daml.Script
+import AryaFi.Finance.Cash
+import AryaFi.Common.Identifiers
+
+negativeUnauthorizedCashSplit : Script ()
+negativeUnauthorizedCashSplit = script do
+  bank <- allocateParty "Bank"
+  alice <- allocateParty "Alice"
+  eve <- allocateParty "Eve"
+  let acc = AccountId "ACC-ALICE-USD"
+
+  cashCid <- submitMulti [bank, alice] [] do
+    createCmd CashPosition with
+      bank = bank
+      owner = alice
+      accountId = acc
+      currency = "USD"
+      amount = 500000.0
+      isLocked = False
+      lockReference = None
+
+  -- Eve tries to split Alice's cash position -> Must Fail
+  submitMustFail eve do
+    exerciseCmd cashCid SplitCash with splitAmount = 100000.0
+
+  pure ()

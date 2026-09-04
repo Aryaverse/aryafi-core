@@ -1,0 +1,39 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Contracts.Margin where
+
+import AryaFi.Common.Types (Amount, Currency)
+import AryaFi.Common.Identifiers (ReferenceId)
+
+-- | Margin call status.
+data MarginCallStatus
+  = MarginCalled
+  | MarginMet
+  | MarginDisputed
+  | MarginDefaulted
+  deriving (Eq, Show)
+
+-- | Institutional Variation / Initial Margin Call Template.
+template MarginCall
+  with
+    marginCallId : ReferenceId
+    caller : Party
+    payer : Party
+    currency : Currency
+    requiredAmount : Amount
+    deadline : Time
+    status : MarginCallStatus
+  where
+    signatory caller, payer
+
+    controller payer can
+      FulfillMarginCall : ContractId MarginCall
+        do
+          create this with status = MarginMet
+
+      DisputeMarginCall : ContractId MarginCall
+        with
+          disputeReason : Text
+        do
+          create this with status = MarginDisputed

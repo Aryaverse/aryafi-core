@@ -1,0 +1,44 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Test.Privacy.ObserverPrivacyTest where
+
+import Daml.Script
+import AryaFi.Finance.Account
+import AryaFi.Common.Identifiers
+
+observerPrivacyVerification : Script ()
+observerPrivacyVerification = script do
+  custodian <- allocateParty "BankCustodian"
+  alice <- allocateParty "AliceCorp"
+  bob <- allocateParty "BobCorp"
+  auditor <- allocateParty "RegulatoryAuditor"
+
+  let aliceAcc = AccountId "ACC-ALICE-SEC"
+
+  accCid <- submitMulti [custodian, alice] [] do
+    createCmd Account with
+      custodian = custodian
+      owner = alice
+      accountId = aliceAcc
+      accountType = SegregatedCustody
+      description = "Alice Segregated Account"
+      isFrozen = False
+      observers = []
+
+  -- Bob should NOT be able to see Alice's account
+  bobQuery <- submit bob do
+    queryContractId bob accCid
+
+  assert (bobQuery == None)
+
+  -- Alice adds Auditor as observer
+  updatedAccCid <- submit alice do
+    exerciseCmd accCid AddObserver with newObserver = auditor
+
+  -- Auditor can now query the contract
+  auditorQuery <- submit auditor do
+    queryContractId auditor updatedAccCid
+
+  assert (auditorQuery /= None)
+  pure ()

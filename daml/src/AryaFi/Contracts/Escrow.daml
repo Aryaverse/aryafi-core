@@ -1,0 +1,40 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Contracts.Escrow where
+
+import AryaFi.Common.Types (Amount, Currency)
+import AryaFi.Common.Identifiers (ReferenceId)
+
+-- | Escrow status states.
+data EscrowStatus
+  = EscrowHeld
+  | EscrowReleased
+  | EscrowRefunded
+  | EscrowDisputed
+  deriving (Eq, Show)
+
+-- | Multi-party conditional escrow contract.
+template ConditionalEscrow
+  with
+    escrowId : ReferenceId
+    escrowAgent : Party
+    depositor : Party
+    beneficiary : Party
+    currency : Currency
+    amount : Amount
+    releaseCondition : Text
+    expiryTime : Time
+    status : EscrowStatus
+  where
+    signatory escrowAgent, depositor
+
+    controller escrowAgent, beneficiary can
+      ReleaseEscrow : ContractId ConditionalEscrow
+        do
+          create this with status = EscrowReleased
+
+    controller escrowAgent, depositor can
+      RefundEscrow : ContractId ConditionalEscrow
+        do
+          create this with status = EscrowRefunded

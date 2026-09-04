@@ -1,0 +1,34 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Compliance.RegulatoryReporting where
+
+import AryaFi.Common.Identifiers (CorrelationId)
+
+-- | Regulatory reporting regimes.
+data ReportingRegime
+  = SEC_CAT
+  | CFTC_Part43_45
+  | EMIR_Refit
+  | MiFIR
+  | MAS_TradeReporting
+  deriving (Eq, Show)
+
+-- | Institutional regulatory reporting record for trade repository reporting.
+template RegulatoryReportRecord
+  with
+    reportingParty : Party
+    regulator : Party
+    regime : ReportingRegime
+    correlationId : CorrelationId
+    reportPayload : Text
+    submissionTimestamp : Time
+    isAcknowledged : Bool
+  where
+    signatory reportingParty
+    observer regulator
+
+    controller regulator can
+      AcknowledgeReport : ContractId RegulatoryReportRecord
+        do
+          create this with isAcknowledged = True

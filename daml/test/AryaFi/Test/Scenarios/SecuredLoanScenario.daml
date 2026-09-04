@@ -1,0 +1,32 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Test.Scenarios.SecuredLoanScenario where
+
+import Daml.Script
+import AryaFi.Contracts.Loan
+import AryaFi.Common.Types
+
+loanLifecycleScenario : Script ()
+loanLifecycleScenario = script do
+  lender <- allocateParty "InstitutionalLender"
+  borrower <- allocateParty "CorporateBorrower"
+
+  loanCid <- submitMulti [lender, borrower] [] do
+    createCmd InstitutionalLoan with
+      loanId = "FACILITY-2026-TERM-01"
+      lender = lender
+      borrower = borrower
+      agentBank = None
+      currency = "USD"
+      principalAmount = 25000000.0
+      outstandingBalance = 25000000.0
+      interestRate = 0.065
+      maturityDate = time (date 2028 Dec 31) 0 0 0
+      status = Active
+
+  -- Partial principal pay down
+  updatedLoanCid <- submit borrower do
+    exerciseCmd loanCid PayDownPrincipal with paymentAmount = 5000000.0
+
+  pure ()

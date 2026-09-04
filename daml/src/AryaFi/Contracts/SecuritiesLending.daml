@@ -1,0 +1,32 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Contracts.SecuritiesLending where
+
+import AryaFi.Common.Types (Amount, Currency, Rate, LifecycleStatus(..))
+import AryaFi.Common.Identifiers (ISIN, ReferenceId)
+
+-- | Institutional Securities Lending Contract.
+template SecuritiesLendingAgreement
+  with
+    lendingId : ReferenceId
+    lender : Party
+    borrower : Party
+    isin : ISIN
+    quantity : Amount
+    lendingFeeRate : Rate
+    collateralCurrency : Currency
+    collateralAmount : Amount
+    status : LifecycleStatus
+  where
+    signatory lender, borrower
+
+    controller lender can
+      RecallSecurities : ContractId SecuritiesLendingAgreement
+        do
+          create this with status = Terminated
+
+    controller borrower can
+      ReturnSecurities : ContractId SecuritiesLendingAgreement
+        do
+          create this with status = Closed

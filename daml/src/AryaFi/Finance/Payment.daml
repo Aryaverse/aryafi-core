@@ -1,0 +1,33 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Finance.Payment where
+
+import AryaFi.Common.Types (Amount, Currency, SettlementStatus)
+import AryaFi.Common.Identifiers (AccountId, CorrelationId)
+
+-- | Payment instruction template separating payment intent from ledger settlement.
+template PaymentInstruction
+  with
+    payer : Party
+    payee : Party
+    settlementAgent : Party
+    payerAccountId : AccountId
+    payeeAccountId : AccountId
+    currency : Currency
+    amount : Amount
+    correlationId : CorrelationId
+    status : SettlementStatus
+  where
+    signatory payer, payee, settlementAgent
+
+    controller settlementAgent can
+      ConfirmPaymentSettlement : ContractId PaymentInstruction
+        do
+          create this with status = Settled
+
+      RejectPaymentSettlement : ContractId PaymentInstruction
+        with
+          reason : Text
+        do
+          create this with status = Failed reason

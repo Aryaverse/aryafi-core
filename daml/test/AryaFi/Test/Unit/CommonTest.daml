@@ -1,0 +1,21 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Test.Unit.CommonTest where
+
+import Daml.Script
+import AryaFi.Common.Types
+import AryaFi.Common.Identifiers
+import AryaFi.Common.Time
+
+unitTestCommonTypes : Script ()
+unitTestCommonTypes = script do
+  let isin = ISIN "US912828ZM24"
+  let lei = LEI "5493006MHB84DD0ZWV18"
+  let account = AccountId "ACC-CUSTODY-001"
+  let yearFrac = calcYearFraction Act360 (time (date 2026 Jan 1) 0 0 0) (time (date 2026 Jan 2) 0 0 0)
+  assert (unISIN isin == "US912828ZM24")
+  assert (unLEI lei == "5493006MHB84DD0ZWV18")
+  assert (unAccountId account == "ACC-CUSTODY-001")
+  assert (yearFrac > 0.0)
+  pure ()

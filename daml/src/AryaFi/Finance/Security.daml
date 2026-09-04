@@ -1,0 +1,66 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Finance.Security where
+
+import AryaFi.Common.Identifiers (AccountId, ISIN, CUSIP)
+import AryaFi.Common.Types (Amount, Rate)
+
+-- | Institutional security position template (Tokenized Treasury, Bond, Equity).
+template SecurityPosition
+  with
+    custodian : Party
+    issuer : Party
+    owner : Party
+    accountId : AccountId
+    isin : ISIN
+    cusip : Optional CUSIP
+    instrumentName : Text
+    quantity : Amount
+    couponRate : Optional Rate
+    maturityTimestamp : Optional Time
+    isLocked : Bool
+    lockReference : Optional Text
+  where
+    signatory custodian, owner
+
+    ensure quantity > 0.0
+
+    controller owner can
+      SplitSecurity : (ContractId SecurityPosition, ContractId SecurityPosition)
+        with
+          splitQuantity : Amount
+        do
+          assertMsg "Split quantity must be greater than zero" (splitQuantity > 0.0)
+          assertMsg "Split quantity must be less than total quantity" (splitQuantity < quantity)
+          assertMsg "Cannot split locked security" (not isLocked)
+          s1 <- create this with quantity = splitQuantity
+          s2 <- create this with quantity = quantity - splitQuantity
+          pure (s1, s2)
+
+    controller owner, custodian can
+      TransferSecurity : ContractId SecurityPosition
+        with
+          newOwner : Party
+          newAccountId : AccountId
+        do
+          assertMsg "Cannot transfer locked security" (not isLocked)
+          create this with
+            owner = newOwner
+            accountId = newAccountId
+
+      LockSecurity : ContractId SecurityPosition
+        with
+          reference : Text
+        do
+          assertMsg "Security is already locked" (not isLocked)
+          create this with
+            isLocked = True
+            lockReference = Some reference
+
+      UnlockSecurity : ContractId SecurityPosition
+        do
+          assertMsg "Security is not locked" isLocked
+          create this with
+            isLocked = False
+            lockReference = None

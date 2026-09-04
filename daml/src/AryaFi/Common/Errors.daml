@@ -1,0 +1,31 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Common.Errors where
+
+-- | Standard error categories across the AryaFi contract ecosystem.
+data ErrorCategory
+  = UnauthorizedAction
+  | InsufficientBalance
+  | InvalidStatus
+  | ComplianceViolation
+  | EligibilityFailed
+  | ValuationDiscrepancy
+  | SettlementFailure
+  | TimeLockViolation
+  | InvalidParameters
+  deriving (Eq, Show)
+
+-- | Structured error record for auditable contract exceptions.
+data AryaFiError = AryaFiError
+  with
+    category : ErrorCategory
+    code : Text
+    message : Text
+    details : [Text]
+  deriving (Eq, Show)
+
+-- | Helper assertion function with custom message format.
+require : CanAssert m => Bool -> Text -> m ()
+require condition errorMsg =
+  assertMsg errorMsg condition

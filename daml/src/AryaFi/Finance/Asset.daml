@@ -1,0 +1,49 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Finance.Asset where
+
+import AryaFi.Common.Identifiers (AccountId, ReferenceId)
+import AryaFi.Common.Types (Amount)
+
+-- | Asset classification.
+data AssetClass
+  = CashAsset
+  | DebtSecurity
+  | EquitySecurity
+  | FundShare
+  | StructuredProduct
+  | DigitalCommodity
+  deriving (Eq, Show)
+
+-- | Core holding interface representation.
+template AssetHolding
+  with
+    issuer : Party
+    custodian : Party
+    owner : Party
+    accountId : AccountId
+    assetClass : AssetClass
+    assetId : ReferenceId
+    quantity : Amount
+    isLocked : Bool
+    lockReason : Optional Text
+  where
+    signatory issuer, custodian, owner
+
+    controller owner, custodian can
+      LockAsset : ContractId AssetHolding
+        with
+          reason : Text
+        do
+          assertMsg "Asset is already locked" (not isLocked)
+          create this with
+            isLocked = True
+            lockReason = Some reason
+
+      UnlockAsset : ContractId AssetHolding
+        do
+          assertMsg "Asset is not locked" isLocked
+          create this with
+            isLocked = False
+            lockReason = None

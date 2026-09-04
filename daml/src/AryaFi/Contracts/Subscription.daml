@@ -1,0 +1,39 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Contracts.Subscription where
+
+import AryaFi.Common.Types (Amount, Currency)
+import AryaFi.Common.Identifiers (ReferenceId)
+
+-- | Status of private credit / fund subscription.
+data SubscriptionStatus
+  = SubscriptionRequested
+  | SubscriptionApproved
+  | SubscriptionFunded
+  | SubscriptionRejected Text
+  deriving (Eq, Show)
+
+-- | Investor Subscription Agreement for institutional funds / private credit.
+template FundSubscription
+  with
+    subscriptionId : ReferenceId
+    fundManager : Party
+    investor : Party
+    fundName : Text
+    currency : Currency
+    committedAmount : Amount
+    status : SubscriptionStatus
+  where
+    signatory fundManager, investor
+
+    controller fundManager can
+      ApproveSubscription : ContractId FundSubscription
+        do
+          create this with status = SubscriptionApproved
+
+      RejectSubscription : ContractId FundSubscription
+        with
+          reason : Text
+        do
+          create this with status = SubscriptionRejected reason

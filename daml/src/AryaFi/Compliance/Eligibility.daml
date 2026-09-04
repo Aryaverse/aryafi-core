@@ -1,0 +1,33 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Compliance.Eligibility where
+
+import AryaFi.Common.Policies (PolicyDecision(..))
+
+-- | Collateral or counterparty eligibility policy engine interface.
+template EligibilityPolicy
+  with
+    policyManager : Party
+    policyName : Text
+    allowedJurisdictions : [Text]
+    allowedAssetClasses : [Text]
+    minCreditRating : Text
+    isActive : Bool
+  where
+    signatory policyManager
+
+    nonconsuming choice EvaluateEligibility : PolicyDecision
+      with
+        targetJurisdiction : Text
+        targetAssetClass : Text
+      controller policyManager
+      do
+        if not isActive then
+          pure (Rejected "Policy is inactive")
+        else if not (elem targetJurisdiction allowedJurisdictions) then
+          pure (Rejected ("Jurisdiction not allowed: " <> targetJurisdiction))
+        else if not (elem targetAssetClass allowedAssetClasses) then
+          pure (Rejected ("Asset class not allowed: " <> targetAssetClass))
+        else
+          pure Approved

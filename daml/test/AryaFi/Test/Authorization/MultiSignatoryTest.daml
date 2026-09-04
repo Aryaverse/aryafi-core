@@ -1,0 +1,41 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Test.Authorization.MultiSignatoryTest where
+
+import Daml.Script
+import AryaFi.Finance.Obligation
+import AryaFi.Common.Types
+
+multiSignatoryObligationTest : Script ()
+multiSignatoryObligationTest = script do
+  obligorParty <- allocateParty "ObligorBank"
+  obligeeParty <- allocateParty "ObligeeBank"
+
+  -- Single party creation must fail because both parties are signatories
+  submitMustFail obligorParty do
+    createCmd FinancialObligation with
+      obligor = obligorParty
+      obligee = obligeeParty
+      currency = "USD"
+      amount = 5000000.0
+      dueDate = time (date 2026 Jun 30) 12 0 0
+      status = ObligationPending
+      reference = "OBL-2026-001"
+
+  -- Multi-party submission succeeds
+  oblCid <- submitMulti [obligorParty, obligeeParty] [] do
+    createCmd FinancialObligation with
+      obligor = obligorParty
+      obligee = obligeeParty
+      currency = "USD"
+      amount = 5000000.0
+      dueDate = time (date 2026 Jun 30) 12 0 0
+      status = ObligationPending
+      reference = "OBL-2026-001"
+
+  -- Discharge obligation by obligee
+  dischargedCid <- submit obligeeParty do
+    exerciseCmd oblCid DischargeObligation
+
+  pure ()

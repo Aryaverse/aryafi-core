@@ -1,0 +1,51 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Finance.Party where
+
+import AryaFi.Common.Identifiers (LEI)
+
+-- | Institutional party roles.
+data PartyRole
+  = Bank
+  | BrokerDealer
+  | Custodian
+  | CentralBank
+  | AssetManager
+  | Corporate
+  | Investor
+  | MarketMaker
+  deriving (Eq, Show)
+
+-- | Legal identity and profile for an institutional participant without embedding personal PII.
+template InstitutionalParty
+  with
+    operator : Party
+    party : Party
+    displayName : Text
+    legalEntityIdentifier : Optional LEI
+    roles : [PartyRole]
+    jurisdictionCode : Text
+    isActive : Bool
+  where
+    signatory operator, party
+
+    key (operator, party) : (Party, Party)
+    maintainer key._1
+
+    controller party can
+      UpdateProfile : ContractId InstitutionalParty
+        with
+          newDisplayName : Text
+          newJurisdiction : Text
+        do
+          create this with
+            displayName = newDisplayName
+            jurisdictionCode = newJurisdiction
+
+    controller operator can
+      SetPartyStatus : ContractId InstitutionalParty
+        with
+          active : Bool
+        do
+          create this with isActive = active

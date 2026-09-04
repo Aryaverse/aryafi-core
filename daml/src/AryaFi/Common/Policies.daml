@@ -1,0 +1,20 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Common.Policies where
+
+-- | Compliance policy decision status.
+data PolicyDecision
+  = Approved
+  | Rejected Text
+  | RequiresManualReview Text
+  deriving (Eq, Show)
+
+-- | Configurable institutional rule policy descriptor.
+data PolicyRule = PolicyRule
+  with
+    ruleId : Text
+    ruleName : Text
+    description : Text
+    enabled : Bool
+  deriving (Eq, Show)

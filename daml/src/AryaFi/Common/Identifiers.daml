@@ -1,0 +1,32 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Common.Identifiers where
+
+-- | Legal Entity Identifier (ISO 17442).
+newtype LEI = LEI { unLEI : Text }
+  deriving (Eq, Show)
+
+-- | International Securities Identification Number (ISO 6166).
+newtype ISIN = ISIN { unISIN : Text }
+  deriving (Eq, Show)
+
+-- | Committee on Uniform Securities Identification Procedures identifier.
+newtype CUSIP = CUSIP { unCUSIP : Text }
+  deriving (Eq, Show)
+
+-- | Financial Instrument Global Identifier.
+newtype FIGI = FIGI { unFIGI : Text }
+  deriving (Eq, Show)
+
+-- | Institutional account identifier.
+newtype AccountId = AccountId { unAccountId : Text }
+  deriving (Eq, Show)
+
+-- | Transaction, trade or settlement correlation identifier.
+newtype CorrelationId = CorrelationId { unCorrelationId : Text }
+  deriving (Eq, Show)
+
+-- | Idempotency key for off-chain or API triggered operations.
+newtype IdempotencyKey = IdempotencyKey { unIdempotencyKey : Text }
+  deriving (Eq, Show)

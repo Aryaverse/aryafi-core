@@ -1,0 +1,43 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Contracts.Loan where
+
+import AryaFi.Common.Types (Amount, Currency, Rate, LifecycleStatus(..))
+import AryaFi.Common.Identifiers (ReferenceId)
+
+-- | Institutional Loan Contract Interface.
+template InstitutionalLoan
+  with
+    loanId : ReferenceId
+    lender : Party
+    borrower : Party
+    agentBank : Optional Party
+    currency : Currency
+    principalAmount : Amount
+    outstandingBalance : Amount
+    interestRate : Rate
+    maturityDate : Time
+    status : LifecycleStatus
+  where
+    signatory lender, borrower
+
+    controller borrower can
+      PayDownPrincipal : ContractId InstitutionalLoan
+        with
+          paymentAmount : Amount
+        do
+          assertMsg "Payment must be greater than zero" (paymentAmount > 0.0)
+          assertMsg "Payment exceeds outstanding balance" (paymentAmount <= outstandingBalance)
+          let newBalance = outstandingBalance - paymentAmount
+          let newStatus = if newBalance == 0.0 then Closed else Active
+          create this with
+            outstandingBalance = newBalance
+            status = newStatus
+
+    controller lender can
+      DeclareLoanDefault : ContractId InstitutionalLoan
+        with
+          defaultReason : Text
+        do
+          create this with status = Defaulted

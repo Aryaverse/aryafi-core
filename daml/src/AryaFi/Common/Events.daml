@@ -1,0 +1,34 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Common.Events where
+
+import AryaFi.Common.Identifiers (CorrelationId)
+
+-- | Types of institutional contract audit events.
+data EventType
+  = CreatedEvent
+  | StateChangedEvent Text Text
+  | PaymentInitiatedEvent
+  | PaymentSettledEvent
+  | CollateralPledgedEvent
+  | CollateralReleasedEvent
+  | MarginCalledEvent
+  | MarginMetEvent
+  | DefaultDeclaredEvent
+  | TerminatedEvent
+  deriving (Eq, Show)
+
+-- | Non-consuming audit record template for institutional reconciliation and reporting.
+template AuditLog
+  with
+    operator : Party
+    parties : [Party]
+    contractIdRef : Text
+    correlationId : CorrelationId
+    eventType : EventType
+    timestamp : Time
+    details : Text
+  where
+    signatory operator
+    observer parties

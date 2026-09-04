@@ -1,0 +1,48 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Contracts.Transfer where
+
+import AryaFi.Common.Types (Amount)
+import AryaFi.Common.Identifiers (AccountId, ReferenceId)
+
+-- | Status of asset transfer instruction.
+data TransferStatus
+  = TransferPendingCompliance
+  | TransferApproved
+  | TransferCompleted
+  | TransferFailed Text
+  deriving (Eq, Show)
+
+-- | Controlled asset transfer contract subject to compliance and authorization checks.
+template AssetTransferRequest
+  with
+    transferId : ReferenceId
+    sender : Party
+    receiver : Party
+    custodian : Party
+    complianceOfficer : Party
+    assetId : ReferenceId
+    quantity : Amount
+    fromAccount : AccountId
+    toAccount : AccountId
+    status : TransferStatus
+  where
+    signatory sender, custodian
+
+    controller complianceOfficer can
+      ApproveTransfer : ContractId AssetTransferRequest
+        do
+          create this with status = TransferApproved
+
+      RejectTransfer : ContractId AssetTransferRequest
+        with
+          reason : Text
+        do
+          create this with status = TransferFailed reason
+
+    controller custodian can
+      CompleteTransfer : ContractId AssetTransferRequest
+        do
+          assertMsg "Transfer is not approved" (status == TransferApproved)
+          create this with status = TransferCompleted

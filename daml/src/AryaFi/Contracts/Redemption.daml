@@ -1,0 +1,44 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+module AryaFi.Contracts.Redemption where
+
+import AryaFi.Common.Types (Amount, Currency)
+import AryaFi.Common.Identifiers (ReferenceId)
+
+-- | Redemption status states.
+data RedemptionStatus
+  = RedemptionRequested
+  | RedemptionApproved
+  | RedemptionProcessed
+  | RedemptionRejected Text
+  deriving (Eq, Show)
+
+-- | Fund or asset redemption request contract.
+template AssetRedemption
+  with
+    redemptionId : ReferenceId
+    fundManager : Party
+    investor : Party
+    fundName : Text
+    unitsToRedeem : Amount
+    estimatedValue : Amount
+    currency : Currency
+    status : RedemptionStatus
+  where
+    signatory fundManager, investor
+
+    controller fundManager can
+      ApproveRedemption : ContractId AssetRedemption
+        do
+          create this with status = RedemptionApproved
+
+      ProcessRedemption : ContractId AssetRedemption
+        do
+          create this with status = RedemptionProcessed
+
+      RejectRedemption : ContractId AssetRedemption
+        with
+          reason : Text
+        do
+          create this with status = RedemptionRejected reason
