@@ -1,32 +1,99 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Standardized identifiers for institutional financial entities, instruments,
+-- accounts, and operations. Every identifier is a distinct newtype preventing
+-- accidental interchange (e.g. passing an ISIN where a CUSIP is expected).
+-- All identifier newtypes derive Eq, Ord, and Show for use as contract keys.
 module AryaFi.Common.Identifiers where
 
--- | Legal Entity Identifier (ISO 17442).
+-- ---------------------------------------------------------------------------
+-- Legal Entity Identifiers
+-- ---------------------------------------------------------------------------
+
+-- | ISO 17442 Legal Entity Identifier — 20-character alphanumeric.
+-- Globally unique identifier issued by GLEIF-accredited Local Operating Units.
+-- Required for regulatory reporting under EMIR, MiFIR, CFTC, and SEC rules.
 newtype LEI = LEI { unLEI : Text }
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
 
--- | International Securities Identification Number (ISO 6166).
+-- ---------------------------------------------------------------------------
+-- Instrument Identifiers
+-- ---------------------------------------------------------------------------
+
+-- | ISO 6166 International Securities Identification Number — 12 alphanumeric characters.
+-- Format: 2-letter country code + 9-character NSIN + 1 check digit.
+-- e.g. "US912828ZM24" for a US Treasury bond.
 newtype ISIN = ISIN { unISIN : Text }
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
 
--- | Committee on Uniform Securities Identification Procedures identifier.
+-- | CUSIP — 9-character identifier for securities traded in the US and Canada.
+-- Format: 6-char issuer code + 2-char issue code + 1 check digit.
+-- e.g. "912828ZM2" for a US Treasury note.
 newtype CUSIP = CUSIP { unCUSIP : Text }
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
 
--- | Financial Instrument Global Identifier.
+-- | Financial Instrument Global Identifier — 12-character alphanumeric.
+-- Issuer-agnostic, exchange-level identifier maintained by Object Management Group.
+-- e.g. "BBG000BLNQ16" for Apple Inc. common stock.
 newtype FIGI = FIGI { unFIGI : Text }
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
 
--- | Institutional account identifier.
+-- | SEDOL — 7-character identifier for UK and international securities.
+-- Used on the London Stock Exchange and by Bloomberg.
+-- e.g. "BN65R31" for a UK Gilt.
+newtype SEDOL = SEDOL { unSEDOL : Text }
+  deriving (Eq, Ord, Show)
+
+-- | Bloomberg Ticker — short market identifier (e.g. "AAPL US Equity").
+-- Not globally unique; use in combination with market/exchange codes.
+newtype BloombergTicker = BloombergTicker { unBloombergTicker : Text }
+  deriving (Eq, Ord, Show)
+
+-- ---------------------------------------------------------------------------
+-- Account Identifiers
+-- ---------------------------------------------------------------------------
+
+-- | Custodian-assigned account identifier for a holding relationship.
+-- Unique within the scope of a custodian-owner pair.
 newtype AccountId = AccountId { unAccountId : Text }
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
 
--- | Transaction, trade or settlement correlation identifier.
+-- | Central Securities Depository (CSD) participant account identifier.
+-- Used for settlement with DTC, Euroclear, Clearstream, DTCC, etc.
+newtype CsdAccountId = CsdAccountId { unCsdAccountId : Text }
+  deriving (Eq, Ord, Show)
+
+-- ---------------------------------------------------------------------------
+-- Trade & Transaction Identifiers
+-- ---------------------------------------------------------------------------
+
+-- | Unique trade or transaction identifier assigned at trade execution.
+-- Should be globally unique within an institution's trading systems.
+newtype TradeId = TradeId { unTradeId : Text }
+  deriving (Eq, Ord, Show)
+
+-- | Correlation identifier linking related operations across multiple systems.
+-- Used to trace a workflow (e.g. trade → settlement → reporting) end-to-end.
 newtype CorrelationId = CorrelationId { unCorrelationId : Text }
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
 
--- | Idempotency key for off-chain or API triggered operations.
+-- | Idempotency key for externally-initiated operations.
+-- The ledger MUST reject duplicate submissions with the same key.
+-- Callers generate a UUID-v4 or equivalent before submitting any command.
 newtype IdempotencyKey = IdempotencyKey { unIdempotencyKey : Text }
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
+
+-- ---------------------------------------------------------------------------
+-- External System References
+-- ---------------------------------------------------------------------------
+
+-- | Opaque reference to a record in an external system
+-- (core banking, custody, KYC/AML, market data, ERP, etc.).
+-- Used to maintain a traceable link between on-chain and off-chain state.
+newtype ExternalRef = ExternalRef { unExternalRef : Text }
+  deriving (Eq, Ord, Show)
+
+-- | Unique message identifier assigned by a payments network (e.g. SWIFT UETR, Fedwire IMAD).
+newtype PaymentNetworkRef = PaymentNetworkRef { unPaymentNetworkRef : Text }
+  deriving (Eq, Ord, Show)

@@ -1,34 +1,132 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Immutable audit event model for AryaFi contract lifecycle tracking.
+-- Every significant state transition in any AryaFi contract SHOULD emit
+-- an AuditLog event. AuditLog contracts are non-consuming and append-only,
+-- providing a tamper-evident record for compliance, reconciliation, and
+-- regulatory reporting purposes.
 module AryaFi.Common.Events where
 
 import AryaFi.Common.Identifiers (CorrelationId)
 
--- | Types of institutional contract audit events.
+-- ---------------------------------------------------------------------------
+-- Event Types
+-- ---------------------------------------------------------------------------
+
+-- | Enumeration of all auditable event types across the AryaFi ecosystem.
+-- New event types should be added here as new contract modules are developed.
 data EventType
-  = CreatedEvent
-  | StateChangedEvent Text Text
-  | PaymentInitiatedEvent
-  | PaymentSettledEvent
-  | CollateralPledgedEvent
-  | CollateralReleasedEvent
-  | MarginCalledEvent
-  | MarginMetEvent
-  | DefaultDeclaredEvent
-  | TerminatedEvent
+  -- Contract lifecycle events
+  = ContractCreated Text
+    -- ^ A new contract was created. Text = template name.
+  | ContractAmended Text
+    -- ^ A contract field was amended. Text = description of the amendment.
+  | StatusChanged Text Text
+    -- ^ Lifecycle status transition. Text1 = from status, Text2 = to status.
+  | ContractClosed
+    -- ^ A contract was fully discharged and archived.
+  | ContractDefaulted Text
+    -- ^ A contract was placed in default. Text = default reason.
+
+  -- Payment and settlement events
+  | PaymentInitiated
+    -- ^ A payment instruction was created and submitted.
+  | PaymentSettled
+    -- ^ A payment was confirmed as settled on the ledger.
+  | PaymentFailed Text
+    -- ^ A payment failed. Text = failure reason.
+  | DvpExecuted
+    -- ^ A Delivery-versus-Payment settlement was executed atomically.
+
+  -- Collateral and margin events
+  | CollateralAllocated
+    -- ^ Collateral was allocated to an obligation or repo agreement.
+  | CollateralSubstituted
+    -- ^ Collateral was substituted with a different eligible asset.
+  | CollateralReleased
+    -- ^ Collateral was released from an obligation.
+  | MarginCalled Text
+    -- ^ A margin call was issued. Text = calling party's reason.
+  | MarginFulfilled
+    -- ^ A margin call was fulfilled by the obligated party.
+  | MarginDisputed Text
+    -- ^ A margin call was disputed. Text = dispute reason.
+
+  -- Compliance events
+  | ComplianceCheckPassed Text
+    -- ^ A compliance check passed. Text = policy name.
+  | ComplianceCheckFailed Text Text
+    -- ^ A compliance check failed. Text1 = policy name, Text2 = failure reason.
+  | KycStatusUpdated Text Text
+    -- ^ KYC status changed. Text1 = from status, Text2 = to status.
+  | SanctionsStatusUpdated Text
+    -- ^ Sanctions screening result updated. Text = new status.
+
+  -- Authorization events
+  | ApprovalGranted Text
+    -- ^ An authorization approval was granted. Text = approving party role.
+  | ApprovalRevoked Text
+    -- ^ An authorization approval was revoked. Text = revoking party reason.
   deriving (Eq, Show)
 
--- | Non-consuming audit record template for institutional reconciliation and reporting.
+-- ---------------------------------------------------------------------------
+-- Audit Log Template
+-- ---------------------------------------------------------------------------
+
+-- | Immutable, non-consuming audit record template.
+-- AuditLog contracts are permanently visible to all listed observers and
+-- to the operator (platform administrator).
+--
+-- Visibility rules:
+--   - operator: always a signatory and sees all events on their platform.
+--   - parties: typically the counterparties to the related financial contract.
+--   - Regulators / auditors are added as observers when required.
+--
+-- Important: AuditLog contracts are NEVER archived. They accumulate
+-- as an append-only event stream.
 template AuditLog
   with
     operator : Party
+    -- ^ Platform or network operator acting as the audit authority.
     parties : [Party]
+    -- ^ All parties that should receive and can query this event.
     contractIdRef : Text
+    -- ^ Textual reference to the contract this event relates to
+    --   (use show on a ContractId to obtain the text representation).
     correlationId : CorrelationId
+    -- ^ Correlation ID linking this event to an end-to-end workflow.
     eventType : EventType
+    -- ^ The specific event that occurred.
     timestamp : Time
+    -- ^ The ledger time at which this event was emitted.
     details : Text
+    -- ^ Free-form human-readable details providing additional context.
   where
     signatory operator
     observer parties
+
+-- ---------------------------------------------------------------------------
+-- Helper Functions
+-- ---------------------------------------------------------------------------
+
+-- | Build an AuditLog contract creation command with current ledger time.
+-- Typical usage in a contract choice:
+--
+--   now <- getTime
+--   create AuditLog with
+--     operator = platform
+--     parties = [partyA, partyB]
+--     contractIdRef = show (toContractId self)
+--     correlationId = tradeCorrelationId
+--     eventType = StatusChanged "Active" "Closed"
+--     timestamp = now
+--     details = "Loan repaid in full."
+
+-- | Construct a status change event for use in choice bodies.
+-- Caller is responsible for archiving this in a create command.
+mkStatusChangeEvent
+  : Text   -- ^ From status (show of the old value)
+  -> Text  -- ^ To status (show of the new value)
+  -> EventType
+mkStatusChangeEvent from to = StatusChanged from to
