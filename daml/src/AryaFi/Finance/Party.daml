@@ -1,51 +1,156 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Institutional party representation for the AryaFi platform.
+-- InstitutionalParty stores the legal identity, roles, and operational status
+-- of a participant without embedding personal PII on-ledger.
+-- Sensitive identity data (passport, DID, KYC documents) lives off-ledger;
+-- the on-chain record holds only what is necessary for contract authorization.
 module AryaFi.Finance.Party where
 
 import AryaFi.Common.Identifiers (LEI)
+import AryaFi.Common.Errors (require, requireNonEmpty)
 
--- | Institutional party roles.
+-- ---------------------------------------------------------------------------
+-- Party Role
+-- ---------------------------------------------------------------------------
+
+-- | Institutional role classification for a Canton participant.
+-- A party may hold multiple roles simultaneously (e.g. a dealer bank may be
+-- both a BrokerDealer and a Custodian for its own positions).
 data PartyRole
   = Bank
+    -- ^ Commercial or investment bank with deposit-taking or lending authority.
   | BrokerDealer
+    -- ^ Registered broker-dealer executing trades on behalf of clients.
   | Custodian
+    -- ^ Custodian holding assets in trust for beneficial owners.
   | CentralBank
+    -- ^ Central bank or monetary authority (e.g. for CBDC issuance or reserve accounts).
+  | ClearingHouse
+    -- ^ Central counterparty (CCP) or clearing house.
   | AssetManager
+    -- ^ Investment manager or fund administrator.
   | Corporate
+    -- ^ Non-financial corporate entity (borrower, treasury, issuer).
   | Investor
+    -- ^ Buy-side investor (insurance, pension fund, family office).
   | MarketMaker
-  deriving (Eq, Show)
+    -- ^ Liquidity provider quoting two-sided markets.
+  | Regulator
+    -- ^ Regulatory authority with audit and reporting access.
+  deriving (Eq, Ord, Show)
 
--- | Legal identity and profile for an institutional participant without embedding personal PII.
+-- ---------------------------------------------------------------------------
+-- InstitutionalParty Template
+-- ---------------------------------------------------------------------------
+
+-- | Represents a verified institutional participant on the AryaFi platform.
+-- The operator (platform administrator) and the party itself are co-signatories,
+-- ensuring mutual acknowledgment of the identity record.
+--
+-- Privacy model:
+--   - The operator and the party always see this contract.
+--   - Counterparties who need to verify a party's identity can be added
+--     as observers via AddObserver. They are removed with RemoveObserver.
+--   - This contract is NOT visible to parties not listed in observers.
 template InstitutionalParty
   with
     operator : Party
+    -- ^ Platform operator who verified and admitted this party.
     party : Party
+    -- ^ The Daml ledger party representing this institution.
     displayName : Text
+    -- ^ Legal name or common name of the institution (e.g. "JP Morgan Chase Bank, N.A.").
     legalEntityIdentifier : Optional LEI
+    -- ^ ISO 17442 LEI if available. Mandatory for regulated entities under EMIR/MiFIR.
     roles : [PartyRole]
+    -- ^ List of operational roles this party is authorized to perform.
     jurisdictionCode : Text
+    -- ^ Primary jurisdiction of incorporation (ISO 3166-1 alpha-2, e.g. "US", "GB", "SG").
     isActive : Bool
+    -- ^ Whether this party is currently active and permitted to participate.
+    --   Inactive parties are suspended from entering new contracts.
+    observers : [Party]
+    -- ^ Parties who can see this identity record (e.g. counterparties performing due diligence).
   where
     signatory operator, party
+    observer observers
 
     key (operator, party) : (Party, Party)
     maintainer key._1
 
-    controller party can
-      UpdateProfile : ContractId InstitutionalParty
-        with
-          newDisplayName : Text
-          newJurisdiction : Text
-        do
-          create this with
-            displayName = newDisplayName
-            jurisdictionCode = newJurisdiction
+    -- | Update the display name and jurisdiction of this party record.
+    -- Only the party itself can update its own profile.
+    choice UpdateProfile : ContractId InstitutionalParty
+      with
+        newDisplayName : Text
+        newJurisdiction : Text
+      controller party
+      do
+        requireNonEmpty newDisplayName "displayName"
+        requireNonEmpty newJurisdiction "jurisdictionCode"
+        create this with
+          displayName = newDisplayName
+          jurisdictionCode = newJurisdiction
 
-    controller operator can
-      SetPartyStatus : ContractId InstitutionalParty
-        with
-          active : Bool
-        do
-          create this with isActive = active
+    -- | Add a role to this party. Roles cannot be duplicated.
+    -- Only the operator can add roles.
+    choice AddRole : ContractId InstitutionalParty
+      with
+        newRole : PartyRole
+      controller operator
+      do
+        require (newRole `notElem` roles) "Role already assigned to this party"
+        create this with roles = newRole :: roles
+
+    -- | Remove a role from this party.
+    -- Only the operator can remove roles.
+    choice RemoveRole : ContractId InstitutionalParty
+      with
+        roleToRemove : PartyRole
+      controller operator
+      do
+        require (roleToRemove `elem` roles) "Role not currently assigned to this party"
+        create this with roles = filter (/= roleToRemove) roles
+
+    -- | Activate or deactivate this party.
+    -- Only the operator can change active status.
+    choice SetPartyStatus : ContractId InstitutionalParty
+      with
+        active : Bool
+        reason : Text
+      controller operator
+      do
+        require (active /= isActive) "Party is already in the requested status"
+        requireNonEmpty reason "reason"
+        create this with isActive = active
+
+    -- | Add an observer (e.g. a counterparty doing due diligence).
+    -- Only the party itself can grant visibility to its own identity record.
+    choice AddObserver : ContractId InstitutionalParty
+      with
+        newObserver : Party
+      controller party
+      do
+        require (newObserver `notElem` observers)
+          "Observer already has visibility to this party record"
+        create this with observers = newObserver :: observers
+
+    -- | Remove an observer from this party record.
+    choice RemoveObserver : ContractId InstitutionalParty
+      with
+        observerToRemove : Party
+      controller party
+      do
+        require (observerToRemove `elem` observers)
+          "Party is not currently an observer"
+        create this with observers = filter (/= observerToRemove) observers
+
+    -- | Nonconsuming check: verify if this party has a specific role.
+    nonconsuming choice HasRole : Bool
+      with
+        roleToCheck : PartyRole
+      controller operator
+      do
+        pure (roleToCheck `elem` roles)

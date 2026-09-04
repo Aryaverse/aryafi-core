@@ -1,60 +1,155 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Core financial domain type definitions used across all AryaFi modules.
+-- These types encode the semantics of institutional finance precisely and
+-- are designed to be unambiguous across currency, jurisdiction, and workflow boundaries.
 module AryaFi.Common.Types where
 
--- | Financial currency code (ISO 4217 standard e.g., USD, EUR, GBP, JPY).
+-- ---------------------------------------------------------------------------
+-- Primitive Financial Aliases
+-- ---------------------------------------------------------------------------
+
+-- | ISO 4217 currency code (e.g. "USD", "EUR", "GBP", "JPY", "SGD", "CHF").
 type Currency = Text
 
--- | Monetary and asset quantities represented as high-precision decimals.
+-- | High-precision monetary and asset quantity. All amounts are non-negative;
+-- direction is conveyed by the contract structure (obligor vs. obligee).
 type Amount = Decimal
 
--- | Interest or haircut rate represented as decimal (e.g. 0.0525 for 5.25%).
+-- | Annual rate expressed as a decimal fraction (e.g. 0.0525 = 5.25%).
+-- Used for interest, repo, coupon, haircut, and lending fee calculations.
 type Rate = Decimal
 
--- | Unique contract or asset reference tag.
+-- | Free-form unique reference tag for contracts, trades, positions, or assets.
+-- Must be unique within the scope where it is used as a key.
 type ReferenceId = Text
 
--- | Standard Day Count conventions in institutional finance.
+-- ---------------------------------------------------------------------------
+-- Day Count Conventions
+-- ---------------------------------------------------------------------------
+
+-- | Standard day count conventions used in institutional finance for
+-- computing year fractions in interest and coupon accrual.
 data DayCountConvention
   = Act360
+    -- ^ Actual/360 — standard for money market instruments (T-Bills, commercial paper, most FRNs).
   | Act365Fixed
+    -- ^ Actual/365 Fixed — used for UK Gilts, Canadian bonds, and some ISDA conventions.
   | ActActISDA
+    -- ^ Actual/Actual (ISDA) — used for government bonds and swaps under the ISDA definition.
   | Thirty360
-  deriving (Eq, Show)
+    -- ^ 30/360 US Bond Basis — used for US corporate and agency bonds, some mortgages.
+  deriving (Eq, Ord, Show)
 
--- | Rounding modes for monetary and interest calculations.
+-- ---------------------------------------------------------------------------
+-- Rounding Modes
+-- ---------------------------------------------------------------------------
+
+-- | Rounding mode applied to monetary calculations to control precision.
+-- Institutions must agree on rounding conventions in trade confirmations.
 data RoundingMode
   = RoundNearest
+    -- ^ Round half-up to the nearest unit. Most common for cash amounts.
   | RoundUp
+    -- ^ Always round away from zero (ceiling). Used for margin requirements.
   | RoundDown
+    -- ^ Always truncate toward zero. Used for interest accrual in some conventions.
   | RoundBankers
-  deriving (Eq, Show)
+    -- ^ Round half-to-even (banker's rounding). Used for large portfolio calculations.
+  deriving (Eq, Ord, Show)
 
--- | High-level lifecycle states for institutional financial contracts.
+-- ---------------------------------------------------------------------------
+-- Contract Lifecycle States
+-- ---------------------------------------------------------------------------
+
+-- | Universal lifecycle status applicable to all financial contracts.
+-- Transitions follow a strict one-directional state machine:
+-- Draft → Active → {Suspended → Active} → {Matured | Terminated | Defaulted} → Closed
 data LifecycleStatus
   = Draft
+    -- ^ Contract is being constructed and has not yet been accepted by all parties.
   | Active
+    -- ^ Contract is in force and all obligations are operational.
   | Suspended
+    -- ^ Contract execution is temporarily paused (e.g. regulatory hold, dispute).
+    --   May revert to Active upon resolution.
   | Matured
+    -- ^ Contract reached its natural maturity date. Awaiting final settlement.
   | Terminated
+    -- ^ Contract was terminated by mutual agreement before natural maturity.
   | Defaulted
+    -- ^ One or more parties are in default of their obligations.
   | Closed
-  deriving (Eq, Show)
+    -- ^ All obligations are fully discharged. Contract is archived.
+  deriving (Eq, Ord, Show)
 
--- | Settlement status states for multi-leg transactions.
+-- ---------------------------------------------------------------------------
+-- Settlement Status
+-- ---------------------------------------------------------------------------
+
+-- | Status of a settlement instruction or individual leg.
+-- Failed and Cancelled carry a reason code for audit purposes.
 data SettlementStatus
   = PendingSettlement
+    -- ^ Instruction created and submitted; awaiting execution by settlement agent.
   | Settled
+    -- ^ Both legs settled atomically on the ledger.
   | Failed Text
+    -- ^ Settlement failed. Text contains reason (e.g. "INSUFFICIENT_BALANCE", "COUNTERPARTY_REJECTED").
   | Cancelled Text
+    -- ^ Instruction was cancelled before execution. Text contains the cancellation reason.
   deriving (Eq, Show)
 
--- | Tenor representation for financial agreements.
+-- ---------------------------------------------------------------------------
+-- Tenor
+-- ---------------------------------------------------------------------------
+
+-- | Tenor of a financial agreement, rate period, or term.
 data Tenor
   = Overnight
+    -- ^ O/N — overnight borrowing; settles today, matures the next business day.
   | SpotNext
+    -- ^ S/N — spot to next business day (T+2 to T+3 in most markets).
   | TermDays Int
+    -- ^ Fixed number of calendar days (e.g. TermDays 7 = 1-week repo).
   | TermMonths Int
+    -- ^ Fixed number of calendar months (e.g. TermMonths 3 = 3-month bill).
   | TermYears Int
+    -- ^ Fixed number of years (e.g. TermYears 5 = 5-year term loan).
+  deriving (Eq, Show)
+
+-- ---------------------------------------------------------------------------
+-- Asset Classification
+-- ---------------------------------------------------------------------------
+
+-- | High-level asset classification used for eligibility screening,
+-- regulatory capital computation, and collateral haircut assignment.
+data AssetClass
+  = CashDeposit
+    -- ^ Bank deposits, central bank reserves, and tokenized fiat currency.
+  | GovernmentSecurity
+    -- ^ Sovereign bonds, treasury bills, gilts, and agency securities.
+  | CorporateBond
+    -- ^ Investment-grade and high-yield corporate debt instruments.
+  | EquitySecurity
+    -- ^ Listed equities, ETFs, and ADRs.
+  | FundShare
+    -- ^ Money market fund units, mutual fund shares, and ETF shares.
+  | StructuredProduct
+    -- ^ Asset-backed securities (ABS), MBS, CLO tranches, and covered bonds.
+  | DigitalCommodity
+    -- ^ Tokenized commodities (gold, oil, agricultural products).
+  | OtherAsset Text
+    -- ^ Catch-all for assets not covered by the above. Text describes the asset class.
+  deriving (Eq, Show)
+
+-- ---------------------------------------------------------------------------
+-- Obligation Direction
+-- ---------------------------------------------------------------------------
+
+-- | Indicates whether a party is the payer or receiver in a payment instruction.
+data ObligationDirection
+  = Pay    -- ^ This party is obligated to deliver funds or assets.
+  | Receive -- ^ This party is entitled to receive funds or assets.
   deriving (Eq, Show)

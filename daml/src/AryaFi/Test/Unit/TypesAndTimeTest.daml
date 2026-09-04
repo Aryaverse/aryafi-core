@@ -1,0 +1,229 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Unit tests for AryaFi.Common.Types, AryaFi.Common.Identifiers,
+-- and AryaFi.Common.Time modules.
+-- Run via: daml test --test-pattern TypesAndTimeTest
+module AryaFi.Test.Unit.TypesAndTimeTest where
+
+import Daml.Script
+import AryaFi.Common.Types
+import AryaFi.Common.Identifiers
+import AryaFi.Common.Time
+import DA.Date (date, Month(..))
+import DA.Time (time)
+
+-- ---------------------------------------------------------------------------
+-- Identifier Tests
+-- ---------------------------------------------------------------------------
+
+testIdentifierConstruction : Script ()
+testIdentifierConstruction = script do
+  let lei   = LEI   "5493006MHB84DD0ZWV18"
+      isin  = ISIN  "US912828ZM24"
+      cusip = CUSIP "912828ZM2"
+      figi  = FIGI  "BBG000BLNQ16"
+      sedol = SEDOL "BN65R31"
+      accId = AccountId "ACC-CUSTODY-USD-001"
+      corrId = CorrelationId "CORR-DVP-2026-001"
+      ikey  = IdempotencyKey "550e8400-e29b-41d4-a716-446655440000"
+      extRef = ExternalRef "BBCUST-00012345"
+      trade  = TradeId "TRD-2026-US-001"
+
+  assertMsg "LEI unpack" (unLEI   lei   == "5493006MHB84DD0ZWV18")
+  assertMsg "ISIN unpack" (unISIN  isin  == "US912828ZM24")
+  assertMsg "CUSIP unpack" (unCUSIP cusip == "912828ZM2")
+  assertMsg "FIGI unpack" (unFIGI  figi  == "BBG000BLNQ16")
+  assertMsg "SEDOL unpack" (unSEDOL sedol == "BN65R31")
+  assertMsg "AccountId unpack" (unAccountId accId == "ACC-CUSTODY-USD-001")
+  assertMsg "CorrelationId unpack" (unCorrelationId corrId == "CORR-DVP-2026-001")
+  assertMsg "IdempotencyKey unpack" (unIdempotencyKey ikey == "550e8400-e29b-41d4-a716-446655440000")
+  assertMsg "ExternalRef unpack" (unExternalRef extRef == "BBCUST-00012345")
+  assertMsg "TradeId unpack" (unTradeId trade == "TRD-2026-US-001")
+
+testIdentifierOrdering : Script ()
+testIdentifierOrdering = script do
+  -- Identifiers with Ord should sort lexicographically
+  let lei1 = LEI "AAA000000000000000AA"
+      lei2 = LEI "ZZZ000000000000000ZZ"
+  assertMsg "LEI Ord: lei1 < lei2" (lei1 < lei2)
+  assertMsg "LEI Ord: lei2 > lei1" (lei2 > lei1)
+  assertMsg "LEI Eq: equal to self" (lei1 == lei1)
+
+  let isin1 = ISIN "GB00BN65R313"
+      isin2 = ISIN "US912828ZM24"
+  assertMsg "ISIN Ord" (isin1 < isin2)
+
+  let accA = AccountId "ACC-001"
+      accB = AccountId "ACC-002"
+  assertMsg "AccountId Ord" (accA < accB)
+
+-- ---------------------------------------------------------------------------
+-- Types Tests
+-- ---------------------------------------------------------------------------
+
+testLifecycleStatusDistinct : Script ()
+testLifecycleStatusDistinct = script do
+  assertMsg "Draft /= Active" (Draft /= Active)
+  assertMsg "Active /= Suspended" (Active /= Suspended)
+  assertMsg "Suspended /= Matured" (Suspended /= Matured)
+  assertMsg "Matured /= Terminated" (Matured /= Terminated)
+  assertMsg "Terminated /= Defaulted" (Terminated /= Defaulted)
+  assertMsg "Defaulted /= Closed" (Defaulted /= Closed)
+  assertMsg "Draft == Draft" (Draft == Draft)
+  assertMsg "Closed == Closed" (Closed == Closed)
+
+testLifecycleStatusOrdering : Script ()
+testLifecycleStatusOrdering = script do
+  assertMsg "Draft < Active" (Draft < Active)
+  assertMsg "Active < Suspended" (Active < Suspended)
+  assertMsg "Suspended < Matured" (Suspended < Matured)
+  assertMsg "Matured < Closed" (Matured < Closed)
+
+testDayCountOrdering : Script ()
+testDayCountOrdering = script do
+  assertMsg "Act360 /= Act365Fixed" (Act360 /= Act365Fixed)
+  assertMsg "Act360 /= ActActISDA" (Act360 /= ActActISDA)
+  assertMsg "ActActISDA /= Thirty360" (ActActISDA /= Thirty360)
+
+-- ---------------------------------------------------------------------------
+-- Time / Year Fraction Tests
+-- ---------------------------------------------------------------------------
+
+testDaysBetween : Script ()
+testDaysBetween = script do
+  let d1 = time (date 2026 Jan 1) 0 0 0
+      d2 = time (date 2026 Jan 2) 0 0 0
+      d3 = time (date 2026 Jul 1) 0 0 0   -- 181 days from Jan 1
+
+  assertMsg "1 day between Jan 1 and Jan 2"
+    (daysBetween d1 d2 == 1)
+
+  assertMsg "181 days between Jan 1 and Jul 1 2026"
+    (daysBetween d1 d3 == 181)
+
+  assertMsg "0 days between same timestamp"
+    (daysBetween d1 d1 == 0)
+
+testYearFractionAct360 : Script ()
+testYearFractionAct360 = script do
+  let start = time (date 2026 Jan 1) 0 0 0
+      end   = time (date 2026 Jul 1) 0 0 0   -- 181 actual days
+  -- Act/360: 181 / 360 = 0.502777...
+  let yf = calcYearFraction Act360 start end
+  assertMsg "Act/360 year fraction > 0.5"    (yf > 0.5)
+  assertMsg "Act/360 year fraction < 0.503"  (yf < 0.503)
+
+testYearFractionAct365 : Script ()
+testYearFractionAct365 = script do
+  let start = time (date 2026 Jan 1) 0 0 0
+      end   = time (date 2027 Jan 1) 0 0 0   -- 365 days (non-leap year)
+  -- Act/365 Fixed: 365 / 365 = 1.0 exactly
+  let yf = calcYearFraction Act365Fixed start end
+  assertMsg "Act/365 for full year == 1.0" (yf == 1.0)
+
+testYearFractionActActISDA : Script ()
+testYearFractionActActISDA = script do
+  let start = time (date 2026 Jan 1) 0 0 0
+      end   = time (date 2027 Jan 1) 0 0 0   -- 365 days
+  -- Act/Act ISDA: 365 / 365.25 ≈ 0.9993...
+  let yf = calcYearFraction ActActISDA start end
+  assertMsg "Act/Act ISDA for 365 days < 1.0" (yf < 1.0)
+  assertMsg "Act/Act ISDA for 365 days > 0.99" (yf > 0.99)
+
+-- ---------------------------------------------------------------------------
+-- Interest Calculation Tests
+-- ---------------------------------------------------------------------------
+
+testSimpleAccruedInterest : Script ()
+testSimpleAccruedInterest = script do
+  -- 10,000,000 @ 5.25% for 6 months (0.5 year fraction)
+  -- Expected: 10,000,000 × 0.0525 × 0.5 = 262,500.00
+  let result = calcAccruedInterest 10000000.0 0.0525 0.5
+  assertMsg
+    ("Expected 262500.0 but got " <> show result)
+    (result == 262500.0)
+
+testZeroRateInterest : Script ()
+testZeroRateInterest = script do
+  let result = calcAccruedInterest 5000000.0 0.0 1.0
+  assertMsg "Zero rate produces zero interest" (result == 0.0)
+
+testAccruedInterestBetweenDates : Script ()
+testAccruedInterestBetweenDates = script do
+  -- Overnight repo: 10M @ 5.1% for 1 day on Act/360 basis
+  -- YF = 1/360 = 0.002777...
+  -- Interest = 10,000,000 × 0.051 × (1/360) = 1,416.67 approx
+  let start = time (date 2026 Jun 24) 0 0 0
+      end   = time (date 2026 Jun 25) 0 0 0
+  let result = calcAccruedInterestBetween Act360 10000000.0 0.051 start end
+  assertMsg "Overnight interest > 1400" (result > 1400.0)
+  assertMsg "Overnight interest < 1500" (result < 1500.0)
+
+testRepoRepurchasePrice : Script ()
+testRepoRepurchasePrice = script do
+  -- Purchase price 9,900,000 @ 5.1% for 7 days on Act/360
+  -- Year fraction = 7/360 = 0.01944...
+  -- Repurchase = 9,900,000 × (1 + 0.051 × 0.01944...) = 9,909,803 approx
+  let purchasePrice = 9900000.0
+      repoRate      = 0.051
+      yf            = calcYearFraction Act360
+                        (time (date 2026 Jun 24) 0 0 0)
+                        (time (date 2026 Jul  1) 0 0 0)
+  let repurchasePrice = calcRepurchasePrice purchasePrice repoRate yf
+  assertMsg "Repurchase price > purchase price" (repurchasePrice > purchasePrice)
+  assertMsg "Repurchase price < purchase + 1%" (repurchasePrice < purchasePrice * 1.01)
+
+testDailyInterest : Script ()
+testDailyInterest = script do
+  -- 100M @ 4.0% per year => daily = 100M × 0.04 / 365 = 10,958.90 approx
+  let daily = calcDailyInterest 100000000.0 0.04
+  assertMsg "Daily interest > 10000" (daily > 10000.0)
+  assertMsg "Daily interest < 12000" (daily < 12000.0)
+
+-- ---------------------------------------------------------------------------
+-- Business Schedule Tests
+-- ---------------------------------------------------------------------------
+
+testBusinessSchedule : Script ()
+testBusinessSchedule = script do
+  let schedule = BusinessSchedule with
+        effectiveDate = time (date 2026 Jan  1) 0 0 0
+        maturityDate  = time (date 2028 Jan  1) 0 0 0
+        frequencyDays = 180
+        dayCount      = Act365Fixed
+        calendarName  = "USNY"
+        adjustedForBD = False
+
+  -- 2 years from 2026 Jan 1 to 2028 Jan 1 = 730 days
+  assertMsg "Schedule days == 730" (scheduleDays schedule == 730)
+
+  -- Year fraction: 730 / 365 = 2.0 exactly
+  let yf = scheduleYearFraction schedule
+  assertMsg "2-year schedule year fraction == 2.0" (yf == 2.0)
+
+  -- Total interest: 10M @ 6.5% over 2 years = 1,300,000
+  let totalInterest = scheduleTotalInterest schedule 10000000.0 0.065
+  assertMsg "Total 2-year interest == 1,300,000" (totalInterest == 1300000.0)
+
+-- ---------------------------------------------------------------------------
+-- Entry Point
+-- ---------------------------------------------------------------------------
+
+runTypesAndTimeTests : Script ()
+runTypesAndTimeTests = script do
+  testIdentifierConstruction
+  testIdentifierOrdering
+  testLifecycleStatusDistinct
+  testLifecycleStatusOrdering
+  testDayCountOrdering
+  testDaysBetween
+  testYearFractionAct360
+  testYearFractionAct365
+  testYearFractionActActISDA
+  testSimpleAccruedInterest
+  testZeroRateInterest
+  testAccruedInterestBetweenDates
+  testRepoRepurchasePrice
+  testDailyInterest
+  testBusinessSchedule

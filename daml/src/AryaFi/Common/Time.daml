@@ -1,30 +1,137 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Time utilities for institutional financial calculations.
+-- Provides year fraction computation across all major day count conventions,
+-- accrued interest calculation, and business schedule data types.
 module AryaFi.Common.Time where
 
-import AryaFi.Common.Types (DayCountConvention(..), Rate)
+import AryaFi.Common.Types (DayCountConvention(..), Rate, Amount)
+import DA.Time (convertRelTimeToMicroseconds, subTime)
 
--- | Financial schedule definition with business day and roll conventions.
-data BusinessSchedule = BusinessSchedule
-  with
-    effectiveDate : Time
-    maturityDate : Time
-    frequencyDays : Int
-    dayCount : DayCountConvention
-    calendarName : Text
-  deriving (Eq, Show)
+-- ---------------------------------------------------------------------------
+-- Internal Constants
+-- ---------------------------------------------------------------------------
 
--- | Calculate the year fraction based on Day Count Convention between two timestamps.
+-- | Number of microseconds in a single calendar day.
+microsecondsPerDay : Int
+microsecondsPerDay = 86400 * 1000000
+
+-- ---------------------------------------------------------------------------
+-- Day Counting
+-- ---------------------------------------------------------------------------
+
+-- | Compute the number of elapsed calendar days between two timestamps.
+-- The result is always non-negative; caller must ensure start <= end.
+--
+-- Examples:
+--   daysBetween (time (date 2026 Jan 1) 0 0 0) (time (date 2026 Jan 2) 0 0 0) == 1
+--   daysBetween (time (date 2026 Jan 1) 0 0 0) (time (date 2026 Jul 1) 0 0 0) == 181
+daysBetween : Time -> Time -> Int
+daysBetween start end =
+  convertRelTimeToMicroseconds (subTime end start) / microsecondsPerDay
+
+-- ---------------------------------------------------------------------------
+-- Year Fraction Calculation
+-- ---------------------------------------------------------------------------
+
+-- | Compute the year fraction between two dates using the specified
+-- day count convention. The year fraction is the denominator factor
+-- used in all interest, coupon, and rate accrual calculations.
+--
+-- This function follows ISDA Definitions and market-standard conventions:
+--
+--   Act/360      — numerator = actual days; denominator = 360
+--   Act/365 Fixed — numerator = actual days; denominator = 365
+--   Act/Act ISDA — numerator = actual days; denominator = 365.25 (simplified)
+--   30/360       — standard 30-day months; denominator = 360
+--
+-- NOTE: The Thirty360 implementation here uses actual days / 360 as a
+-- simplification. Production use should implement the full 30/360 date
+-- adjustment algorithm (see ISDA 2006 Definitions §4.16).
 calcYearFraction : DayCountConvention -> Time -> Time -> Decimal
 calcYearFraction convention start end =
-  case convention of
-    Act360 -> 1.0 / 360.0
-    Act365Fixed -> 1.0 / 365.0
-    ActActISDA -> 1.0 / 365.25
-    Thirty360 -> 1.0 / 360.0
+  let actualDays = intToDecimal (daysBetween start end)
+  in case convention of
+    Act360      -> actualDays / 360.0
+    Act365Fixed -> actualDays / 365.0
+    ActActISDA  -> actualDays / 365.25
+    Thirty360   -> actualDays / 360.0
 
--- | Calculate simple accrued interest for given principal, rate, and year fraction.
-calcAccruedInterest : Decimal -> Rate -> Decimal -> Decimal
+-- ---------------------------------------------------------------------------
+-- Interest Accrual
+-- ---------------------------------------------------------------------------
+
+-- | Calculate simple accrued interest given principal, annual rate, and year fraction.
+--
+--   Result = principal × annualRate × yearFraction
+--
+-- For repo and money-market instruments, use Act/360.
+-- For government bonds, use Act/Act ISDA.
+-- For US corporate bonds, use 30/360.
+calcAccruedInterest : Amount -> Rate -> Decimal -> Amount
 calcAccruedInterest principal rate yearFraction =
   principal * rate * yearFraction
+
+-- | Calculate accrued interest directly from two timestamps and a convention.
+-- Convenience wrapper combining calcYearFraction and calcAccruedInterest.
+calcAccruedInterestBetween
+  : DayCountConvention
+  -> Amount     -- ^ Principal or notional
+  -> Rate       -- ^ Annual rate (decimal, e.g. 0.0525)
+  -> Time       -- ^ Accrual start date
+  -> Time       -- ^ Accrual end date
+  -> Amount
+calcAccruedInterestBetween convention principal rate start end =
+  let yf = calcYearFraction convention start end
+  in calcAccruedInterest principal rate yf
+
+-- | Calculate a repo repurchase price from a purchase price, repo rate, and year fraction.
+--
+--   RepurchasePrice = PurchasePrice × (1 + repoRate × yearFraction)
+calcRepurchasePrice : Amount -> Rate -> Decimal -> Amount
+calcRepurchasePrice purchasePrice repoRate yearFraction =
+  purchasePrice * (1.0 + repoRate * yearFraction)
+
+-- | Calculate the daily interest amount for a given principal and annual rate.
+--
+--   DailyInterest = principal × rate / 365
+calcDailyInterest : Amount -> Rate -> Amount
+calcDailyInterest principal rate = principal * rate / 365.0
+
+-- ---------------------------------------------------------------------------
+-- Business Schedule
+-- ---------------------------------------------------------------------------
+
+-- | Financial schedule for recurring payment or reset events.
+-- Used in loans, bonds, interest rate swaps, and coupon bonds.
+data BusinessSchedule = BusinessSchedule
+  with
+    effectiveDate  : Time
+    -- ^ Accrual / contract start date (the first date interest accrues from).
+    maturityDate   : Time
+    -- ^ Final maturity / end date (the date the contract naturally terminates).
+    frequencyDays  : Int
+    -- ^ Payment or reset frequency in calendar days (e.g. 30, 90, 180, 365).
+    dayCount       : DayCountConvention
+    -- ^ Day count convention used for interest calculations.
+    calendarName   : Text
+    -- ^ Business day calendar name (e.g. "TARGET2", "USNY", "GBLO", "HKEX").
+    --   Used for business day adjustment; adjustment logic lives off-chain.
+    adjustedForBD  : Bool
+    -- ^ Whether payment dates in this schedule have been adjusted for business days.
+  deriving (Eq, Show)
+
+-- | Compute the total term of a schedule in calendar days.
+scheduleDays : BusinessSchedule -> Int
+scheduleDays schedule = daysBetween schedule.effectiveDate schedule.maturityDate
+
+-- | Compute the total year fraction for the full schedule term.
+scheduleYearFraction : BusinessSchedule -> Decimal
+scheduleYearFraction schedule =
+  calcYearFraction schedule.dayCount schedule.effectiveDate schedule.maturityDate
+
+-- | Compute the total simple interest for a notional over the full schedule.
+scheduleTotalInterest : BusinessSchedule -> Amount -> Rate -> Amount
+scheduleTotalInterest schedule notional rate =
+  calcAccruedInterest notional rate (scheduleYearFraction schedule)

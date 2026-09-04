@@ -1,29 +1,72 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Institutional account representation for asset custody and holding relationships.
+-- An Account defines a specific holding relationship between a custodian and an owner.
+-- All asset positions (Cash, Security, Collateral) reference an AccountId.
+-- The custodian and owner are dual signatories ensuring mutual authorization
+-- of the custody relationship.
 module AryaFi.Finance.Account where
 
 import AryaFi.Common.Identifiers (AccountId)
+import AryaFi.Common.Errors (require, requireNonEmpty)
 
--- | Types of institutional custody / holding accounts.
+-- ---------------------------------------------------------------------------
+-- Account Type
+-- ---------------------------------------------------------------------------
+
+-- | Classification of institutional custody and settlement accounts.
 data AccountType
   = OmnibusAccount
+    -- ^ Pooled account holding commingled assets on behalf of multiple beneficial owners.
+    --   Common in prime brokerage and fund custody.
   | SegregatedCustody
+    -- ^ Segregated account holding assets exclusively for a single beneficial owner.
+    --   Required for retail and many institutional clients under MiFID II / SEC rules.
   | ClearingAccount
+    -- ^ Account used for clearing operations at a CCP or clearing broker.
   | SettlementAccount
+    -- ^ Dedicated account for settlement flows (DVP, free delivery, payment).
   | MarginAccount
-  deriving (Eq, Show)
+    -- ^ Account holding margin collateral posted against open derivative positions.
+  | IssuerAccount
+    -- ^ Account for the originating issuer of a security (source of initial issuance).
+  deriving (Eq, Ord, Show)
 
--- | Institutional account contract holding assets with explicit custodian and owner signatories.
+-- ---------------------------------------------------------------------------
+-- Account Template
+-- ---------------------------------------------------------------------------
+
+-- | Institutional custody account establishing the holding relationship
+-- between a custodian and an asset owner.
+--
+-- Authorization model:
+--   - custodian: controls operational decisions (freeze, unfreeze).
+--   - owner: controls visibility (add/remove observers) and account metadata.
+--   - Both must sign to create the account (mutual acknowledgment).
+--
+-- Privacy model:
+--   - custodian and owner always see this contract.
+--   - Regulators, auditors, settlement agents can be added as observers.
+--   - Counterparties NOT in the observer list are blind to this account.
 template Account
   with
     custodian : Party
+    -- ^ Institution holding assets in trust (e.g. BNY Mellon, State Street, Euroclear).
     owner : Party
+    -- ^ Beneficial owner of the assets in this account (e.g. an investment manager).
     accountId : AccountId
+    -- ^ Custodian-assigned unique identifier for this account.
     accountType : AccountType
+    -- ^ Classification of the account's purpose and structure.
     description : Text
+    -- ^ Human-readable description (e.g. "AlphaCap USD Segregated Equity Account").
     isFrozen : Bool
+    -- ^ Whether this account is frozen. Frozen accounts reject all asset movements.
+    freezeReason : Optional Text
+    -- ^ Reason for freezing, if applicable (e.g. "REGULATORY_HOLD", "DISPUTE_RESOLUTION").
     observers : [Party]
+    -- ^ Parties granted read visibility on this account (e.g. regulators, auditors).
   where
     signatory custodian, owner
     observer observers
@@ -31,18 +74,65 @@ template Account
     key (custodian, accountId) : (Party, AccountId)
     maintainer key._1
 
-    controller custodian can
-      FreezeAccount : ContractId Account
-        do
-          create this with isFrozen = True
+    -- | Freeze this account, preventing any asset movements in or out.
+    -- Only the custodian can freeze an account (e.g. due to regulatory hold or dispute).
+    choice FreezeAccount : ContractId Account
+      with
+        reason : Text
+      controller custodian
+      do
+        require (not isFrozen) "Account is already frozen"
+        requireNonEmpty reason "reason"
+        create this with
+          isFrozen = True
+          freezeReason = Some reason
 
-      UnfreezeAccount : ContractId Account
-        do
-          create this with isFrozen = False
+    -- | Unfreeze a previously frozen account.
+    -- Only the custodian can unfreeze.
+    choice UnfreezeAccount : ContractId Account
+      controller custodian
+      do
+        require isFrozen "Account is not currently frozen"
+        create this with
+          isFrozen = False
+          freezeReason = None
 
-    controller owner can
-      AddObserver : ContractId Account
-        with
-          newObserver : Party
-        do
-          create this with observers = dedup (newObserver :: observers)
+    -- | Update the account description.
+    -- Only the owner can update the description.
+    choice UpdateDescription : ContractId Account
+      with
+        newDescription : Text
+      controller owner
+      do
+        requireNonEmpty newDescription "description"
+        create this with description = newDescription
+
+    -- | Add a new observer to this account.
+    -- Only the owner can grant visibility. Duplicate observers are rejected.
+    choice AddObserver : ContractId Account
+      with
+        newObserver : Party
+      controller owner
+      do
+        require (newObserver `notElem` observers)
+          "This party is already an observer of this account"
+        create this with observers = newObserver :: observers
+
+    -- | Remove an existing observer from this account.
+    -- Only the owner can revoke visibility.
+    choice RemoveObserver : ContractId Account
+      with
+        observerToRemove : Party
+      controller owner
+      do
+        require (observerToRemove `elem` observers)
+          "This party is not currently an observer of this account"
+        create this with
+          observers = filter (/= observerToRemove) observers
+
+    -- | Nonconsuming check: verify if this account is available for asset movements.
+    -- Returns True if the account is active and not frozen.
+    nonconsuming choice IsAvailableForSettlement : Bool
+      controller custodian
+      do
+        pure (not isFrozen)
