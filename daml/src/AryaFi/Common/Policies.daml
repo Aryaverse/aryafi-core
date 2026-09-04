@@ -1,20 +1,99 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Compliance policy decision types and configurable rule descriptors.
+-- Policy evaluation is always decoupled from contract execution logic —
+-- contracts invoke policy contracts via nonconsuming choices, receive a
+-- PolicyDecision, and enforce it using pattern matching.
+-- This separation allows policy updates without redeploying core contracts.
 module AryaFi.Common.Policies where
 
--- | Compliance policy decision status.
+-- ---------------------------------------------------------------------------
+-- Policy Decision
+-- ---------------------------------------------------------------------------
+
+-- | The outcome of evaluating a compliance or eligibility policy.
+-- All policy evaluation choices return this type.
 data PolicyDecision
   = Approved
+    -- ^ The subject satisfies all policy conditions. Proceed with the operation.
   | Rejected Text
+    -- ^ The subject failed one or more policy conditions.
+    --   Text contains the specific rejection reason (e.g. "JURISDICTION_NOT_PERMITTED").
   | RequiresManualReview Text
+    -- ^ Automated evaluation is inconclusive. Requires human review.
+    --   Text describes the condition requiring review (e.g. "KYC_RISK_SCORE_HIGH").
   deriving (Eq, Show)
 
--- | Configurable institutional rule policy descriptor.
+-- ---------------------------------------------------------------------------
+-- Policy Decision Combinators
+-- ---------------------------------------------------------------------------
+
+-- | Combine two policy decisions with AND semantics:
+-- both must be Approved for the result to be Approved.
+-- If either is Rejected, the rejection reason is preserved.
+-- If one is ManualReview, the result requires manual review.
+andDecision : PolicyDecision -> PolicyDecision -> PolicyDecision
+andDecision Approved Approved = Approved
+andDecision (Rejected r1) (Rejected r2) = Rejected (r1 <> "; " <> r2)
+andDecision (Rejected r) _ = Rejected r
+andDecision _ (Rejected r) = Rejected r
+andDecision (RequiresManualReview r1) (RequiresManualReview r2) =
+  RequiresManualReview (r1 <> "; " <> r2)
+andDecision (RequiresManualReview r) _ = RequiresManualReview r
+andDecision _ (RequiresManualReview r) = RequiresManualReview r
+
+-- | Combine two policy decisions with OR semantics:
+-- either Approved is sufficient. Both must reject for the result to be Rejected.
+orDecision : PolicyDecision -> PolicyDecision -> PolicyDecision
+orDecision Approved _ = Approved
+orDecision _ Approved = Approved
+orDecision (RequiresManualReview _) _ = RequiresManualReview "One or more checks require review"
+orDecision _ (RequiresManualReview _) = RequiresManualReview "One or more checks require review"
+orDecision (Rejected r1) (Rejected r2) = Rejected (r1 <> "; " <> r2)
+
+-- | Convert a PolicyDecision to a Boolean indicating approval.
+-- Use when you need a simple pass/fail without preserving the rejection reason.
+isApproved : PolicyDecision -> Bool
+isApproved Approved = True
+isApproved _ = False
+
+-- | Convert a PolicyDecision to a Boolean indicating rejection.
+isRejected : PolicyDecision -> Bool
+isRejected (Rejected _) = True
+isRejected _ = False
+
+-- | Convert a PolicyDecision to a Boolean indicating manual review required.
+requiresReview : PolicyDecision -> Bool
+requiresReview (RequiresManualReview _) = True
+requiresReview _ = False
+
+-- | Extract the rejection or review reason from a PolicyDecision.
+-- Returns None if the decision is Approved.
+getDecisionReason : PolicyDecision -> Optional Text
+getDecisionReason Approved = None
+getDecisionReason (Rejected r) = Some r
+getDecisionReason (RequiresManualReview r) = Some r
+
+-- ---------------------------------------------------------------------------
+-- Policy Rule Descriptor
+-- ---------------------------------------------------------------------------
+
+-- | Metadata descriptor for a configurable compliance rule.
+-- Used for documentation, audit, and governance — not directly for evaluation.
+-- Evaluation logic is encoded in the specific policy contract templates.
 data PolicyRule = PolicyRule
   with
     ruleId : Text
+    -- ^ Unique identifier for this rule (e.g. "RULE-KYC-001", "RULE-JURIS-US-03").
     ruleName : Text
+    -- ^ Human-readable rule name (e.g. "KYC Verification Required").
     description : Text
+    -- ^ Full description of what this rule checks and why it exists.
     enabled : Bool
+    -- ^ Whether this rule is currently enforced. Disabled rules are skipped.
+    jurisdictions : [Text]
+    -- ^ ISO 3166-1 alpha-2 country codes this rule applies to. Empty = global.
+    assetClasses : [Text]
+    -- ^ Asset class codes this rule applies to. Empty = all asset classes.
   deriving (Eq, Show)

@@ -1,31 +1,118 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Structured error taxonomy and assertion helpers for AryaFi contracts.
+-- All contract failures should use the categories and helper functions
+-- defined here to ensure consistent, auditable error propagation.
 module AryaFi.Common.Errors where
 
--- | Standard error categories across the AryaFi contract ecosystem.
+-- ---------------------------------------------------------------------------
+-- Error Categories
+-- ---------------------------------------------------------------------------
+
+-- | High-level error categories covering all expected failure modes across
+-- the AryaFi contract ecosystem. Each category maps to a remediation owner:
+-- compliance, operations, credit risk, or technology.
 data ErrorCategory
   = UnauthorizedAction
+    -- ^ A party attempted an action outside their authorized role.
+    --   Remediation: Verify controller configuration and party onboarding.
   | InsufficientBalance
+    -- ^ A cash or asset position does not have enough quantity for the operation.
+    --   Remediation: Top-up the relevant position or reduce the requested amount.
   | InvalidStatus
+    -- ^ A contract is not in the required lifecycle state for the requested choice.
+    --   Remediation: Verify the contract state machine and resubmit when valid.
   | ComplianceViolation
+    -- ^ An operation violates a configured compliance policy (KYC, sanctions, eligibility).
+    --   Remediation: Resolve the underlying compliance issue via compliance team.
   | EligibilityFailed
+    -- ^ A party or asset failed an eligibility check (jurisdiction, credit rating, asset class).
+    --   Remediation: Update eligibility policy or substitute with an eligible counterparty/asset.
   | ValuationDiscrepancy
+    -- ^ A submitted valuation deviates beyond an agreed tolerance from the reference valuation.
+    --   Remediation: Reconcile with the market data or collateral valuation agent.
   | SettlementFailure
+    -- ^ A settlement leg failed to complete (e.g. locked asset, missing counterparty authorization).
+    --   Remediation: Investigate the settlement leg status and resubmit or cancel.
   | TimeLockViolation
+    -- ^ An action was attempted before a mandatory lock or holding period expired.
+    --   Remediation: Wait for the applicable time lock to expire before retrying.
+  | DuplicateOperation
+    -- ^ An idempotency key was reused for a different operation.
+    --   Remediation: Generate a fresh idempotency key for the new operation.
+  | ReferenceDataMissing
+    -- ^ A required reference contract (KYC, eligibility policy, account) could not be found.
+    --   Remediation: Ensure all prerequisite contracts are created before submitting.
   | InvalidParameters
+    -- ^ One or more input parameters are logically invalid (e.g. negative amount, empty ISIN).
+    --   Remediation: Validate inputs before submission.
   deriving (Eq, Show)
 
--- | Structured error record for auditable contract exceptions.
+-- ---------------------------------------------------------------------------
+-- Structured Error Record
+-- ---------------------------------------------------------------------------
+
+-- | A structured, auditable error record capturing category, code, message,
+-- and additional diagnostic details. Use this for logging and reporting,
+-- not for contract state (contracts abort on error rather than storing it).
 data AryaFiError = AryaFiError
   with
     category : ErrorCategory
+    -- ^ High-level classification for routing and reporting.
     code : Text
+    -- ^ Short machine-readable code (e.g. "INSUF_BAL_001", "KYC_EXPIRED").
     message : Text
+    -- ^ Human-readable explanation of the failure.
     details : [Text]
+    -- ^ Optional additional diagnostic information (field names, values, etc.).
   deriving (Eq, Show)
 
--- | Helper assertion function with custom message format.
+-- ---------------------------------------------------------------------------
+-- Assertion Helpers
+-- ---------------------------------------------------------------------------
+
+-- | Assert a condition or abort with a descriptive message.
+-- Use in preference to bare 'assert' to ensure all failures are informative.
+--
+--   require (amount > 0.0) "Amount must be positive"
 require : CanAssert m => Bool -> Text -> m ()
-require condition errorMsg =
-  assertMsg errorMsg condition
+require condition msg = assertMsg msg condition
+
+-- | Assert that an amount is strictly positive.
+requirePositive : CanAssert m => Decimal -> Text -> m ()
+requirePositive amount fieldName =
+  assertMsg (fieldName <> " must be strictly positive, got: " <> show amount)
+    (amount > 0.0)
+
+-- | Assert that an amount is non-negative (zero is allowed).
+requireNonNegative : CanAssert m => Decimal -> Text -> m ()
+requireNonNegative amount fieldName =
+  assertMsg (fieldName <> " must be non-negative, got: " <> show amount)
+    (amount >= 0.0)
+
+-- | Assert that a Text field is non-empty.
+requireNonEmpty : CanAssert m => Text -> Text -> m ()
+requireNonEmpty value fieldName =
+  assertMsg (fieldName <> " must not be empty") (value /= "")
+
+-- | Assert that a list is non-empty.
+requireNonEmptyList : CanAssert m => [a] -> Text -> m ()
+requireNonEmptyList xs fieldName =
+  assertMsg (fieldName <> " must not be an empty list") (not (null xs))
+
+-- | Assert that a rate is within a valid range [minRate, maxRate].
+requireRateInRange : CanAssert m => Decimal -> Decimal -> Decimal -> Text -> m ()
+requireRateInRange rate minRate maxRate fieldName =
+  assertMsg
+    (fieldName <> " must be between " <> show minRate <> " and " <> show maxRate <>
+     ", got: " <> show rate)
+    (rate >= minRate && rate <= maxRate)
+
+-- | Assert that a lifecycle status is the expected one before proceeding.
+requireStatus : (CanAssert m, Eq s, Show s) => s -> s -> Text -> m ()
+requireStatus actual expected contractName =
+  assertMsg
+    (contractName <> " must be in status " <> show expected <>
+     " but found " <> show actual)
+    (actual == expected)
