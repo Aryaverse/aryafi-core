@@ -1,0 +1,396 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | End-to-end DvP settlement scenario and negative test suite.
+-- Tests the full lifecycle of a Delivery-versus-Payment instruction:
+--   Setup → Lock positions → Create DvP → Execute → Verify
+-- Also covers: failure, retry, cancellation, authorization, and boundary cases.
+module AryaFi.Test.Scenarios.DvpSettlementTest where
+
+import Daml.Script
+import AryaFi.Finance.Settlement
+import AryaFi.Finance.Security
+import AryaFi.Finance.Cash
+import AryaFi.Common.Identifiers
+import AryaFi.Common.Types
+
+-- ---------------------------------------------------------------------------
+-- Helpers
+-- ---------------------------------------------------------------------------
+
+setupSecurityPosition
+  : Party -> Party -> AccountId -> Amount
+  -> Script (ContractId SecurityPosition)
+setupSecurityPosition custodian owner accId qty =
+  submitMulti [custodian, owner] [] do
+    createCmd SecurityPosition with
+      custodian = custodian
+      owner = owner
+      accountId = accId
+      isin = ISIN "US912828ZM24"
+      cusip = Some (CUSIP "912828ZM2")
+      instrumentName = "US Treasury 4.25% Nov 2026"
+      instrumentType = GovernmentBond
+      quantity = qty
+      couponRate = Some 0.0425
+      couponType = Some FixedCoupon
+      dayCountConvention = Some ActActISDA
+      maturityDate = None
+      seniority = Some Senior
+      isLocked = False
+      lockReference = None
+      csdRef = None
+      observers = []
+
+setupCashPosition
+  : Party -> Party -> AccountId -> Amount
+  -> Script (ContractId CashPosition)
+setupCashPosition bank owner accId amt =
+  submitMulti [bank, owner] [] do
+    createCmd CashPosition with
+      bank = bank
+      owner = owner
+      accountId = accId
+      currency = "USD"
+      amount = amt
+      isLocked = False
+      lockReference = None
+      observers = []
+
+mkDvp
+  : Party -> Party -> Party -> Text -> Text
+  -> Script (ContractId DvpInstruction)
+mkDvp agent seller buyer secLockRef cashLockRef = do
+  now <- getTime
+  submitMulti [agent, seller, buyer] [] do
+    createCmd DvpInstruction with
+      settlementAgent = agent
+      seller = seller
+      buyer = buyer
+      tradeId = TradeId "TRD-US-TREAS-2026-001"
+      isin = ISIN "US912828ZM24"
+      securityQuantity = 5000000.0
+      sellerSecurityAccount = AccountId "ACC-SELLER-SEC-001"
+      buyerSecurityAccount = AccountId "ACC-BUYER-SEC-001"
+      currency = "USD"
+      cashAmount = 4975000.0
+      sellerCashAccount = AccountId "ACC-SELLER-CASH-001"
+      buyerCashAccount = AccountId "ACC-BUYER-CASH-001"
+      dvpModel = DvpModel1
+      settlementDate = now
+      correlationId = CorrelationId "CORR-DVP-TREAS-001"
+      idempotencyKey = IdempotencyKey "IKEY-DVP-001"
+      sellerSecurityLockRef = secLockRef
+      buyerCashLockRef = cashLockRef
+      status = PendingSettlement
+      failureReason = None
+      observers = []
+
+-- ---------------------------------------------------------------------------
+-- Full DvP Lifecycle Scenario
+-- ---------------------------------------------------------------------------
+
+testDvpFullLifecycle : Script ()
+testDvpFullLifecycle = script do
+  -- Parties
+  custodian <- allocateParty "FederalCustodian"
+  bank      <- allocateParty "FederalReserve"
+  seller    <- allocateParty "DealerBankA"
+  buyer     <- allocateParty "DealerBankB"
+  agent     <- allocateParty "DTCCSettlementAgent"
+  csd       <- allocateParty "DTC"
+
+  -- Step 1: Setup seller's T-Bond position
+  secCid <- setupSecurityPosition custodian seller
+              (AccountId "ACC-SELLER-SEC-001") 5000000.0
+
+  -- Step 2: Setup buyer's cash position
+  cashCid <- setupCashPosition bank buyer
+               (AccountId "ACC-BUYER-CASH-001") 5000000.0
+
+  -- Step 3: Seller locks security (pre-condition for DvP)
+  let secLockRef = "DVP-TRD-US-TREAS-2026-001"
+  lockedSecCid <- submitMulti [seller, custodian] [] do
+    exerciseCmd secCid LockSecurity with lockRef = secLockRef
+
+  -- Step 4: Buyer locks cash (pre-condition for DvP)
+  let cashLockRef = "DVP-TRD-US-TREAS-2026-001"
+  lockedCashCid <- submitMulti [buyer, bank] [] do
+    exerciseCmd cashCid LockCash with lockRef = cashLockRef
+
+  -- Step 5: Create DvP instruction (all three parties sign)
+  dvpCid <- mkDvp agent seller buyer secLockRef cashLockRef
+
+  -- Step 6: Agent adds CSD as observer
+  dvpWithCsdCid <- submit agent do
+    exerciseCmd dvpCid AddDvpObserver with newObserver = csd
+
+  -- CSD can now see the DvP
+  csdView <- queryContractId csd dvpWithCsdCid
+  assertMsg "CSD can see DvP instruction" (csdView /= None)
+
+  -- Step 7: Execute settlement
+  settledCid <- submit agent do
+    exerciseCmd dvpWithCsdCid ExecuteDvpSettlement
+
+  -- Step 8: Verify settled status
+  settledData <- queryContractId seller settledCid
+  case settledData of
+    None -> abort "Settled DvP not visible to seller"
+    Some dvp -> do
+      assertMsg "Status Settled" (dvp.status == Settled)
+      assertMsg "No failure reason" (dvp.failureReason == None)
+      assertMsg "Security quantity" (dvp.securityQuantity == 5000000.0)
+      assertMsg "Cash amount" (dvp.cashAmount == 4975000.0)
+
+  -- Buyer also sees the settled instruction
+  buyerView <- queryContractId buyer settledCid
+  assertMsg "Buyer sees settled DvP" (buyerView /= None)
+
+-- ---------------------------------------------------------------------------
+-- Failure and Retry Scenario
+-- ---------------------------------------------------------------------------
+
+testDvpFailureAndRetry : Script ()
+testDvpFailureAndRetry = script do
+  agent  <- allocateParty "DTCCSettlementAgent"
+  seller <- allocateParty "DealerBankA"
+  buyer  <- allocateParty "DealerBankB"
+
+  dvpCid <- mkDvp agent seller buyer "SEC-LOCK-001" "CASH-LOCK-001"
+
+  -- Agent fails the settlement (e.g. position validation failed)
+  failedCid <- submit agent do
+    exerciseCmd dvpCid FailDvpSettlement with
+      reason = "SECURITY_POSITION_NOT_FOUND_AT_CUSTODIAN"
+
+  failedData <- queryContractId seller failedCid
+  case failedData of
+    None -> abort "Failed DvP not visible to seller"
+    Some dvp -> do
+      case dvp.status of
+        Failed r -> assertMsg "Failure reason" (r == "SECURITY_POSITION_NOT_FOUND_AT_CUSTODIAN")
+        _        -> abort "Expected Failed status"
+      assertMsg "failureReason field set"
+        (dvp.failureReason == Some "SECURITY_POSITION_NOT_FOUND_AT_CUSTODIAN")
+
+  -- All three parties agree to retry
+  retriedCid <- submitMulti [agent, seller, buyer] [] do
+    exerciseCmd failedCid RetrySettlement
+
+  retriedData <- queryContractId buyer retriedCid
+  case retriedData of
+    None -> abort "Retried DvP not visible to buyer"
+    Some dvp -> do
+      assertMsg "Status back to PendingSettlement" (dvp.status == PendingSettlement)
+      assertMsg "failureReason cleared" (dvp.failureReason == None)
+
+  -- Now execute successfully
+  settledCid <- submit agent do
+    exerciseCmd retriedCid ExecuteDvpSettlement
+
+  settledData <- queryContractId agent settledCid
+  case settledData of
+    None -> abort "Final settled DvP not found"
+    Some dvp -> assertMsg "Status Settled after retry" (dvp.status == Settled)
+
+-- ---------------------------------------------------------------------------
+-- Cancellation Scenario
+-- ---------------------------------------------------------------------------
+
+testDvpCancellation : Script ()
+testDvpCancellation = script do
+  agent  <- allocateParty "DTCCSettlementAgent"
+  seller <- allocateParty "DealerBankA"
+  buyer  <- allocateParty "DealerBankB"
+
+  dvpCid <- mkDvp agent seller buyer "SEC-LOCK-002" "CASH-LOCK-002"
+
+  -- Buyer and seller agree to cancel (e.g. trade error)
+  cancelledCid <- submitMulti [seller, buyer] [] do
+    exerciseCmd dvpCid CancelDvpSettlement with
+      reason = "TRADE_ERROR_INCORRECT_ISIN"
+
+  cancelData <- queryContractId agent cancelledCid
+  case cancelData of
+    None -> abort "Cancelled DvP not visible to agent"
+    Some dvp ->
+      case dvp.status of
+        Cancelled r -> assertMsg "Cancellation reason" (r == "TRADE_ERROR_INCORRECT_ISIN")
+        _           -> abort "Expected Cancelled status"
+
+-- ---------------------------------------------------------------------------
+-- Privacy Tests
+-- ---------------------------------------------------------------------------
+
+testDvpPrivacy : Script ()
+testDvpPrivacy = script do
+  agent    <- allocateParty "DTCCSettlementAgent"
+  seller   <- allocateParty "DealerBankA"
+  buyer    <- allocateParty "DealerBankB"
+  outsider <- allocateParty "OutsiderCorp"
+
+  dvpCid <- mkDvp agent seller buyer "SEC-LOCK-003" "CASH-LOCK-003"
+
+  -- Outsider cannot see DvP instruction
+  outsiderView <- queryContractId outsider dvpCid
+  assertMsg "Outsider cannot see DvP instruction" (outsiderView == None)
+
+  -- Seller and buyer can see it
+  sellerView <- queryContractId seller dvpCid
+  assertMsg "Seller sees DvP instruction" (sellerView /= None)
+
+  buyerView <- queryContractId buyer dvpCid
+  assertMsg "Buyer sees DvP instruction" (buyerView /= None)
+
+-- ---------------------------------------------------------------------------
+-- Negative Tests
+-- ---------------------------------------------------------------------------
+
+-- Negative: only settlement agent can execute DvP
+testOnlyAgentCanExecuteDvp : Script ()
+testOnlyAgentCanExecuteDvp = script do
+  agent  <- allocateParty "DTCCSettlementAgent"
+  seller <- allocateParty "DealerBankA"
+  buyer  <- allocateParty "DealerBankB"
+
+  dvpCid <- mkDvp agent seller buyer "SEC-LOCK-004" "CASH-LOCK-004"
+
+  submitMustFail seller do
+    exerciseCmd dvpCid ExecuteDvpSettlement
+
+-- Negative: cannot execute already-settled DvP
+testCannotReExecuteSettledDvp : Script ()
+testCannotReExecuteSettledDvp = script do
+  agent  <- allocateParty "DTCCSettlementAgent"
+  seller <- allocateParty "DealerBankA"
+  buyer  <- allocateParty "DealerBankB"
+
+  dvpCid <- mkDvp agent seller buyer "SEC-LOCK-005" "CASH-LOCK-005"
+
+  settledCid <- submit agent do exerciseCmd dvpCid ExecuteDvpSettlement
+
+  submitMustFail agent do
+    exerciseCmd settledCid ExecuteDvpSettlement
+
+-- Negative: settlement agent cannot unilaterally cancel (needs seller + buyer)
+testAgentCannotCancelAlone : Script ()
+testAgentCannotCancelAlone = script do
+  agent  <- allocateParty "DTCCSettlementAgent"
+  seller <- allocateParty "DealerBankA"
+  buyer  <- allocateParty "DealerBankB"
+
+  dvpCid <- mkDvp agent seller buyer "SEC-LOCK-006" "CASH-LOCK-006"
+
+  submitMustFail agent do
+    exerciseCmd dvpCid CancelDvpSettlement with reason = "Agent unilateral cancel"
+
+-- Negative: cannot retry a settled instruction
+testCannotRetrySettledDvp : Script ()
+testCannotRetrySettledDvp = script do
+  agent  <- allocateParty "DTCCSettlementAgent"
+  seller <- allocateParty "DealerBankA"
+  buyer  <- allocateParty "DealerBankB"
+
+  dvpCid <- mkDvp agent seller buyer "SEC-LOCK-007" "CASH-LOCK-007"
+
+  settledCid <- submit agent do exerciseCmd dvpCid ExecuteDvpSettlement
+
+  submitMultiMustFail [agent, seller, buyer] [] do
+    exerciseCmd settledCid RetrySettlement
+
+-- Negative: cannot cancel a settled DvP
+testCannotCancelSettledDvp : Script ()
+testCannotCancelSettledDvp = script do
+  agent  <- allocateParty "DTCCSettlementAgent"
+  seller <- allocateParty "DealerBankA"
+  buyer  <- allocateParty "DealerBankB"
+
+  dvpCid <- mkDvp agent seller buyer "SEC-LOCK-008" "CASH-LOCK-008"
+
+  settledCid <- submit agent do exerciseCmd dvpCid ExecuteDvpSettlement
+
+  submitMultiMustFail [seller, buyer] [] do
+    exerciseCmd settledCid CancelDvpSettlement with reason = "Late cancel attempt"
+
+-- Negative: ensure rejects zero security quantity
+testDvpEnsurePositiveSecurityQuantity : Script ()
+testDvpEnsurePositiveSecurityQuantity = script do
+  agent  <- allocateParty "DTCCSettlementAgent"
+  seller <- allocateParty "DealerBankA"
+  buyer  <- allocateParty "DealerBankB"
+  now <- getTime
+
+  submitMultiMustFail [agent, seller, buyer] [] do
+    createCmd DvpInstruction with
+      settlementAgent = agent
+      seller = seller
+      buyer = buyer
+      tradeId = TradeId "TRD-ZERO-001"
+      isin = ISIN "US912828ZM24"
+      securityQuantity = 0.0    -- invalid: ensure rejects
+      sellerSecurityAccount = AccountId "ACC-SEL-SEC-001"
+      buyerSecurityAccount = AccountId "ACC-BUY-SEC-001"
+      currency = "USD"
+      cashAmount = 1000000.0
+      sellerCashAccount = AccountId "ACC-SEL-CASH-001"
+      buyerCashAccount = AccountId "ACC-BUY-CASH-001"
+      dvpModel = DvpModel1
+      settlementDate = now
+      correlationId = CorrelationId "CORR-ZERO-001"
+      idempotencyKey = IdempotencyKey "IKEY-ZERO-001"
+      sellerSecurityLockRef = "LOCK-001"
+      buyerCashLockRef = "LOCK-002"
+      status = PendingSettlement
+      failureReason = None
+      observers = []
+
+-- Negative: ensure rejects zero cash amount
+testDvpEnsurePositiveCashAmount : Script ()
+testDvpEnsurePositiveCashAmount = script do
+  agent  <- allocateParty "DTCCSettlementAgent"
+  seller <- allocateParty "DealerBankA"
+  buyer  <- allocateParty "DealerBankB"
+  now <- getTime
+
+  submitMultiMustFail [agent, seller, buyer] [] do
+    createCmd DvpInstruction with
+      settlementAgent = agent
+      seller = seller
+      buyer = buyer
+      tradeId = TradeId "TRD-ZEROCASH-001"
+      isin = ISIN "US912828ZM24"
+      securityQuantity = 1000000.0
+      sellerSecurityAccount = AccountId "ACC-SEL-SEC-001"
+      buyerSecurityAccount = AccountId "ACC-BUY-SEC-001"
+      currency = "USD"
+      cashAmount = 0.0          -- invalid: ensure rejects
+      sellerCashAccount = AccountId "ACC-SEL-CASH-001"
+      buyerCashAccount = AccountId "ACC-BUY-CASH-001"
+      dvpModel = DvpModel1
+      settlementDate = now
+      correlationId = CorrelationId "CORR-ZEROCASH-001"
+      idempotencyKey = IdempotencyKey "IKEY-ZEROCASH-001"
+      sellerSecurityLockRef = "LOCK-001"
+      buyerCashLockRef = "LOCK-002"
+      status = PendingSettlement
+      failureReason = None
+      observers = []
+
+-- ---------------------------------------------------------------------------
+-- Entry Point
+-- ---------------------------------------------------------------------------
+
+runDvpSettlementTests : Script ()
+runDvpSettlementTests = script do
+  testDvpFullLifecycle
+  testDvpFailureAndRetry
+  testDvpCancellation
+  testDvpPrivacy
+  testOnlyAgentCanExecuteDvp
+  testCannotReExecuteSettledDvp
+  testAgentCannotCancelAlone
+  testCannotRetrySettledDvp
+  testCannotCancelSettledDvp
+  testDvpEnsurePositiveSecurityQuantity
+  testDvpEnsurePositiveCashAmount
