@@ -93,8 +93,8 @@ template CollateralPosition
     observer observers
 
     ensure quantity > 0.0
-    ensure marketValue > 0.0
-    ensure haircut >= 0.0 && haircut < 1.0
+        && marketValue > 0.0
+        && haircut >= 0.0 && haircut < 1.0
 
     -- | Compute the post-haircut collateral value.
     -- collateralValue = marketValue × (1 - haircut)

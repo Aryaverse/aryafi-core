@@ -8,10 +8,10 @@
 module AryaFi.Test.Unit.ObligationPaymentTest where
 
 import Daml.Script
-import AryaFi.Finance.Obligation as Obligation hiding (Cancelled)
+import AryaFi.Finance.Obligation as Obligation hiding (Cancelled, Defaulted)
 import AryaFi.Finance.Payment
 import AryaFi.Common.Identifiers
-import AryaFi.Common.Types as Types hiding (Cancelled)
+import AryaFi.Common.Types as Types hiding (Cancelled, Defaulted)
 import qualified AryaFi.Finance.Obligation as Obligation
 import qualified AryaFi.Common.Types as Types
 
@@ -121,7 +121,7 @@ testObligationDefault = script do
   defData <- queryContractId obligor defaultedCid
   case defData of
     None -> abort "Defaulted obligation not found"
-    Some o -> assertMsg "Status Defaulted" (o.status == Defaulted)
+    Some o -> assertMsg "Status Defaulted" (o.status == Obligation.Defaulted)
 
 testObligationCancellation : Script ()
 testObligationCancellation = script do

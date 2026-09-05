@@ -13,6 +13,7 @@ import AryaFi.Common.Events
 import AryaFi.Common.Identifiers (CorrelationId(..))
 import DA.Date (date, Month(..))
 import DA.Time (time)
+import DA.Exception (AnyException)
 
 -- ---------------------------------------------------------------------------
 -- Errors Tests
@@ -238,10 +239,11 @@ testMkStatusChangeEvent = script do
 -- | Helper to run a script that is expected to fail
 expectFailure : Text -> Script a -> Script ()
 expectFailure msg action = do
-  result <- try action
-  case result of
-    Left (_ : AnyException) -> pure ()
-    Right _                 -> abort ("Expected failure but succeeded: " <> msg)
+  try do
+    action
+    abort ("Expected failure but succeeded: " <> msg)
+  catch
+    (_ : AnyException) -> pure ()
 
 runErrorsPoliciesEventsTests : Script ()
 runErrorsPoliciesEventsTests = script do
