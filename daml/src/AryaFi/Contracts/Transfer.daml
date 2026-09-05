@@ -5,6 +5,7 @@ module AryaFi.Contracts.Transfer where
 
 import AryaFi.Common.Types (Amount)
 import AryaFi.Common.Identifiers (AccountId, ReferenceId)
+import AryaFi.Common.Errors (require)
 
 -- | Status of asset transfer instruction.
 data TransferStatus
@@ -45,5 +46,5 @@ template AssetTransferRequest
     choice CompleteTransfer : ContractId AssetTransferRequest
       controller custodian
       do
-        assertMsg "Transfer is not approved" (status == TransferApproved)
+        require (status == TransferApproved) "Transfer is not approved"
         create this with status = TransferCompleted

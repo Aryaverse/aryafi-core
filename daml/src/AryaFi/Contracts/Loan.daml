@@ -5,6 +5,7 @@ module AryaFi.Contracts.Loan where
 
 import AryaFi.Common.Types (Amount, Currency, Rate, LifecycleStatus(..))
 import AryaFi.Common.Identifiers (ReferenceId)
+import AryaFi.Common.Errors (require)
 
 -- | Institutional Loan Contract Interface.
 template InstitutionalLoan
@@ -27,8 +28,8 @@ template InstitutionalLoan
         paymentAmount : Amount
       controller borrower
       do
-        assertMsg "Payment must be greater than zero" (paymentAmount > 0.0)
-        assertMsg "Payment exceeds outstanding balance" (paymentAmount <= outstandingBalance)
+        require (paymentAmount > 0.0) "Payment must be greater than zero"
+        require (paymentAmount <= outstandingBalance) "Payment exceeds outstanding balance"
         let newBalance = outstandingBalance - paymentAmount
         let newStatus = if newBalance == 0.0 then Closed else Active
         create this with
