@@ -24,7 +24,7 @@ module AryaFi.Finance.Settlement where
 
 import AryaFi.Common.Types (Amount, Currency, SettlementStatus(..))
 import AryaFi.Common.Identifiers (AccountId, ISIN, CorrelationId, TradeId, IdempotencyKey)
-import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
+import AryaFi.Common.Errors (require, requireNonEmpty)
 
 -- ---------------------------------------------------------------------------
 -- DvP Settlement Type
