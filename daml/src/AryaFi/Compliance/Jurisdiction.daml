@@ -15,9 +15,9 @@ template JurisdictionProfile
   where
     signatory regulator, institution
 
-    controller regulator can
-      SetJurisdictionActive : ContractId JurisdictionProfile
-        with
-          active : Bool
-        do
-          create this with isActive = active
+    choice SetJurisdictionActive : ContractId JurisdictionProfile
+      with
+        active : Bool
+      controller regulator
+      do
+        create this with isActive = active

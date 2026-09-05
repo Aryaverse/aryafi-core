@@ -28,17 +28,19 @@ template AssetRedemption
   where
     signatory fundManager, investor
 
-    controller fundManager can
-      ApproveRedemption : ContractId AssetRedemption
-        do
-          create this with status = RedemptionApproved
+    choice ApproveRedemption : ContractId AssetRedemption
+      controller fundManager
+      do
+        create this with status = RedemptionApproved
 
-      ProcessRedemption : ContractId AssetRedemption
-        do
-          create this with status = RedemptionProcessed
+    choice ProcessRedemption : ContractId AssetRedemption
+      controller fundManager
+      do
+        create this with status = RedemptionProcessed
 
-      RejectRedemption : ContractId AssetRedemption
-        with
-          reason : Text
-        do
-          create this with status = RedemptionRejected reason
+    choice RejectRedemption : ContractId AssetRedemption
+      with
+        reason : Text
+      controller fundManager
+      do
+        create this with status = RedemptionRejected reason

@@ -21,11 +21,12 @@ template AssetPledge
   where
     signatory pledgor, pledgee, custodian
 
-    controller pledgee can
-      ReleasePledge : ContractId AssetPledge
-        do
-          create this with status = Closed
+    choice ReleasePledge : ContractId AssetPledge
+      controller pledgee
+      do
+        create this with status = Closed
 
-      EnforcePledge : ContractId AssetPledge
-        do
-          create this with status = Defaulted
+    choice EnforcePledge : ContractId AssetPledge
+      controller pledgee
+      do
+        create this with status = Defaulted
