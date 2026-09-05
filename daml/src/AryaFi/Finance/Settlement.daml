@@ -112,8 +112,7 @@ template DvpInstruction
     signatory settlementAgent, seller, buyer
     observer observers
 
-    ensure securityQuantity > 0.0
-    ensure cashAmount > 0.0
+    ensure securityQuantity > 0.0 && cashAmount > 0.0
 
     -- | Execute the DvP settlement atomically.
     -- This choice can only be invoked when both the seller's security position

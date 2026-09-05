@@ -17,7 +17,7 @@ module AryaFi.Finance.Payment where
 
 import AryaFi.Common.Types (Amount, Currency, SettlementStatus(..))
 import AryaFi.Common.Identifiers (AccountId, CorrelationId, IdempotencyKey, PaymentNetworkRef)
-import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
+import AryaFi.Common.Errors (require, requireNonEmpty)
 
 -- ---------------------------------------------------------------------------
 -- Payment Purpose

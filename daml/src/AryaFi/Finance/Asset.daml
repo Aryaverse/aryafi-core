@@ -10,7 +10,7 @@ module AryaFi.Finance.Asset where
 
 import AryaFi.Common.Identifiers (AccountId, ExternalRef)
 import AryaFi.Common.Types (Amount, AssetClass)
-import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
+import AryaFi.Common.Errors (require, requireNonEmpty)
 
 -- ---------------------------------------------------------------------------
 -- AssetHolding Template
