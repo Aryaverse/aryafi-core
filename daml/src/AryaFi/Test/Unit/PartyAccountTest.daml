@@ -7,8 +7,10 @@
 module AryaFi.Test.Unit.PartyAccountTest where
 
 import Daml.Script
-import AryaFi.Finance.Party
-import AryaFi.Finance.Account
+import AryaFi.Finance.Party as Party hiding (AddObserver, RemoveObserver)
+import AryaFi.Finance.Account as Account hiding (AddObserver, RemoveObserver)
+import qualified AryaFi.Finance.Party as Party
+import qualified AryaFi.Finance.Account as Account
 import AryaFi.Common.Identifiers
 
 -- ---------------------------------------------------------------------------
@@ -153,7 +155,7 @@ testPartyObserverScoping = script do
 
   -- Add counterparty as observer
   withCounterpartyCid <- submit bankA do
-    exerciseCmd partyCid AddObserver with newObserver = counterparty
+    exerciseCmd partyCid Party.AddObserver with newObserver = counterparty
 
   -- Counterparty can now see it
   cpView <- queryContractId counterparty withCounterpartyCid
@@ -162,6 +164,13 @@ testPartyObserverScoping = script do
   -- Outsider still cannot see it
   outsiderView2 <- queryContractId outsider withCounterpartyCid
   assertMsg "Outsider still cannot see party profile" (outsiderView2 == None)
+
+  -- Remove counterparty as observer
+  withoutCpCid <- submit bankA do
+    exerciseCmd withCounterpartyCid Party.RemoveObserver with observerToRemove = counterparty
+
+  cpView2 <- queryContractId counterparty withoutCpCid
+  assertMsg "Counterparty can no longer see party profile" (cpView2 == None)
 
 -- Negative: only operator can add roles
 testOnlyOperatorCanAddRole : Script ()
@@ -302,7 +311,7 @@ testAccountObserverManagement = script do
 
   -- Add auditor as observer
   withAuditorCid <- submit owner do
-    exerciseCmd accCid AddObserver with newObserver = auditor
+    exerciseCmd accCid Account.AddObserver with newObserver = auditor
 
   -- Auditor can now see the account
   auditorView <- queryContractId auditor withAuditorCid
@@ -310,7 +319,7 @@ testAccountObserverManagement = script do
 
   -- Remove auditor
   withoutAuditorCid <- submit owner do
-    exerciseCmd withAuditorCid RemoveObserver with observerToRemove = auditor
+    exerciseCmd withAuditorCid Account.RemoveObserver with observerToRemove = auditor
 
   -- Auditor no longer sees it
   auditorView2 <- queryContractId auditor withoutAuditorCid
