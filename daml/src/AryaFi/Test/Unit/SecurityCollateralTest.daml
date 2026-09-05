@@ -8,9 +8,11 @@ module AryaFi.Test.Unit.SecurityCollateralTest where
 
 import Daml.Script
 import AryaFi.Finance.Security
-import AryaFi.Finance.Collateral
+import AryaFi.Finance.Collateral as Collateral hiding (Active)
 import AryaFi.Common.Identifiers
-import AryaFi.Common.Types
+import AryaFi.Common.Types as Types hiding (Active)
+import qualified AryaFi.Finance.Collateral as Collateral
+import qualified AryaFi.Common.Types as Types
 
 -- ---------------------------------------------------------------------------
 -- Helpers
@@ -269,7 +271,7 @@ testCollateralCreationAndActivation = script do
   activeData <- queryContractId provider activeCid
   case activeData of
     None -> abort "Active collateral not visible to provider"
-    Some c -> assertMsg "Status Active" (c.status == Active)
+    Some c -> assertMsg "Status Active" (c.status == Collateral.Active)
 
 testCollateralValue : Script ()
 testCollateralValue = script do
@@ -400,7 +402,7 @@ testCollateralDisputeResolution = script do
   case resData of
     None -> abort "Resolved collateral not found"
     Some c -> do
-      assertMsg "Status Active again" (c.status == Active)
+      assertMsg "Status Active again" (c.status == Collateral.Active)
       assertMsg "Agreed market value" (c.marketValue == 9850000.0)
 
 -- Negative: substitution only allowed on Active
