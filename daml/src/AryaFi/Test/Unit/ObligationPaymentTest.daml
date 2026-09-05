@@ -8,10 +8,12 @@
 module AryaFi.Test.Unit.ObligationPaymentTest where
 
 import Daml.Script
-import AryaFi.Finance.Obligation
+import AryaFi.Finance.Obligation as Obligation hiding (Cancelled)
 import AryaFi.Finance.Payment
 import AryaFi.Common.Identifiers
-import AryaFi.Common.Types
+import AryaFi.Common.Types as Types hiding (Cancelled)
+import qualified AryaFi.Finance.Obligation as Obligation
+import qualified AryaFi.Common.Types as Types
 
 -- ---------------------------------------------------------------------------
 -- Helpers
@@ -135,7 +137,7 @@ testObligationCancellation = script do
   cancelData <- queryContractId obligee cancelledCid
   case cancelData of
     None -> abort "Cancelled obligation not found"
-    Some o -> assertMsg "Status Cancelled" (o.status == Cancelled)
+    Some o -> assertMsg "Status Cancelled" (o.status == Obligation.Cancelled)
 
 testObligationAmendment : Script ()
 testObligationAmendment = script do
@@ -302,7 +304,7 @@ testPaymentCancellation = script do
     None -> abort "Cancelled payment not visible to agent"
     Some p ->
       case p.status of
-        Cancelled r -> assertMsg "Cancellation reason" (r == "TRADE_CANCELLED_PRIOR_TO_SETTLEMENT")
+        Types.Cancelled r -> assertMsg "Cancellation reason" (r == "TRADE_CANCELLED_PRIOR_TO_SETTLEMENT")
         _           -> abort "Expected Cancelled status"
 
 testPaymentNetworkRefAttachment : Script ()
