@@ -29,12 +29,12 @@ template ConditionalEscrow
   where
     signatory escrowAgent, depositor
 
-    controller escrowAgent, beneficiary can
-      ReleaseEscrow : ContractId ConditionalEscrow
-        do
-          create this with status = EscrowReleased
+    choice ReleaseEscrow : ContractId ConditionalEscrow
+      controller escrowAgent, beneficiary
+      do
+        create this with status = EscrowReleased
 
-    controller escrowAgent, depositor can
-      RefundEscrow : ContractId ConditionalEscrow
-        do
-          create this with status = EscrowRefunded
+    choice RefundEscrow : ContractId ConditionalEscrow
+      controller escrowAgent, depositor
+      do
+        create this with status = EscrowRefunded

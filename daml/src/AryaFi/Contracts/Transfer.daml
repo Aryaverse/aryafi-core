@@ -30,19 +30,20 @@ template AssetTransferRequest
   where
     signatory sender, custodian
 
-    controller complianceOfficer can
-      ApproveTransfer : ContractId AssetTransferRequest
-        do
-          create this with status = TransferApproved
+    choice ApproveTransfer : ContractId AssetTransferRequest
+      controller complianceOfficer
+      do
+        create this with status = TransferApproved
 
-      RejectTransfer : ContractId AssetTransferRequest
-        with
-          reason : Text
-        do
-          create this with status = TransferFailed reason
+    choice RejectTransfer : ContractId AssetTransferRequest
+      with
+        reason : Text
+      controller complianceOfficer
+      do
+        create this with status = TransferFailed reason
 
-    controller custodian can
-      CompleteTransfer : ContractId AssetTransferRequest
-        do
-          assertMsg "Transfer is not approved" (status == TransferApproved)
-          create this with status = TransferCompleted
+    choice CompleteTransfer : ContractId AssetTransferRequest
+      controller custodian
+      do
+        assertMsg "Transfer is not approved" (status == TransferApproved)
+        create this with status = TransferCompleted

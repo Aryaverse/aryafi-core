@@ -27,13 +27,14 @@ template MarginCall
   where
     signatory caller, payer
 
-    controller payer can
-      FulfillMarginCall : ContractId MarginCall
-        do
-          create this with status = MarginMet
+    choice FulfillMarginCall : ContractId MarginCall
+      controller payer
+      do
+        create this with status = MarginMet
 
-      DisputeMarginCall : ContractId MarginCall
-        with
-          disputeReason : Text
-        do
-          create this with status = MarginDisputed
+    choice DisputeMarginCall : ContractId MarginCall
+      with
+        disputeReason : Text
+      controller payer
+      do
+        create this with status = MarginDisputed
