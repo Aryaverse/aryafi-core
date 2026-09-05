@@ -29,12 +29,12 @@ template SanctionsAttestation
     key (screeningAuthority, subjectParty) : (Party, Party)
     maintainer key._1
 
-    controller screeningAuthority can
-      UpdateSanctionsStatus : ContractId SanctionsAttestation
-        with
-          newStatus : SanctionsStatus
-          newExpiry : Time
-        do
-          create this with
-            status = newStatus
-            expiryTimestamp = newExpiry
+    choice UpdateSanctionsStatus : ContractId SanctionsAttestation
+      with
+        newStatus : SanctionsStatus
+        newExpiry : Time
+      controller screeningAuthority
+      do
+        create this with
+          status = newStatus
+          expiryTimestamp = newExpiry

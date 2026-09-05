@@ -1,48 +1,204 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Collateral position and allocation model for AryaFi financing contracts.
+-- CollateralPosition tracks an asset that has been allocated as collateral
+-- against a specific financial obligation (repo, loan, margin requirement).
+-- It maintains real-time valuation, haircut, and eligibility status,
+-- and provides controlled choices for substitution, revaluation, and release.
+--
+-- Usage pattern:
+--   1. Provider locks a SecurityPosition or AssetHolding (gets a lockRef).
+--   2. Provider creates a CollateralPosition referencing that lockRef.
+--   3. The financing contract references the CollateralPosition by contract ID.
+--   4. On obligation discharge, ReleaseCollateral is exercised, which should
+--      trigger UnlockSecurity on the underlying position.
 module AryaFi.Finance.Collateral where
 
-import AryaFi.Common.Types (Amount, Rate)
-import AryaFi.Common.Identifiers (AccountId, ReferenceId)
+import AryaFi.Common.Types (Amount, Rate, Currency, AssetClass)
+import AryaFi.Common.Identifiers (AccountId, ISIN, ExternalRef)
+import AryaFi.Common.Errors (require, requirePositive, requireNonNegative)
 
--- | Status of pledged or allocated collateral.
+-- ---------------------------------------------------------------------------
+-- Collateral Status State Machine
+-- ---------------------------------------------------------------------------
+
+-- | Lifecycle state of a collateral position.
+-- Transitions: Allocated → {Active → Substituted → Active} → Released | Liquidated
 data CollateralStatus
-  = CollateralAllocated
-  | CollateralPledged
-  | CollateralSubstituted
-  | CollateralReleased
-  | CollateralLiquidated
-  deriving (Eq, Show)
+  = Allocated
+    -- ^ Collateral has been designated but the underlying asset is not yet locked.
+  | Active
+    -- ^ Collateral is locked, valued, and fulfilling its obligation.
+  | Substituted
+    -- ^ Collateral has been replaced with a different eligible asset.
+  | Released
+    -- ^ Collateral has been released; the underlying asset is unlocked.
+  | Liquidated
+    -- ^ Collateral was liquidated following an event of default.
+  | InDispute
+    -- ^ A valuation dispute has been raised and is pending resolution.
+  deriving (Eq, Ord, Show)
 
--- | Collateral allocation and valuation position.
+-- ---------------------------------------------------------------------------
+-- CollateralPosition Template
+-- ---------------------------------------------------------------------------
+
+-- | Tracks an asset allocated as collateral against a financial obligation.
+--
+-- Tri-party signatory model: collateralProvider + collateralReceiver + custodian.
+-- This ensures all three operational parties acknowledge the encumbrance.
+--
+-- Haircut model:
+--   collateralValue = marketValue × (1 - haircut)
+--   Required: collateralValue >= obligationAmount
+--
+-- Privacy: all three signatories see this contract.
+-- Observers can be added for tri-party agents, regulators, or trade repositories.
 template CollateralPosition
   with
     collateralProvider : Party
+    -- ^ Party providing the collateral (e.g. borrower in a repo).
     collateralReceiver : Party
+    -- ^ Party receiving and holding the benefit of the collateral (e.g. lender).
     custodian : Party
+    -- ^ Custodian safekeeping the collateral asset.
     accountId : AccountId
-    assetId : ReferenceId
+    -- ^ Account where the collateral asset is held.
+    assetClass : AssetClass
+    -- ^ Asset class for eligibility and reporting categorization.
+    isin : ISIN
+    -- ^ ISIN of the underlying collateral asset.
     quantity : Amount
+    -- ^ Quantity of the collateral asset (face value or units).
     marketValue : Amount
+    -- ^ Current market value of the full quantity in settlement currency.
     haircut : Rate
+    -- ^ Haircut rate as a decimal fraction (e.g. 0.02 = 2%). Applied to market value.
+    settlementCurrency : Currency
+    -- ^ Currency in which market value and collateral value are expressed.
+    obligationRef : Text
+    -- ^ Reference to the financing obligation this collateral secures
+    --   (e.g. contract ID of the RepoAgreement or InstitutionalLoan).
+    lockReference : Text
+    -- ^ Lock reference on the underlying SecurityPosition or AssetHolding.
     status : CollateralStatus
+    -- ^ Current lifecycle status of this collateral allocation.
+    externalRef : Optional ExternalRef
+    -- ^ Tri-party or CSD system reference for this collateral position.
+    observers : [Party]
+    -- ^ Observers with read access (e.g. tri-party agent, trade repository).
   where
     signatory collateralProvider, collateralReceiver, custodian
+    observer observers
 
-    controller collateralProvider, collateralReceiver can
-      ReleaseCollateral : ContractId CollateralPosition
-        do
-          create this with status = CollateralReleased
+    ensure quantity > 0.0
+        && marketValue > 0.0
+        && haircut >= 0.0 && haircut < 1.0
 
-      SubstituteCollateral : ContractId CollateralPosition
-        with
-          newAssetId : ReferenceId
-          newQuantity : Amount
-          newMarketValue : Amount
-        do
-          create this with
-            assetId = newAssetId
-            quantity = newQuantity
-            marketValue = newMarketValue
-            status = CollateralSubstituted
+    -- | Compute the post-haircut collateral value.
+    -- collateralValue = marketValue × (1 - haircut)
+    nonconsuming choice GetCollateralValue : Amount
+      controller custodian
+      do
+        pure (marketValue * (1.0 - haircut))
+
+    -- | Revalue the collateral position to reflect current market prices.
+    -- Used for daily mark-to-market and margin call triggers.
+    -- Only the custodian (as the independent valuation agent) can revalue.
+    choice RevalueCollateral : ContractId CollateralPosition
+      with
+        newMarketValue : Amount
+        newQuantity : Amount
+      controller custodian
+      do
+        requirePositive newMarketValue "newMarketValue"
+        requirePositive newQuantity "newQuantity"
+        create this with
+          marketValue = newMarketValue
+          quantity = newQuantity
+
+    -- | Substitute the collateral with a different eligible asset.
+    -- Both provider and receiver must authorize substitution to ensure the
+    -- replacement asset satisfies eligibility criteria agreed in the schedule.
+    -- Status transitions to Substituted to record the event.
+    choice SubstituteCollateral : ContractId CollateralPosition
+      with
+        newIsin : ISIN
+        newQuantity : Amount
+        newMarketValue : Amount
+        newHaircut : Rate
+        newAssetClass : AssetClass
+        newLockReference : Text
+      controller collateralProvider, collateralReceiver
+      do
+        require (status == Active) "Substitution only allowed on Active collateral"
+        requirePositive newQuantity "newQuantity"
+        requirePositive newMarketValue "newMarketValue"
+        requireNonNegative newHaircut "newHaircut"
+        require (newHaircut < 1.0) "Haircut must be less than 100%"
+        create this with
+          isin = newIsin
+          quantity = newQuantity
+          marketValue = newMarketValue
+          haircut = newHaircut
+          assetClass = newAssetClass
+          lockReference = newLockReference
+          status = Substituted
+
+    -- | Activate collateral after the underlying asset has been confirmed locked.
+    -- Transitions from Allocated → Active.
+    choice ActivateCollateral : ContractId CollateralPosition
+      controller custodian
+      do
+        require (status == Allocated) "Can only activate Allocated collateral"
+        create this with status = Active
+
+    -- | Release this collateral position. Called when the secured obligation
+    -- is discharged or the financing contract is terminated.
+    -- Both provider and receiver must agree to release.
+    choice ReleaseCollateral : ContractId CollateralPosition
+      controller collateralProvider, collateralReceiver
+      do
+        require (status == Active || status == Substituted)
+          "Can only release Active or Substituted collateral"
+        create this with status = Released
+
+    -- | Liquidate collateral following an event of default.
+    -- Only the collateral receiver can initiate liquidation.
+    choice LiquidateCollateral : ContractId CollateralPosition
+      controller collateralReceiver
+      do
+        require (status == Active || status == Substituted)
+          "Can only liquidate Active or Substituted collateral"
+        create this with status = Liquidated
+
+    -- | Raise a valuation dispute on this collateral position.
+    -- Either party can raise a dispute. Moves status to InDispute.
+    choice RaiseValuationDispute : ContractId CollateralPosition
+      controller collateralProvider
+      do
+        require (status == Active) "Can only raise dispute on Active collateral"
+        create this with status = InDispute
+
+    -- | Resolve a valuation dispute and return collateral to Active with
+    -- agreed market value.
+    choice ResolveDispute : ContractId CollateralPosition
+      with
+        agreedMarketValue : Amount
+      controller collateralProvider, collateralReceiver
+      do
+        require (status == InDispute) "Can only resolve InDispute collateral"
+        requirePositive agreedMarketValue "agreedMarketValue"
+        create this with
+          marketValue = agreedMarketValue
+          status = Active
+
+    -- | Add an observer (e.g. tri-party agent, regulator, trade repository).
+    choice AddCollateralObserver : ContractId CollateralPosition
+      with
+        newObserver : Party
+      controller custodian
+      do
+        require (newObserver `notElem` observers) "Party is already an observer"
+        create this with observers = newObserver :: observers

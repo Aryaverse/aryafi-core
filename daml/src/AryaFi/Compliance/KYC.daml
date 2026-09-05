@@ -31,12 +31,12 @@ template KycAttestation
     key (authority, subjectParty) : (Party, Party)
     maintainer key._1
 
-    controller authority can
-      UpdateKycStatus : ContractId KycAttestation
-        with
-          newStatus : KycStatus
-          newExpiry : Time
-        do
-          create this with
-            status = newStatus
-            expiryTimestamp = newExpiry
+    choice UpdateKycStatus : ContractId KycAttestation
+      with
+        newStatus : KycStatus
+        newExpiry : Time
+      controller authority
+      do
+        create this with
+          status = newStatus
+          expiryTimestamp = newExpiry

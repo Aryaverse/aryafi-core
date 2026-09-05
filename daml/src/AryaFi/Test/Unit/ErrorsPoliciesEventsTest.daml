@@ -11,8 +11,6 @@ import AryaFi.Common.Errors
 import AryaFi.Common.Policies
 import AryaFi.Common.Events
 import AryaFi.Common.Identifiers (CorrelationId(..))
-import DA.Date (date, Month(..))
-import DA.Time (time)
 
 -- ---------------------------------------------------------------------------
 -- Errors Tests
@@ -226,9 +224,9 @@ testMkStatusChangeEvent : Script ()
 testMkStatusChangeEvent = script do
   let event = mkStatusChangeEvent "Active" "Defaulted"
   case event of
-    StatusChanged from to ->
+    StatusChanged with fromStatus, toStatus ->
       assertMsg "Status changed from Active to Defaulted"
-        (from == "Active" && to == "Defaulted")
+        (fromStatus == "Active" && toStatus == "Defaulted")
     _ -> abort "Expected StatusChanged"
 
 -- ---------------------------------------------------------------------------
@@ -238,10 +236,11 @@ testMkStatusChangeEvent = script do
 -- | Helper to run a script that is expected to fail
 expectFailure : Text -> Script a -> Script ()
 expectFailure msg action = do
-  result <- try action
-  case result of
-    Left (_ : AnyException) -> pure ()
-    Right _                 -> abort ("Expected failure but succeeded: " <> msg)
+  try do
+    action
+    abort ("Expected failure but succeeded: " <> msg)
+  catch
+    (_ : AnyException) -> pure ()
 
 runErrorsPoliciesEventsTests : Script ()
 runErrorsPoliciesEventsTests = script do

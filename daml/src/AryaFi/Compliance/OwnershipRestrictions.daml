@@ -21,12 +21,12 @@ template OwnershipRestriction
     key (regulator, isin) : (Party, ISIN)
     maintainer key._1
 
-    controller regulator can
-      UpdateCaps : ContractId OwnershipRestriction
-        with
-          newMaxPercentage : Decimal
-          newMaxQuantity : Amount
-        do
-          create this with
-            maxOwnershipPercentage = newMaxPercentage
-            maxHoldingQuantity = newMaxQuantity
+    choice UpdateCaps : ContractId OwnershipRestriction
+      with
+        newMaxPercentage : Decimal
+        newMaxQuantity : Amount
+      controller regulator
+      do
+        create this with
+          maxOwnershipPercentage = newMaxPercentage
+          maxHoldingQuantity = newMaxQuantity

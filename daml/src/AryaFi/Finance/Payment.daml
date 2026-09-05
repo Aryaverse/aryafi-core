@@ -1,33 +1,156 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Payment instruction model for institutional fund transfers.
+-- PaymentInstruction separates payment intent (agreed by payer + payee)
+-- from operational settlement execution (carried out by the settlement agent).
+-- This is the standard pattern in correspondent banking, FX settlement,
+-- and DvP cash legs where operational timing differs from trade agreement.
+--
+-- Idempotency: every externally-submitted payment must carry a unique
+-- IdempotencyKey. The settlement agent is responsible for deduplicating
+-- instructions with the same key before executing.
+--
+-- Payment network references (SWIFT UETR, Fedwire IMAD) can be attached
+-- after a payment is submitted to the network, enabling end-to-end tracing.
 module AryaFi.Finance.Payment where
 
-import AryaFi.Common.Types (Amount, Currency, SettlementStatus)
-import AryaFi.Common.Identifiers (AccountId, CorrelationId)
+import AryaFi.Common.Types (Amount, Currency, SettlementStatus(..))
+import AryaFi.Common.Identifiers (AccountId, CorrelationId, IdempotencyKey, PaymentNetworkRef)
+import AryaFi.Common.Errors (require, requireNonEmpty)
 
--- | Payment instruction template separating payment intent from ledger settlement.
+-- ---------------------------------------------------------------------------
+-- Payment Purpose
+-- ---------------------------------------------------------------------------
+
+-- | Describes the purpose of a payment for regulatory and audit classification.
+data PaymentPurpose
+  = LoanDisbursement
+    -- ^ Disbursement of a loan facility drawdown.
+  | LoanRepayment
+    -- ^ Principal repayment on a loan obligation.
+  | InterestPayment
+    -- ^ Coupon or interest payment on a debt obligation.
+  | RepoOpeningLeg
+    -- ^ Cash leg of a repo opening (buyer pays seller).
+  | RepoClosingLeg
+    -- ^ Cash leg of a repo closing (seller repays buyer + repo interest).
+  | MarginPayment
+    -- ^ Variation or initial margin transfer.
+  | DvpCashLeg
+    -- ^ Cash leg of a DvP securities transaction.
+  | FeePayment
+    -- ^ Fee or commission payment (securities lending fee, custody fee).
+  | DividendPayment
+    -- ^ Dividend or distribution to a beneficial owner.
+  | GeneralPayment Text
+    -- ^ General-purpose payment with a description.
+  deriving (Eq, Show)
+
+-- ---------------------------------------------------------------------------
+-- PaymentInstruction Template
+-- ---------------------------------------------------------------------------
+
+-- | Institutional payment instruction with idempotency and network reference tracking.
+--
+-- Tri-party signatory model: payer + payee + settlementAgent.
+-- Payer and payee agree on the terms at trade time. The settlement agent
+-- receives the instruction and executes it operationally (FOP or FPS transfer).
+--
+-- Status machine:
+--   PendingSettlement → Settled | Failed Text | Cancelled Text
+--
+-- The settlement agent is the only controller of execution choices.
+-- Payer can cancel a pending instruction; payee cannot cancel (must dispute).
 template PaymentInstruction
   with
     payer : Party
+    -- ^ Institution debiting funds for this payment (sender).
     payee : Party
+    -- ^ Institution receiving the funds (beneficiary).
     settlementAgent : Party
+    -- ^ Operational agent executing the payment (e.g. correspondent bank, payment processor).
     payerAccountId : AccountId
+    -- ^ Account to debit at the payer's bank.
     payeeAccountId : AccountId
+    -- ^ Account to credit at the payee's bank.
     currency : Currency
+    -- ^ ISO 4217 currency code.
     amount : Amount
+    -- ^ Amount to transfer. Must be strictly positive.
+    purpose : PaymentPurpose
+    -- ^ Classification of the payment for regulatory and audit purposes.
+    obligationRef : Optional Text
+    -- ^ Reference to the financial obligation this payment discharges (if applicable).
     correlationId : CorrelationId
+    -- ^ Correlation ID linking this payment to the end-to-end workflow.
+    idempotencyKey : IdempotencyKey
+    -- ^ Unique key to prevent duplicate payment execution.
+    networkRef : Optional PaymentNetworkRef
+    -- ^ Payment network reference assigned upon submission (SWIFT UETR, Fedwire IMAD).
     status : SettlementStatus
+    -- ^ Current status of this payment instruction.
+    observers : [Party]
+    -- ^ Additional parties with read access (e.g. compliance, audit, regulators).
   where
     signatory payer, payee, settlementAgent
+    observer observers
 
-    controller settlementAgent can
-      ConfirmPaymentSettlement : ContractId PaymentInstruction
-        do
-          create this with status = Settled
+    ensure amount > 0.0
 
-      RejectPaymentSettlement : ContractId PaymentInstruction
-        with
-          reason : Text
-        do
-          create this with status = Failed reason
+    -- | Confirm that payment has been successfully settled.
+    -- Only the settlement agent can confirm settlement.
+    choice ConfirmPaymentSettlement : ContractId PaymentInstruction
+      controller settlementAgent
+      do
+        require (status == PendingSettlement) "Can only settle a Pending payment"
+        create this with status = Settled
+
+    -- | Reject the payment instruction, providing a reason.
+    -- Used when the payment cannot be executed (e.g. insufficient funds,
+    -- sanctions hit on beneficiary, invalid account).
+    choice RejectPaymentSettlement : ContractId PaymentInstruction
+      with
+        reason : Text
+      controller settlementAgent
+      do
+        require (status == PendingSettlement) "Can only reject a Pending payment"
+        requireNonEmpty reason "reason"
+        create this with status = Failed reason
+
+    -- | Cancel the payment instruction before it is executed.
+    -- Only the payer can cancel (they are the instructing party).
+    -- Cannot be cancelled once settled or failed.
+    choice CancelPayment : ContractId PaymentInstruction
+      with
+        cancellationReason : Text
+      controller payer
+      do
+        require (status == PendingSettlement) "Can only cancel a Pending payment"
+        requireNonEmpty cancellationReason "cancellationReason"
+        create this with status = Cancelled cancellationReason
+
+    -- | Attach a payment network reference after submission to a payment network.
+    -- Called by the settlement agent once they have routed the payment.
+    choice AttachNetworkRef : ContractId PaymentInstruction
+      with
+        ref : PaymentNetworkRef
+      controller settlementAgent
+      do
+        require (status == PendingSettlement) "Can only attach network ref to Pending payment"
+        create this with networkRef = Some ref
+
+    -- | Add an observer (e.g. compliance officer, regulator, auditor).
+    choice AddPaymentObserver : ContractId PaymentInstruction
+      with
+        newObserver : Party
+      controller payer
+      do
+        require (newObserver `notElem` observers) "Party is already an observer"
+        create this with observers = newObserver :: observers
+
+    -- | Nonconsuming check: has this payment been completed (either settled or failed)?
+    nonconsuming choice IsCompleted : Bool
+      controller settlementAgent
+      do
+        pure (status == Settled || status /= PendingSettlement)

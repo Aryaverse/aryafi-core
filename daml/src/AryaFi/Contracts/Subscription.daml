@@ -27,13 +27,14 @@ template FundSubscription
   where
     signatory fundManager, investor
 
-    controller fundManager can
-      ApproveSubscription : ContractId FundSubscription
-        do
-          create this with status = SubscriptionApproved
+    choice ApproveSubscription : ContractId FundSubscription
+      controller fundManager
+      do
+        create this with status = SubscriptionApproved
 
-      RejectSubscription : ContractId FundSubscription
-        with
-          reason : Text
-        do
-          create this with status = SubscriptionRejected reason
+    choice RejectSubscription : ContractId FundSubscription
+      with
+        reason : Text
+      controller fundManager
+      do
+        create this with status = SubscriptionRejected reason

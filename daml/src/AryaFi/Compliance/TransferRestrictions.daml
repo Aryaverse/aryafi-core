@@ -31,12 +31,12 @@ template TransferRestrictionRule
     key (complianceOfficer, isin) : (Party, ISIN)
     maintainer key._1
 
-    controller complianceOfficer can
-      UpdateRestriction : ContractId TransferRestrictionRule
-        with
-          newCategory : RegulatoryCategory
-          newLockup : Optional Time
-        do
-          create this with
-            regulatoryCategory = newCategory
-            lockupExpiry = newLockup
+    choice UpdateRestriction : ContractId TransferRestrictionRule
+      with
+        newCategory : RegulatoryCategory
+        newLockup : Optional Time
+      controller complianceOfficer
+      do
+        create this with
+          regulatoryCategory = newCategory
+          lockupExpiry = newLockup

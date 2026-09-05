@@ -21,12 +21,12 @@ template SecuritiesLendingAgreement
   where
     signatory lender, borrower
 
-    controller lender can
-      RecallSecurities : ContractId SecuritiesLendingAgreement
-        do
-          create this with status = Terminated
+    choice RecallSecurities : ContractId SecuritiesLendingAgreement
+      controller lender
+      do
+        create this with status = Terminated
 
-    controller borrower can
-      ReturnSecurities : ContractId SecuritiesLendingAgreement
-        do
-          create this with status = Closed
+    choice ReturnSecurities : ContractId SecuritiesLendingAgreement
+      controller borrower
+      do
+        create this with status = Closed

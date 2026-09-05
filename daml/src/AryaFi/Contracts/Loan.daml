@@ -5,6 +5,7 @@ module AryaFi.Contracts.Loan where
 
 import AryaFi.Common.Types (Amount, Currency, Rate, LifecycleStatus(..))
 import AryaFi.Common.Identifiers (ReferenceId)
+import AryaFi.Common.Errors (require)
 
 -- | Institutional Loan Contract Interface.
 template InstitutionalLoan
@@ -22,22 +23,22 @@ template InstitutionalLoan
   where
     signatory lender, borrower
 
-    controller borrower can
-      PayDownPrincipal : ContractId InstitutionalLoan
-        with
-          paymentAmount : Amount
-        do
-          assertMsg "Payment must be greater than zero" (paymentAmount > 0.0)
-          assertMsg "Payment exceeds outstanding balance" (paymentAmount <= outstandingBalance)
-          let newBalance = outstandingBalance - paymentAmount
-          let newStatus = if newBalance == 0.0 then Closed else Active
-          create this with
-            outstandingBalance = newBalance
-            status = newStatus
+    choice PayDownPrincipal : ContractId InstitutionalLoan
+      with
+        paymentAmount : Amount
+      controller borrower
+      do
+        require (paymentAmount > 0.0) "Payment must be greater than zero"
+        require (paymentAmount <= outstandingBalance) "Payment exceeds outstanding balance"
+        let newBalance = outstandingBalance - paymentAmount
+        let newStatus = if newBalance == 0.0 then Closed else Active
+        create this with
+          outstandingBalance = newBalance
+          status = newStatus
 
-    controller lender can
-      DeclareLoanDefault : ContractId InstitutionalLoan
-        with
-          defaultReason : Text
-        do
-          create this with status = Defaulted
+    choice DeclareLoanDefault : ContractId InstitutionalLoan
+      with
+        defaultReason : Text
+      controller lender
+      do
+        create this with status = Defaulted

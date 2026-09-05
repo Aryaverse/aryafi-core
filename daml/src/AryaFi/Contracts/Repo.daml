@@ -25,14 +25,14 @@ template RepoAgreement
   where
     signatory seller, buyer
 
-    controller seller, buyer can
-      CloseoutRepo : ContractId RepoAgreement
-        do
-          create this with status = Closed
+    choice CloseoutRepo : ContractId RepoAgreement
+      controller seller, buyer
+      do
+        create this with status = Closed
 
-    controller buyer can
-      DeclareRepoDefault : ContractId RepoAgreement
-        with
-          reason : Text
-        do
-          create this with status = Defaulted
+    choice DeclareRepoDefault : ContractId RepoAgreement
+      with
+        reason : Text
+      controller buyer
+      do
+        create this with status = Defaulted
