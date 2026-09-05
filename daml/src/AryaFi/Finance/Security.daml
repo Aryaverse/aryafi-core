@@ -1,66 +1,212 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Tokenized fixed-income and equity security position for institutional
+-- custody on the AryaFi platform. SecurityPosition represents a specific
+-- holding of a named instrument (identified by ISIN/CUSIP) in a custody account.
+--
+-- This template handles both fungible securities (e.g. T-Bills, corporate bonds)
+-- and non-fungible positions where quantity = 1 (e.g. a structured note tranche).
+-- For repo and securities lending collateral use, positions are locked
+-- via LockSecurity before being referenced in a financing agreement.
 module AryaFi.Finance.Security where
 
-import AryaFi.Common.Identifiers (AccountId, ISIN, CUSIP)
-import AryaFi.Common.Types (Amount, Rate)
+import AryaFi.Common.Identifiers (AccountId, ISIN, CUSIP, ExternalRef, CorrelationId)
+import AryaFi.Common.Types (Amount, Rate, DayCountConvention(..))
+import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
 
--- | Institutional security position template (Tokenized Treasury, Bond, Equity).
+-- ---------------------------------------------------------------------------
+-- Instrument Metadata
+-- ---------------------------------------------------------------------------
+
+-- | Classification of a security instrument.
+data InstrumentType
+  = GovernmentBond
+    -- ^ Sovereign debt instrument (T-Bills, T-Notes, T-Bonds, Gilts, Bunds).
+  | CorporateBond
+    -- ^ Investment-grade or high-yield corporate debt.
+  | MunicipalBond
+    -- ^ Sub-sovereign or municipal bond.
+  | EquityShare
+    -- ^ Listed common or preferred stock.
+  | ExchangeTradedFund
+    -- ^ ETF units.
+  | CoveredBond
+    -- ^ Covered bond (Pfandbrief, covered by ring-fenced asset pool).
+  | StructuredNote
+    -- ^ Structured product with embedded derivative (e.g. FRN, CLN).
+  deriving (Eq, Ord, Show)
+
+-- | Coupon type for fixed-income instruments.
+data CouponType
+  = FixedCoupon
+    -- ^ Fixed annual coupon rate paid at regular intervals.
+  | FloatingCoupon Text
+    -- ^ Floating rate referenced to an index (Text = index name, e.g. "SOFR", "SONIA").
+  | ZeroCoupon
+    -- ^ Zero-coupon (discount) security. No periodic payments.
+  deriving (Eq, Show)
+
+-- | Seniority ranking of a debt instrument in the issuer's capital structure.
+data SeniorityRank
+  = Senior         -- ^ Senior secured debt — highest claim priority.
+  | SeniorUnsecured -- ^ Senior unsecured debt.
+  | Subordinated   -- ^ Subordinated / junior debt.
+  | MezzanineDebt  -- ^ Mezzanine — between senior and equity.
+  deriving (Eq, Show)
+
+-- ---------------------------------------------------------------------------
+-- SecurityPosition Template
+-- ---------------------------------------------------------------------------
+
+-- | Institutional custody position for a named financial security.
+--
+-- Dual signatory model: custodian + owner (same as Account).
+-- The issuer field is stored for reference; it is NOT a signatory
+-- because securities can change hands without issuer involvement.
+--
+-- Authorization:
+--   - SplitSecurity — owner only (administrative split, e.g. for partial settlement).
+--   - TransferSecurity — owner + custodian (operational control + economic consent).
+--   - LockSecurity / UnlockSecurity — owner + custodian (bilateral encumbrance).
+--   - UpdateCsdRef — custodian only (operational reference management).
+--
+-- Privacy: custodian and owner always see this. Settlement agents and
+-- tri-party collateral agents are added as observers before referencing the position.
 template SecurityPosition
   with
     custodian : Party
-    issuer : Party
+    -- ^ Institution holding the security in custody.
     owner : Party
+    -- ^ Beneficial owner of this security position.
     accountId : AccountId
+    -- ^ Custody account this position is held in.
     isin : ISIN
+    -- ^ ISO 6166 instrument identifier — mandatory for all positions.
     cusip : Optional CUSIP
+    -- ^ CUSIP identifier, if applicable (US/CA domestic securities).
     instrumentName : Text
+    -- ^ Human-readable instrument name (e.g. "US Treasury 4.25% Nov 2026").
+    instrumentType : InstrumentType
+    -- ^ Classification of this instrument for eligibility and reporting.
     quantity : Amount
+    -- ^ Face value (bonds) or number of units (equities, ETFs).
     couponRate : Optional Rate
-    maturityTimestamp : Optional Time
+    -- ^ Annual coupon rate as a decimal fraction (e.g. 0.0425 = 4.25%). None for ZeroCoupon/Equity.
+    couponType : Optional CouponType
+    -- ^ Coupon payment structure. None for equity.
+    dayCountConvention : Optional DayCountConvention
+    -- ^ Day count convention for coupon accrual. None for equity and zero-coupon.
+    maturityDate : Optional Time
+    -- ^ Final maturity / redemption date. None for perpetuals and equities.
+    seniority : Optional SeniorityRank
+    -- ^ Debt seniority ranking. None for equity.
     isLocked : Bool
+    -- ^ Whether this position is encumbered (pledged, in settlement, lent).
     lockReference : Optional Text
+    -- ^ Contract reference holding this position (e.g. repo agreement ID).
+    csdRef : Optional ExternalRef
+    -- ^ CSD (Euroclear, DTC, Clearstream) system reference for this holding.
+    observers : [Party]
+    -- ^ Parties with read visibility (settlement agents, tri-party agents, auditors).
   where
     signatory custodian, owner
+    observer observers
 
     ensure quantity > 0.0
 
-    controller owner can
-      SplitSecurity : (ContractId SecurityPosition, ContractId SecurityPosition)
-        with
-          splitQuantity : Amount
-        do
-          assertMsg "Split quantity must be greater than zero" (splitQuantity > 0.0)
-          assertMsg "Split quantity must be less than total quantity" (splitQuantity < quantity)
-          assertMsg "Cannot split locked security" (not isLocked)
-          s1 <- create this with quantity = splitQuantity
-          s2 <- create this with quantity = quantity - splitQuantity
-          pure (s1, s2)
+    -- | Split this position into two positions, preserving total quantity.
+    -- Used for: staging partial settlement, partial repo collateral.
+    -- Neither resulting position is locked.
+    choice SplitSecurity : (ContractId SecurityPosition, ContractId SecurityPosition)
+      with
+        splitQuantity : Amount
+      controller owner
+      do
+        require (not isLocked) "Cannot split a locked security position"
+        requirePositive splitQuantity "splitQuantity"
+        require (splitQuantity < quantity)
+          ("Split quantity " <> show splitQuantity <> " must be less than total " <> show quantity)
+        s1 <- create this with quantity = splitQuantity; isLocked = False; lockReference = None
+        s2 <- create this with quantity = quantity - splitQuantity; isLocked = False; lockReference = None
+        pure (s1, s2)
 
-    controller owner, custodian can
-      TransferSecurity : ContractId SecurityPosition
-        with
-          newOwner : Party
-          newAccountId : AccountId
-        do
-          assertMsg "Cannot transfer locked security" (not isLocked)
-          create this with
-            owner = newOwner
-            accountId = newAccountId
+    -- | Transfer ownership of this security to a new owner and account.
+    -- Position must not be locked. Requires joint authorization.
+    choice TransferSecurity : ContractId SecurityPosition
+      with
+        newOwner : Party
+        newAccountId : AccountId
+        correlationId : CorrelationId
+      controller owner, custodian
+      do
+        require (not isLocked) "Cannot transfer a locked security position"
+        require (newOwner /= owner) "New owner must be different from current owner"
+        create this with
+          owner = newOwner
+          accountId = newAccountId
+          observers = []
 
-      LockSecurity : ContractId SecurityPosition
-        with
-          reference : Text
-        do
-          assertMsg "Security is already locked" (not isLocked)
-          create this with
-            isLocked = True
-            lockReference = Some reference
+    -- | Lock this security, preventing split, transfer, or further encumbrance.
+    -- Used when pledging as collateral, initiating a repo opening leg,
+    -- or lending the security under a securities lending agreement.
+    choice LockSecurity : ContractId SecurityPosition
+      with
+        lockRef : Text
+      controller owner, custodian
+      do
+        require (not isLocked) "Security position is already locked"
+        requireNonEmpty lockRef "lockReference"
+        create this with
+          isLocked = True
+          lockReference = Some lockRef
 
-      UnlockSecurity : ContractId SecurityPosition
-        do
-          assertMsg "Security is not locked" isLocked
-          create this with
-            isLocked = False
-            lockReference = None
+    -- | Unlock a previously locked security position.
+    -- Used upon repo closing leg settlement, pledge release, or securities return.
+    choice UnlockSecurity : ContractId SecurityPosition
+      controller owner, custodian
+      do
+        require isLocked "Security position is not currently locked"
+        create this with
+          isLocked = False
+          lockReference = None
+
+    -- | Update the CSD system reference for this holding.
+    -- Only the custodian can update operational references.
+    choice UpdateCsdRef : ContractId SecurityPosition
+      with
+        newRef : ExternalRef
+      controller custodian
+      do
+        create this with csdRef = Some newRef
+
+    -- | Add an observer (e.g. settlement agent, tri-party repo agent, regulator).
+    choice AddSecurityObserver : ContractId SecurityPosition
+      with
+        newObserver : Party
+      controller owner
+      do
+        require (newObserver `notElem` observers) "Party is already an observer"
+        create this with observers = newObserver :: observers
+
+    -- | Remove an observer from this security position.
+    choice RemoveSecurityObserver : ContractId SecurityPosition
+      with
+        observerToRemove : Party
+      controller owner
+      do
+        require (observerToRemove `elem` observers) "Party is not currently an observer"
+        create this with observers = filter (/= observerToRemove) observers
+
+    -- | Nonconsuming query: can this position be transferred or pledged?
+    nonconsuming choice IsTransferable : Bool
+      controller custodian
+      do
+        pure (not isLocked)
+
+    -- | Nonconsuming query: is this a fixed-income instrument?
+    nonconsuming choice IsFixedIncome : Bool
+      controller custodian
+      do
+        pure (instrumentType `elem` [GovernmentBond, CorporateBond, MunicipalBond,
+                                      CoveredBond, StructuredNote])
