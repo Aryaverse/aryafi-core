@@ -1,36 +1,168 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Financial obligation primitive representing a legally binding duty
+-- to deliver cash or assets between institutional counterparties.
+-- FinancialObligation is the foundational debt primitive referenced by
+-- loans, payment instructions, and settlement instructions. It encodes
+-- the bilateral acknowledgment of an amount due, a due date, and a currency,
+-- and provides a controlled lifecycle from Pending through discharge or default.
 module AryaFi.Finance.Obligation where
 
 import AryaFi.Common.Types (Amount, Currency)
+import AryaFi.Common.Identifiers (CorrelationId, ExternalRef)
+import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
 
--- | Status of a financial obligation.
+-- ---------------------------------------------------------------------------
+-- Obligation Status State Machine
+-- ---------------------------------------------------------------------------
+
+-- | Lifecycle status of a financial obligation.
+-- Transitions: Pending → {PartiallyFulfilled → Pending} → Fulfilled | Defaulted | Cancelled
 data ObligationStatus
-  = ObligationPending
-  | ObligationFulfilled
-  | ObligationDefaulted
-  | ObligationCancelled
+  = Pending
+    -- ^ Obligation has been acknowledged and is due for payment.
+  | PartiallyFulfilled Amount
+    -- ^ Obligation has been partially discharged. Amount = remaining balance.
+  | Fulfilled
+    -- ^ Obligation has been fully discharged.
+  | Defaulted
+    -- ^ Obligor has failed to meet the obligation by its due date.
+  | Cancelled
+    -- ^ Obligation has been cancelled by mutual agreement before due date.
+  | Amended
+    -- ^ Obligation terms have been amended (updated amount or due date).
   deriving (Eq, Show)
 
--- | Financial obligation representing a duty to deliver cash or securities.
+-- ---------------------------------------------------------------------------
+-- FinancialObligation Template
+-- ---------------------------------------------------------------------------
+
+-- | Represents a bilateral, acknowledged duty to deliver a specific amount
+-- of a specific currency by a specific due date.
+--
+-- Dual signatory model: obligor + obligee.
+-- Both parties must sign to create the obligation, establishing bilateral
+-- acknowledgment of the debt. This prevents unilateral imposition of obligations.
+--
+-- The observer `agent` field is optional — used when an agent bank, paying agent,
+-- or settlement intermediary needs visibility for operational coordination.
+--
+-- Discharge and default choices are controller by the obligee (the creditor),
+-- preventing the obligor from self-declaring default or premature fulfillment.
+-- Amendment requires both parties to sign.
 template FinancialObligation
   with
     obligor : Party
+    -- ^ Party obligated to deliver (debtor/borrower/payer).
     obligee : Party
+    -- ^ Party entitled to receive delivery (creditor/lender/payee).
     currency : Currency
+    -- ^ ISO 4217 currency code in which the obligation is denominated.
     amount : Amount
+    -- ^ Total outstanding amount of this obligation.
     dueDate : Time
+    -- ^ Date by which the obligation must be fulfilled.
     status : ObligationStatus
-    reference : Text
+    -- ^ Current lifecycle status.
+    obligationRef : Text
+    -- ^ Unique reference for this obligation (e.g. loan tranche ID, coupon period ID).
+    correlationId : CorrelationId
+    -- ^ Correlation ID linking this obligation to a trade or workflow.
+    description : Text
+    -- ^ Human-readable description (e.g. "Loan principal repayment, tranche 1").
+    agentObserver : Optional Party
+    -- ^ Optional agent bank or paying agent with operational visibility.
+    externalRef : Optional ExternalRef
+    -- ^ Reference to this obligation in an external system (e.g. core banking).
   where
     signatory obligor, obligee
+    observer (case agentObserver of None -> []; Some a -> [a])
 
-    controller obligee can
-      DischargeObligation : ContractId FinancialObligation
-        do
-          create this with status = ObligationFulfilled
+    ensure amount > 0.0
 
-      DeclareObligationDefault : ContractId FinancialObligation
-        do
-          create this with status = ObligationDefaulted
+    key (obligor, obligee, obligationRef) : (Party, Party, Text)
+    maintainer key._1
+
+    -- | Record full discharge of this obligation.
+    -- Called when the full amount has been paid and settled.
+    -- Only the obligee can confirm discharge (the creditor confirms receipt).
+    choice DischargeObligation : ContractId FinancialObligation
+      controller obligee
+      do
+        require (status == Pending || status == PartiallyFulfilled amount)
+          "Can only discharge a Pending or PartiallyFulfilled obligation"
+        create this with status = Fulfilled
+
+    -- | Record a partial payment against this obligation.
+    -- The obligation transitions to PartiallyFulfilled with remaining balance.
+    -- Caller provides the amount paid; the obligation records the remainder.
+    choice PartialDischarge : ContractId FinancialObligation
+      with
+        amountPaid : Amount
+      controller obligee
+      do
+        require (status == Pending) "Can only partially discharge a Pending obligation"
+        requirePositive amountPaid "amountPaid"
+        require (amountPaid < amount)
+          ("Partial amount " <> show amountPaid <> " must be less than total " <> show amount)
+        create this with
+          amount = amount - amountPaid
+          status = PartiallyFulfilled (amount - amountPaid)
+
+    -- | Declare this obligation in default.
+    -- Called when the obligor fails to pay by the due date.
+    -- Only the obligee (creditor) can declare default.
+    choice DeclareObligationDefault : ContractId FinancialObligation
+      with
+        defaultReason : Text
+      controller obligee
+      do
+        require (status == Pending || status == PartiallyFulfilled amount)
+          "Can only declare default on Pending or PartiallyFulfilled obligation"
+        requireNonEmpty defaultReason "defaultReason"
+        create this with status = Defaulted
+
+    -- | Cancel this obligation by mutual agreement before its due date.
+    -- Requires both obligor and obligee to consent.
+    choice CancelObligation : ContractId FinancialObligation
+      with
+        cancellationReason : Text
+      controller obligor, obligee
+      do
+        require (status == Pending) "Can only cancel a Pending obligation"
+        requireNonEmpty cancellationReason "cancellationReason"
+        create this with status = Cancelled
+
+    -- | Amend the obligation amount or due date by mutual agreement.
+    -- Common for loan rescheduling or error correction.
+    -- Requires both parties to consent; transitions status to Amended.
+    choice AmendObligation : ContractId FinancialObligation
+      with
+        newAmount : Amount
+        newDueDate : Time
+        amendmentNote : Text
+      controller obligor, obligee
+      do
+        require (status == Pending) "Can only amend a Pending obligation"
+        requirePositive newAmount "newAmount"
+        requireNonEmpty amendmentNote "amendmentNote"
+        create this with
+          amount = newAmount
+          dueDate = newDueDate
+          status = Amended
+          description = description <> " [Amended: " <> amendmentNote <> "]"
+
+    -- | Nonconsuming check: is this obligation currently overdue?
+    -- Returns True if current time is past due date and status is still Pending.
+    nonconsuming choice IsOverdue : Bool
+      controller obligee
+      do
+        now <- getTime
+        pure (now > dueDate && (status == Pending || status == PartiallyFulfilled amount))
+
+    -- | Nonconsuming check: is this obligation still outstanding?
+    nonconsuming choice IsOutstanding : Bool
+      controller obligee
+      do
+        pure (status == Pending || status == PartiallyFulfilled amount)

@@ -22,8 +22,10 @@ data EventType
     -- ^ A new contract was created. Text = template name.
   | ContractAmended Text
     -- ^ A contract field was amended. Text = description of the amendment.
-  | StatusChanged Text Text
-    -- ^ Lifecycle status transition. Text1 = from status, Text2 = to status.
+  | StatusChanged with
+      fromStatus : Text
+      toStatus : Text
+    -- ^ Lifecycle status transition.
   | ContractClosed
     -- ^ A contract was fully discharged and archived.
   | ContractDefaulted Text
@@ -56,10 +58,14 @@ data EventType
   -- Compliance events
   | ComplianceCheckPassed Text
     -- ^ A compliance check passed. Text = policy name.
-  | ComplianceCheckFailed Text Text
-    -- ^ A compliance check failed. Text1 = policy name, Text2 = failure reason.
-  | KycStatusUpdated Text Text
-    -- ^ KYC status changed. Text1 = from status, Text2 = to status.
+  | ComplianceCheckFailed with
+      policyName : Text
+      failureReason : Text
+    -- ^ A compliance check failed.
+  | KycStatusUpdated with
+      previousStatus : Text
+      currentStatus : Text
+    -- ^ KYC status changed.
   | SanctionsStatusUpdated Text
     -- ^ Sanctions screening result updated. Text = new status.
 
@@ -129,4 +135,4 @@ mkStatusChangeEvent
   : Text   -- ^ From status (show of the old value)
   -> Text  -- ^ To status (show of the new value)
   -> EventType
-mkStatusChangeEvent from to = StatusChanged from to
+mkStatusChangeEvent from to = StatusChanged with fromStatus = from, toStatus = to

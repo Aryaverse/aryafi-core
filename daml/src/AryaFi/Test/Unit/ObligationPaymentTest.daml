@@ -1,0 +1,440 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Unit tests for AryaFi.Finance.Obligation and AryaFi.Finance.Payment.
+-- Covers: obligation lifecycle (discharge, partial discharge, default, amendment,
+-- cancellation), payment settlement, rejection, cancellation, network ref attachment,
+-- and negative authorization cases.
+module AryaFi.Test.Unit.ObligationPaymentTest where
+
+import Daml.Script
+import AryaFi.Finance.Obligation as Obligation hiding (Cancelled, Defaulted)
+import AryaFi.Finance.Payment
+import AryaFi.Common.Identifiers
+import AryaFi.Common.Types as Types hiding (Cancelled, Defaulted)
+import qualified AryaFi.Finance.Obligation as Obligation
+import qualified AryaFi.Common.Types as Types
+
+-- ---------------------------------------------------------------------------
+-- Helpers
+-- ---------------------------------------------------------------------------
+
+mkObligation : Party -> Party -> Amount -> Text -> Script (ContractId FinancialObligation)
+mkObligation obligor obligee amt ref = do
+  now <- getTime
+  submitMulti [obligor, obligee] [] do
+    createCmd FinancialObligation with
+      obligor = obligor
+      obligee = obligee
+      currency = "USD"
+      amount = amt
+      dueDate = now   -- use now; overdue tests will use explicit timestamps
+      status = Pending
+      obligationRef = ref
+      correlationId = CorrelationId ("CORR-" <> ref)
+      description = "Test obligation: " <> ref
+      agentObserver = None
+      externalRef = None
+
+mkPayment : Party -> Party -> Party -> Amount -> IdempotencyKey
+          -> Script (ContractId PaymentInstruction)
+mkPayment payer payee agent amt ikey = submitMulti [payer, payee, agent] [] do
+  createCmd PaymentInstruction with
+    payer = payer
+    payee = payee
+    settlementAgent = agent
+    payerAccountId = AccountId "ACC-PAYER-001"
+    payeeAccountId = AccountId "ACC-PAYEE-001"
+    currency = "USD"
+    amount = amt
+    purpose = DvpCashLeg
+    obligationRef = None
+    correlationId = CorrelationId "CORR-PMT-001"
+    idempotencyKey = ikey
+    networkRef = None
+    status = PendingSettlement
+    observers = []
+
+-- ---------------------------------------------------------------------------
+-- FinancialObligation Tests
+-- ---------------------------------------------------------------------------
+
+testObligationCreation : Script ()
+testObligationCreation = script do
+  obligor <- allocateParty "BorrowerCorp"
+  obligee <- allocateParty "LenderBank"
+
+  oblCid <- mkObligation obligor obligee 5000000.0 "LOAN-TRANCHE-A-2026"
+
+  oblData <- queryContractId obligee oblCid
+  case oblData of
+    None -> abort "Obligation not visible to obligee"
+    Some o -> do
+      assertMsg "Amount" (o.amount == 5000000.0)
+      assertMsg "Status Pending" (o.status == Pending)
+      assertMsg "Currency" (o.currency == "USD")
+
+testObligationFullDischarge : Script ()
+testObligationFullDischarge = script do
+  obligor <- allocateParty "BorrowerCorp"
+  obligee <- allocateParty "LenderBank"
+
+  oblCid <- mkObligation obligor obligee 1000000.0 "OBL-DISCHARGE-001"
+
+  dischargedCid <- submit obligee do
+    exerciseCmd oblCid DischargeObligation
+
+  dischData <- queryContractId obligor dischargedCid
+  case dischData of
+    None -> abort "Discharged obligation not found"
+    Some o -> assertMsg "Status Fulfilled" (o.status == Fulfilled)
+
+testObligationPartialDischarge : Script ()
+testObligationPartialDischarge = script do
+  obligor <- allocateParty "BorrowerCorp"
+  obligee <- allocateParty "LenderBank"
+
+  oblCid <- mkObligation obligor obligee 1000000.0 "OBL-PARTIAL-001"
+
+  partialCid <- submit obligee do
+    exerciseCmd oblCid PartialDischarge with amountPaid = 400000.0
+
+  partialData <- queryContractId obligor partialCid
+  case partialData of
+    None -> abort "Partially discharged obligation not found"
+    Some o -> do
+      assertMsg "Remaining amount" (o.amount == 600000.0)
+      assertMsg "PartiallyFulfilled status"
+        (o.status == PartiallyFulfilled 600000.0)
+
+testObligationDefault : Script ()
+testObligationDefault = script do
+  obligor <- allocateParty "BorrowerCorp"
+  obligee <- allocateParty "LenderBank"
+
+  oblCid <- mkObligation obligor obligee 2000000.0 "OBL-DEFAULT-001"
+
+  defaultedCid <- submit obligee do
+    exerciseCmd oblCid DeclareObligationDefault with
+      defaultReason = "Payment not received by due date"
+
+  defData <- queryContractId obligor defaultedCid
+  case defData of
+    None -> abort "Defaulted obligation not found"
+    Some o -> assertMsg "Status Defaulted" (o.status == Obligation.Defaulted)
+
+testObligationCancellation : Script ()
+testObligationCancellation = script do
+  obligor <- allocateParty "BorrowerCorp"
+  obligee <- allocateParty "LenderBank"
+
+  oblCid <- mkObligation obligor obligee 500000.0 "OBL-CANCEL-001"
+
+  cancelledCid <- submitMulti [obligor, obligee] [] do
+    exerciseCmd oblCid CancelObligation with
+      cancellationReason = "Trade cancelled by mutual agreement pre-settlement"
+
+  cancelData <- queryContractId obligee cancelledCid
+  case cancelData of
+    None -> abort "Cancelled obligation not found"
+    Some o -> assertMsg "Status Cancelled" (o.status == Obligation.Cancelled)
+
+testObligationAmendment : Script ()
+testObligationAmendment = script do
+  obligor <- allocateParty "BorrowerCorp"
+  obligee <- allocateParty "LenderBank"
+
+  oblCid <- mkObligation obligor obligee 3000000.0 "OBL-AMEND-001"
+
+  now <- getTime
+  amendedCid <- submitMulti [obligor, obligee] [] do
+    exerciseCmd oblCid AmendObligation with
+      newAmount = 3500000.0
+      newDueDate = now
+      amendmentNote = "Drawdown increased per amendment #1"
+
+  amendData <- queryContractId obligee amendedCid
+  case amendData of
+    None -> abort "Amended obligation not found"
+    Some o -> do
+      assertMsg "Amended amount" (o.amount == 3500000.0)
+      assertMsg "Amended status" (o.status == Amended)
+
+testObligationAgentObserverVisibility : Script ()
+testObligationAgentObserverVisibility = script do
+  obligor  <- allocateParty "BorrowerCorp"
+  obligee  <- allocateParty "LenderBank"
+  agent    <- allocateParty "PayingAgentBank"
+  outsider <- allocateParty "OutsiderCorp"
+
+  now <- getTime
+  oblCid <- submitMulti [obligor, obligee] [] do
+    createCmd FinancialObligation with
+      obligor = obligor
+      obligee = obligee
+      currency = "USD"
+      amount = 10000000.0
+      dueDate = now
+      status = Pending
+      obligationRef = "OBL-AGENT-001"
+      correlationId = CorrelationId "CORR-AGENT-001"
+      description = "Loan with agent"
+      agentObserver = Some agent
+      externalRef = None
+
+  -- Agent can see it
+  agentView <- queryContractId agent oblCid
+  assertMsg "Agent sees obligation" (agentView /= None)
+
+  -- Outsider cannot
+  outsiderView <- queryContractId outsider oblCid
+  assertMsg "Outsider blind to obligation" (outsiderView == None)
+
+-- Negative: only obligee can discharge
+testOnlyObligeeCanDischarge : Script ()
+testOnlyObligeeCanDischarge = script do
+  obligor <- allocateParty "BorrowerCorp"
+  obligee <- allocateParty "LenderBank"
+
+  oblCid <- mkObligation obligor obligee 1000000.0 "OBL-AUTH-001"
+
+  submitMustFail obligor do
+    exerciseCmd oblCid DischargeObligation
+
+-- Negative: partial discharge must be < total
+testPartialDischargeCannotExceedTotal : Script ()
+testPartialDischargeCannotExceedTotal = script do
+  obligor <- allocateParty "BorrowerCorp"
+  obligee <- allocateParty "LenderBank"
+
+  oblCid <- mkObligation obligor obligee 1000000.0 "OBL-PDFAIL-001"
+
+  submitMustFail obligee do
+    exerciseCmd oblCid PartialDischarge with amountPaid = 1000000.0
+
+-- Negative: cannot cancel Fulfilled obligation
+testCannotCancelFulfilledObligation : Script ()
+testCannotCancelFulfilledObligation = script do
+  obligor <- allocateParty "BorrowerCorp"
+  obligee <- allocateParty "LenderBank"
+
+  oblCid <- mkObligation obligor obligee 500000.0 "OBL-CANCELFULFILLED-001"
+
+  fulfilledCid <- submit obligee do exerciseCmd oblCid DischargeObligation
+
+  submitMultiMustFail [obligor, obligee] [] do
+    exerciseCmd fulfilledCid CancelObligation with
+      cancellationReason = "Should not work"
+
+-- Negative: ensure rejects zero amount
+testObligationEnsurePositiveAmount : Script ()
+testObligationEnsurePositiveAmount = script do
+  obligor <- allocateParty "BorrowerCorp"
+  obligee <- allocateParty "LenderBank"
+  now <- getTime
+
+  submitMultiMustFail [obligor, obligee] [] do
+    createCmd FinancialObligation with
+      obligor = obligor
+      obligee = obligee
+      currency = "USD"
+      amount = 0.0
+      dueDate = now
+      status = Pending
+      obligationRef = "OBL-ZERO-001"
+      correlationId = CorrelationId "CORR-ZERO-001"
+      description = "Zero amount — should be rejected"
+      agentObserver = None
+      externalRef = None
+
+-- ---------------------------------------------------------------------------
+-- PaymentInstruction Tests
+-- ---------------------------------------------------------------------------
+
+testPaymentSettlement : Script ()
+testPaymentSettlement = script do
+  payer <- allocateParty "PayerDealer"
+  payee <- allocateParty "PayeeDealer"
+  agent <- allocateParty "FederalSettlementAgent"
+
+  pmtCid <- mkPayment payer payee agent 5000000.0 (IdempotencyKey "IKEY-PMT-001")
+
+  settledCid <- submit agent do
+    exerciseCmd pmtCid ConfirmPaymentSettlement
+
+  settledData <- queryContractId payee settledCid
+  case settledData of
+    None -> abort "Settled payment not visible to payee"
+    Some p -> assertMsg "Status Settled" (p.status == Settled)
+
+testPaymentRejection : Script ()
+testPaymentRejection = script do
+  payer <- allocateParty "PayerDealer"
+  payee <- allocateParty "PayeeDealer"
+  agent <- allocateParty "FederalSettlementAgent"
+
+  pmtCid <- mkPayment payer payee agent 2000000.0 (IdempotencyKey "IKEY-PMT-002")
+
+  rejectedCid <- submit agent do
+    exerciseCmd pmtCid RejectPaymentSettlement with
+      reason = "INSUFFICIENT_FUNDS_IN_PAYER_ACCOUNT"
+
+  rejData <- queryContractId payer rejectedCid
+  case rejData of
+    None -> abort "Rejected payment not visible to payer"
+    Some p ->
+      case p.status of
+        Failed r -> assertMsg "Rejection reason" (r == "INSUFFICIENT_FUNDS_IN_PAYER_ACCOUNT")
+        _        -> abort "Expected Failed status"
+
+testPaymentCancellation : Script ()
+testPaymentCancellation = script do
+  payer <- allocateParty "PayerDealer"
+  payee <- allocateParty "PayeeDealer"
+  agent <- allocateParty "FederalSettlementAgent"
+
+  pmtCid <- mkPayment payer payee agent 1000000.0 (IdempotencyKey "IKEY-PMT-003")
+
+  cancelledCid <- submit payer do
+    exerciseCmd pmtCid CancelPayment with
+      cancellationReason = "TRADE_CANCELLED_PRIOR_TO_SETTLEMENT"
+
+  cancelData <- queryContractId agent cancelledCid
+  case cancelData of
+    None -> abort "Cancelled payment not visible to agent"
+    Some p ->
+      case p.status of
+        Types.Cancelled r -> assertMsg "Cancellation reason" (r == "TRADE_CANCELLED_PRIOR_TO_SETTLEMENT")
+        _           -> abort "Expected Cancelled status"
+
+testPaymentNetworkRefAttachment : Script ()
+testPaymentNetworkRefAttachment = script do
+  payer <- allocateParty "PayerDealer"
+  payee <- allocateParty "PayeeDealer"
+  agent <- allocateParty "FederalSettlementAgent"
+
+  pmtCid <- mkPayment payer payee agent 3000000.0 (IdempotencyKey "IKEY-PMT-004")
+
+  -- Agent attaches SWIFT UETR after routing to correspondent bank
+  withRefCid <- submit agent do
+    exerciseCmd pmtCid AttachNetworkRef with
+      ref = PaymentNetworkRef "550e8400-e29b-41d4-a716-446655440000"
+
+  refData <- queryContractId payee withRefCid
+  case refData of
+    None -> abort "Payment with network ref not visible to payee"
+    Some p -> assertMsg "Network ref attached"
+      (p.networkRef == Some (PaymentNetworkRef "550e8400-e29b-41d4-a716-446655440000"))
+
+testPaymentObserverVisibility : Script ()
+testPaymentObserverVisibility = script do
+  payer    <- allocateParty "PayerDealer"
+  payee    <- allocateParty "PayeeDealer"
+  agent    <- allocateParty "FederalSettlementAgent"
+  auditor  <- allocateParty "ComplianceAuditor"
+  outsider <- allocateParty "OutsiderCorp"
+
+  pmtCid <- mkPayment payer payee agent 500000.0 (IdempotencyKey "IKEY-PMT-005")
+
+  -- Outsider cannot see
+  outsiderView <- queryContractId outsider pmtCid
+  assertMsg "Outsider blind to payment" (outsiderView == None)
+
+  -- Payer adds auditor as observer
+  withAuditorCid <- submit payer do
+    exerciseCmd pmtCid AddPaymentObserver with newObserver = auditor
+
+  auditorView <- queryContractId auditor withAuditorCid
+  assertMsg "Auditor can see payment" (auditorView /= None)
+
+-- Negative: only agent can confirm settlement
+testOnlyAgentCanSettle : Script ()
+testOnlyAgentCanSettle = script do
+  payer <- allocateParty "PayerDealer"
+  payee <- allocateParty "PayeeDealer"
+  agent <- allocateParty "FederalSettlementAgent"
+
+  pmtCid <- mkPayment payer payee agent 1000000.0 (IdempotencyKey "IKEY-PMT-006")
+
+  submitMustFail payer do
+    exerciseCmd pmtCid ConfirmPaymentSettlement
+
+-- Negative: payee cannot cancel
+testPayeeCannotCancelPayment : Script ()
+testPayeeCannotCancelPayment = script do
+  payer <- allocateParty "PayerDealer"
+  payee <- allocateParty "PayeeDealer"
+  agent <- allocateParty "FederalSettlementAgent"
+
+  pmtCid <- mkPayment payer payee agent 1000000.0 (IdempotencyKey "IKEY-PMT-007")
+
+  submitMustFail payee do
+    exerciseCmd pmtCid CancelPayment with
+      cancellationReason = "Payee attempting unauthorized cancel"
+
+-- Negative: cannot settle already-settled payment
+testCannotDoubleSettle : Script ()
+testCannotDoubleSettle = script do
+  payer <- allocateParty "PayerDealer"
+  payee <- allocateParty "PayeeDealer"
+  agent <- allocateParty "FederalSettlementAgent"
+
+  pmtCid <- mkPayment payer payee agent 2000000.0 (IdempotencyKey "IKEY-PMT-008")
+
+  settledCid <- submit agent do exerciseCmd pmtCid ConfirmPaymentSettlement
+
+  submitMustFail agent do
+    exerciseCmd settledCid ConfirmPaymentSettlement
+
+-- Negative: ensure rejects zero payment amount
+testPaymentEnsurePositiveAmount : Script ()
+testPaymentEnsurePositiveAmount = script do
+  payer <- allocateParty "PayerDealer"
+  payee <- allocateParty "PayeeDealer"
+  agent <- allocateParty "FederalSettlementAgent"
+
+  submitMultiMustFail [payer, payee, agent] [] do
+    createCmd PaymentInstruction with
+      payer = payer
+      payee = payee
+      settlementAgent = agent
+      payerAccountId = AccountId "ACC-PAYER-001"
+      payeeAccountId = AccountId "ACC-PAYEE-001"
+      currency = "USD"
+      amount = 0.0
+      purpose = GeneralPayment "Zero amount test"
+      obligationRef = None
+      correlationId = CorrelationId "CORR-ZERO-001"
+      idempotencyKey = IdempotencyKey "IKEY-ZERO-001"
+      networkRef = None
+      status = PendingSettlement
+      observers = []
+
+-- ---------------------------------------------------------------------------
+-- Entry Point
+-- ---------------------------------------------------------------------------
+
+runObligationPaymentTests : Script ()
+runObligationPaymentTests = script do
+  -- Obligation tests
+  testObligationCreation
+  testObligationFullDischarge
+  testObligationPartialDischarge
+  testObligationDefault
+  testObligationCancellation
+  testObligationAmendment
+  testObligationAgentObserverVisibility
+  testOnlyObligeeCanDischarge
+  testPartialDischargeCannotExceedTotal
+  testCannotCancelFulfilledObligation
+  testObligationEnsurePositiveAmount
+  -- Payment tests
+  testPaymentSettlement
+  testPaymentRejection
+  testPaymentCancellation
+  testPaymentNetworkRefAttachment
+  testPaymentObserverVisibility
+  testOnlyAgentCanSettle
+  testPayeeCannotCancelPayment
+  testCannotDoubleSettle
+  testPaymentEnsurePositiveAmount

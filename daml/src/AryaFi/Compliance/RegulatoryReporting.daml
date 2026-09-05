@@ -28,7 +28,7 @@ template RegulatoryReportRecord
     signatory reportingParty
     observer regulator
 
-    controller regulator can
-      AcknowledgeReport : ContractId RegulatoryReportRecord
-        do
-          create this with isAcknowledged = True
+    choice AcknowledgeReport : ContractId RegulatoryReportRecord
+      controller regulator
+      do
+        create this with isAcknowledged = True

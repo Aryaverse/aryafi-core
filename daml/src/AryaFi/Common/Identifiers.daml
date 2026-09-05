@@ -97,3 +97,12 @@ newtype ExternalRef = ExternalRef { unExternalRef : Text }
 -- | Unique message identifier assigned by a payments network (e.g. SWIFT UETR, Fedwire IMAD).
 newtype PaymentNetworkRef = PaymentNetworkRef { unPaymentNetworkRef : Text }
   deriving (Eq, Ord, Show)
+
+-- ---------------------------------------------------------------------------
+-- Compatibility Aliases
+-- ---------------------------------------------------------------------------
+
+-- | Generic text-based reference identifier for scaffold modules.
+-- Aliased here for import compatibility with scaffold files in Contracts/.
+-- Production modules should use typed identifiers (TradeId, CorrelationId, etc.).
+type ReferenceId = Text
