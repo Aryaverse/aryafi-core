@@ -1,36 +1,64 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Transfer restriction rule definitions linked to tokenized securities.
+-- TransferRestrictionRule encodes regulatory exemption categories (Reg D, Reg S, Rule 144A)
+-- and enforces holding period lockups, whitelist requirements, and issuance restrictions.
+-- The nonconsuming IsTransferAllowed choice enables compliance gating without
+-- consuming the rule contract.
 module AryaFi.Compliance.TransferRestrictions where
 
 import AryaFi.Common.Identifiers (ISIN)
+import AryaFi.Common.Errors (require, requireNonEmpty)
+
+-- ---------------------------------------------------------------------------
+-- Regulatory Category
+-- ---------------------------------------------------------------------------
 
 -- | Regulatory exemption types and categories.
 data RegulatoryCategory
   = RegD_506c
+    -- ^ Regulation D, Rule 506(c) — private placement to accredited investors.
   | RegS
+    -- ^ Regulation S — offshore exemption for securities sold outside the US.
   | Rule144A
+    -- ^ Rule 144A — private placement to Qualified Institutional Buyers (QIBs).
   | QualifiedPurchaserOnly
+    -- ^ Section 3(c)(7) funds restricted to "Qualified Purchasers" only.
   | AccreditedInvestorOnly
+    -- ^ General accredited investor restriction under Regulation D.
   | RetailUnrestricted
+    -- ^ No transfer restrictions (fully registered securities).
   deriving (Eq, Show)
+
+-- ---------------------------------------------------------------------------
+-- TransferRestrictionRule Template
+-- ---------------------------------------------------------------------------
 
 -- | Transfer restriction rule definition linked to an asset or security.
 template TransferRestrictionRule
   with
     complianceOfficer : Party
+    -- ^ Compliance officer managing this restriction rule.
     isin : ISIN
+    -- ^ ISIN of the security subject to this transfer restriction.
     regulatoryCategory : RegulatoryCategory
+    -- ^ Regulatory exemption category governing permitted transfers.
     holdingPeriodDays : Int
+    -- ^ Mandatory holding period in calendar days (0 = no holding period).
     whitelistRequired : Bool
+    -- ^ If True, transferees must appear on the issuer's approved list.
     lockupExpiry : Optional Time
+    -- ^ Optional absolute lockup expiry date. Transfers blocked before this time.
     isActive : Bool
+    -- ^ Whether this restriction is currently enforceable.
   where
     signatory complianceOfficer
 
     key (complianceOfficer, isin) : (Party, ISIN)
     maintainer key._1
 
+    -- | Update the regulatory category and lockup configuration.
     choice UpdateRestriction : ContractId TransferRestrictionRule
       with
         newCategory : RegulatoryCategory
@@ -40,3 +68,47 @@ template TransferRestrictionRule
         create this with
           regulatoryCategory = newCategory
           lockupExpiry = newLockup
+
+    -- | Activate this restriction rule.
+    choice ActivateRule : ContractId TransferRestrictionRule
+      controller complianceOfficer
+      do
+        require (not isActive) "Rule is already active"
+        create this with isActive = True
+
+    -- | Deactivate this restriction rule (e.g. after restriction period ends).
+    choice DeactivateRule : ContractId TransferRestrictionRule
+      controller complianceOfficer
+      do
+        require isActive "Rule is already inactive"
+        create this with isActive = False
+
+    -- | Update the holding period requirement.
+    choice UpdateHoldingPeriod : ContractId TransferRestrictionRule
+      with
+        newDays : Int
+      controller complianceOfficer
+      do
+        require (newDays >= 0) "Holding period must be non-negative"
+        create this with holdingPeriodDays = newDays
+
+    -- | Update the whitelist requirement.
+    choice SetWhitelistRequired : ContractId TransferRestrictionRule
+      with
+        required : Bool
+      controller complianceOfficer
+      do
+        create this with whitelistRequired = required
+
+    -- | Nonconsuming query: is a transfer allowed given the current ledger time?
+    -- Returns True when the rule is active and any absolute lockup period has expired.
+    nonconsuming choice IsTransferAllowed : Bool
+      controller complianceOfficer
+      do
+        if not isActive then pure False
+        else case lockupExpiry of
+          None   -> pure True
+          Some t -> do
+            now <- getTime
+            pure (now >= t)
+
