@@ -1,0 +1,256 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | End-to-end asset transfer scenario and negative test suite.
+-- Tests the full lifecycle of a compliant AssetTransferRequest:
+--   Setup → Create request → Compliance review → Custodian completion
+-- Also covers: rejection, cancellation, authorization, and boundary cases.
+module AryaFi.Test.Scenarios.TransferScenario where
+
+import Daml.Script
+import AryaFi.Contracts.Transfer
+import AryaFi.Common.Identifiers
+import AryaFi.Common.Types
+
+-- ---------------------------------------------------------------------------
+-- Helpers
+-- ---------------------------------------------------------------------------
+
+mkTransfer
+  : Party -> Party -> Party -> Party
+  -> Script (ContractId AssetTransferRequest)
+mkTransfer sender receiver custodian complianceOfficer = do
+  now <- getTime
+  submitMulti [sender, custodian] [] do
+    createCmd AssetTransferRequest with
+      transferId = "TFR-TREAS-2026-001"
+      sender = sender
+      receiver = receiver
+      custodian = custodian
+      complianceOfficer = complianceOfficer
+      assetId = "ASSET-US-TREAS-4P25-NOV26"
+      quantity = 5000000.0
+      fromAccount = AccountId "ACC-SENDER-SEC-001"
+      toAccount = AccountId "ACC-RECEIVER-SEC-001"
+      correlationId = CorrelationId "CORR-TFR-TREAS-2026-001"
+      requestTimestamp = now
+      status = TransferPendingCompliance
+      complianceNote = None
+      observers = []
+
+-- ---------------------------------------------------------------------------
+-- Full Approval and Completion Scenario
+-- ---------------------------------------------------------------------------
+
+testTransferApprovalAndCompletion : Script ()
+testTransferApprovalAndCompletion = script do
+  sender   <- allocateParty "DealerBankA"
+  receiver <- allocateParty "DealerBankB"
+  custodian <- allocateParty "GlobalCustodian"
+  co        <- allocateParty "ComplianceOfficer"
+  auditor   <- allocateParty "AuditTeam"
+
+  -- Step 1: Create transfer request
+  tfrCid <- mkTransfer sender receiver custodian co
+
+  -- Compliance officer can see it (is observer)
+  coView <- queryContractId co tfrCid
+  assertMsg "Compliance officer sees transfer" (coView /= None)
+
+  -- Receiver can see it (is observer)
+  receiverView <- queryContractId receiver tfrCid
+  assertMsg "Receiver sees transfer" (receiverView /= None)
+
+  -- Step 2: Add auditor as observer
+  tfrWithAuditorCid <- submit custodian do
+    exerciseCmd tfrCid AddTransferObserver with newObserver = auditor
+
+  auditorView <- queryContractId auditor tfrWithAuditorCid
+  assertMsg "Auditor sees transfer after being added" (auditorView /= None)
+
+  -- Step 3: Compliance officer approves
+  approvedCid <- submit co do
+    exerciseCmd tfrWithAuditorCid ApproveTransfer with
+      note = "KYC verified; Sanctions clear; Eligibility confirmed for US Treasuries"
+
+  approvedData <- queryContractId sender approvedCid
+  case approvedData of
+    None  -> abort "Approved transfer not visible to sender"
+    Some t -> do
+      assertMsg "Status is Approved" (t.status == TransferApproved)
+      assertMsg "Compliance note set"
+        (t.complianceNote == Some "KYC verified; Sanctions clear; Eligibility confirmed for US Treasuries")
+
+  -- Step 4: Custodian completes the transfer
+  completedCid <- submit custodian do
+    exerciseCmd approvedCid CompleteTransfer
+
+  completedData <- queryContractId sender completedCid
+  case completedData of
+    None  -> abort "Completed transfer not visible to sender"
+    Some t -> assertMsg "Status is Completed" (t.status == TransferCompleted)
+
+  -- Auditor also sees completed state
+  auditorFinalView <- queryContractId auditor completedCid
+  assertMsg "Auditor sees completed transfer" (auditorFinalView /= None)
+
+-- ---------------------------------------------------------------------------
+-- Rejection Scenario
+-- ---------------------------------------------------------------------------
+
+testTransferRejection : Script ()
+testTransferRejection = script do
+  sender   <- allocateParty "DealerBankA"
+  receiver <- allocateParty "DealerBankB"
+  custodian <- allocateParty "GlobalCustodian"
+  co        <- allocateParty "ComplianceOfficer"
+
+  tfrCid <- mkTransfer sender receiver custodian co
+
+  -- Compliance officer rejects due to failed KYC
+  rejectedCid <- submit co do
+    exerciseCmd tfrCid RejectTransfer with
+      reason = "KYC_ATTESTATION_EXPIRED_FOR_RECEIVER"
+
+  rejectedData <- queryContractId sender rejectedCid
+  case rejectedData of
+    None  -> abort "Rejected transfer not visible to sender"
+    Some t ->
+      case t.status of
+        TransferRejected r -> assertMsg "Rejection reason stored" (r == "KYC_ATTESTATION_EXPIRED_FOR_RECEIVER")
+        _                  -> abort "Expected TransferRejected status"
+
+-- ---------------------------------------------------------------------------
+-- Cancellation Scenario
+-- ---------------------------------------------------------------------------
+
+testTransferCancellation : Script ()
+testTransferCancellation = script do
+  sender   <- allocateParty "DealerBankA"
+  receiver <- allocateParty "DealerBankB"
+  custodian <- allocateParty "GlobalCustodian"
+  co        <- allocateParty "ComplianceOfficer"
+
+  tfrCid <- mkTransfer sender receiver custodian co
+
+  -- Sender cancels before compliance review (trade error)
+  cancelledCid <- submit sender do
+    exerciseCmd tfrCid CancelTransfer with
+      reason = "TRADE_ERROR_INCORRECT_ASSET_ID"
+
+  cancelledData <- queryContractId custodian cancelledCid
+  case cancelledData of
+    None  -> abort "Cancelled transfer not visible to custodian"
+    Some t ->
+      case t.status of
+        TransferCancelled r -> assertMsg "Cancel reason stored" (r == "TRADE_ERROR_INCORRECT_ASSET_ID")
+        _                   -> abort "Expected TransferCancelled status"
+
+-- ---------------------------------------------------------------------------
+-- Privacy Tests
+-- ---------------------------------------------------------------------------
+
+testTransferPrivacy : Script ()
+testTransferPrivacy = script do
+  sender   <- allocateParty "DealerBankA"
+  receiver <- allocateParty "DealerBankB"
+  custodian <- allocateParty "GlobalCustodian"
+  co        <- allocateParty "ComplianceOfficer"
+  outsider  <- allocateParty "OutsiderCorp"
+
+  tfrCid <- mkTransfer sender receiver custodian co
+
+  -- Outsider cannot see the transfer
+  outsiderView <- queryContractId outsider tfrCid
+  assertMsg "Outsider cannot see transfer" (outsiderView == None)
+
+  -- Sender can see it
+  senderView <- queryContractId sender tfrCid
+  assertMsg "Sender sees transfer" (senderView /= None)
+
+-- ---------------------------------------------------------------------------
+-- Negative Tests
+-- ---------------------------------------------------------------------------
+
+-- Negative: only compliance officer can approve
+testOnlyComplianceCanApprove : Script ()
+testOnlyComplianceCanApprove = script do
+  sender   <- allocateParty "DealerBankA"
+  receiver <- allocateParty "DealerBankB"
+  custodian <- allocateParty "GlobalCustodian"
+  co        <- allocateParty "ComplianceOfficer"
+
+  tfrCid <- mkTransfer sender receiver custodian co
+
+  submitMustFail sender do
+    exerciseCmd tfrCid ApproveTransfer with note = "Self-approval attempt"
+
+-- Negative: custodian cannot complete a non-approved transfer
+testCannotCompleteUnapprovedTransfer : Script ()
+testCannotCompleteUnapprovedTransfer = script do
+  sender   <- allocateParty "DealerBankA"
+  receiver <- allocateParty "DealerBankB"
+  custodian <- allocateParty "GlobalCustodian"
+  co        <- allocateParty "ComplianceOfficer"
+
+  tfrCid <- mkTransfer sender receiver custodian co
+
+  submitMustFail custodian do
+    exerciseCmd tfrCid CompleteTransfer
+
+-- Negative: cannot cancel an approved transfer
+testCannotCancelApprovedTransfer : Script ()
+testCannotCancelApprovedTransfer = script do
+  sender   <- allocateParty "DealerBankA"
+  receiver <- allocateParty "DealerBankB"
+  custodian <- allocateParty "GlobalCustodian"
+  co        <- allocateParty "ComplianceOfficer"
+
+  tfrCid <- mkTransfer sender receiver custodian co
+
+  approvedCid <- submit co do
+    exerciseCmd tfrCid ApproveTransfer with note = "Approved"
+
+  submitMustFail sender do
+    exerciseCmd approvedCid CancelTransfer with reason = "Late cancel attempt"
+
+-- Negative: ensure rejects zero quantity
+testTransferEnsurePositiveQuantity : Script ()
+testTransferEnsurePositiveQuantity = script do
+  sender   <- allocateParty "DealerBankA"
+  receiver <- allocateParty "DealerBankB"
+  custodian <- allocateParty "GlobalCustodian"
+  co        <- allocateParty "ComplianceOfficer"
+  now       <- getTime
+
+  submitMultiMustFail [sender, custodian] [] do
+    createCmd AssetTransferRequest with
+      transferId = "TFR-ZERO-001"
+      sender = sender
+      receiver = receiver
+      custodian = custodian
+      complianceOfficer = co
+      assetId = "ASSET-001"
+      quantity = 0.0   -- invalid: ensure rejects
+      fromAccount = AccountId "ACC-FROM-001"
+      toAccount = AccountId "ACC-TO-001"
+      correlationId = CorrelationId "CORR-ZERO-001"
+      requestTimestamp = now
+      status = TransferPendingCompliance
+      complianceNote = None
+      observers = []
+
+-- ---------------------------------------------------------------------------
+-- Entry Point
+-- ---------------------------------------------------------------------------
+
+runTransferScenarioTests : Script ()
+runTransferScenarioTests = script do
+  testTransferApprovalAndCompletion
+  testTransferRejection
+  testTransferCancellation
+  testTransferPrivacy
+  testOnlyComplianceCanApprove
+  testCannotCompleteUnapprovedTransfer
+  testCannotCancelApprovedTransfer
+  testTransferEnsurePositiveQuantity

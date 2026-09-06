@@ -1,50 +1,141 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Compliant asset transfer workflow for regulated securities.
+-- AssetTransferRequest implements a three-stage transfer lifecycle:
+--   1. Sender + Custodian create the request (status: TransferPendingCompliance).
+--   2. Compliance Officer reviews and approves or rejects.
+--   3. Custodian completes the approved transfer (status: TransferCompleted).
+--
+-- Each stage transition enforces status preconditions using require.
+-- Authorization: sender + custodian co-sign creation; compliance officer gates approval;
+-- custodian alone completes (having verified custody-level readiness).
+-- Sender may cancel while still pending compliance review.
 module AryaFi.Contracts.Transfer where
 
 import AryaFi.Common.Types (Amount)
-import AryaFi.Common.Identifiers (AccountId, ReferenceId)
-import AryaFi.Common.Errors (require)
+import AryaFi.Common.Identifiers (AccountId, ReferenceId, CorrelationId)
+import AryaFi.Common.Errors (require, requireNonEmpty)
+
+-- ---------------------------------------------------------------------------
+-- Transfer Status
+-- ---------------------------------------------------------------------------
 
 -- | Status of asset transfer instruction.
 data TransferStatus
   = TransferPendingCompliance
+    -- ^ Transfer submitted; awaiting compliance officer review.
   | TransferApproved
+    -- ^ Compliance officer has approved; custodian may now complete.
   | TransferCompleted
-  | TransferFailed Text
+    -- ^ Custodian has completed the transfer and updated custody records.
+  | TransferRejected Text
+    -- ^ Compliance rejected the transfer. Text contains the compliance reason.
+  | TransferCancelled Text
+    -- ^ Transfer cancelled before compliance review. Text contains the reason.
   deriving (Eq, Show)
 
+-- ---------------------------------------------------------------------------
+-- AssetTransferRequest Template
+-- ---------------------------------------------------------------------------
+
 -- | Controlled asset transfer contract subject to compliance and authorization checks.
+--
+-- Authorization model:
+--   - sender + custodian: co-sign creation.
+--   - complianceOfficer: approves or rejects (observer by default, not signatory).
+--   - custodian: completes an approved transfer.
+--   - sender: cancels a pending transfer.
+--
+-- Privacy: receiver and complianceOfficer are observers. Additional observers
+-- (e.g. regulators, auditors) can be added via AddTransferObserver.
 template AssetTransferRequest
   with
     transferId : ReferenceId
+    -- ^ Unique identifier for this transfer request.
     sender : Party
+    -- ^ Party initiating the asset transfer.
     receiver : Party
+    -- ^ Intended recipient of the assets.
     custodian : Party
+    -- ^ Custodian holding the assets and executing the final transfer.
     complianceOfficer : Party
+    -- ^ Compliance officer responsible for approving or rejecting the transfer.
     assetId : ReferenceId
+    -- ^ Reference to the asset or security being transferred.
     quantity : Amount
+    -- ^ Quantity of the asset to transfer.
     fromAccount : AccountId
+    -- ^ Source custody account.
     toAccount : AccountId
+    -- ^ Destination custody account.
+    correlationId : CorrelationId
+    -- ^ Correlation ID for end-to-end tracing across systems.
+    requestTimestamp : Time
+    -- ^ Timestamp at which this transfer was requested.
     status : TransferStatus
+    -- ^ Current lifecycle status of this transfer.
+    complianceNote : Optional Text
+    -- ^ Compliance review note (populated on approval or rejection).
+    observers : [Party]
+    -- ^ Additional observers (e.g. regulator, audit team, external counterparty).
   where
     signatory sender, custodian
+    observer receiver :: complianceOfficer :: observers
 
+    ensure quantity > 0.0
+
+    -- | Compliance officer approves the transfer, allowing custodian to proceed.
     choice ApproveTransfer : ContractId AssetTransferRequest
+      with
+        note : Text
       controller complianceOfficer
       do
-        create this with status = TransferApproved
+        require (status == TransferPendingCompliance)
+          "Transfer must be in PendingCompliance status to approve"
+        create this with
+          status = TransferApproved
+          complianceNote = Some note
 
+    -- | Compliance officer rejects the transfer with a mandatory reason.
     choice RejectTransfer : ContractId AssetTransferRequest
       with
         reason : Text
       controller complianceOfficer
       do
-        create this with status = TransferFailed reason
+        require (status == TransferPendingCompliance)
+          "Transfer must be in PendingCompliance status to reject"
+        requireNonEmpty reason "rejection reason"
+        create this with
+          status = TransferRejected reason
+          complianceNote = Some reason
 
+    -- | Custodian completes an approved transfer.
     choice CompleteTransfer : ContractId AssetTransferRequest
       controller custodian
       do
-        require (status == TransferApproved) "Transfer is not approved"
+        require (status == TransferApproved)
+          "Transfer must be approved before completion"
         create this with status = TransferCompleted
+
+    -- | Sender cancels the transfer while it is still pending compliance review.
+    choice CancelTransfer : ContractId AssetTransferRequest
+      with
+        reason : Text
+      controller sender
+      do
+        require (status == TransferPendingCompliance)
+          "Transfer can only be cancelled while pending compliance"
+        requireNonEmpty reason "cancellation reason"
+        create this with
+          status = TransferCancelled reason
+
+    -- | Add an observer (e.g. regulator, auditor, external custodian).
+    choice AddTransferObserver : ContractId AssetTransferRequest
+      with
+        newObserver : Party
+      controller custodian
+      do
+        require (newObserver `notElem` observers) "Party is already an observer"
+        create this with observers = newObserver :: observers
+

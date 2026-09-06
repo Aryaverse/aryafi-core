@@ -1,22 +1,35 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Collateral or counterparty eligibility policy engine interface.
+-- EligibilityPolicy governs which jurisdictions and asset classes are permitted
+-- for a specific context (e.g. a tri-party collateral program or margin arrangement).
+-- The nonconsuming EvaluateEligibility choice makes this a pure policy oracle
+-- that any authorized party can query without consuming the contract.
 module AryaFi.Compliance.Eligibility where
 
 import AryaFi.Common.Policies (PolicyDecision(..))
+import AryaFi.Common.Errors (require, requireNonEmpty)
 
 -- | Collateral or counterparty eligibility policy engine interface.
 template EligibilityPolicy
   with
     policyManager : Party
+    -- ^ Party responsible for managing and executing this policy.
     policyName : Text
+    -- ^ Human-readable name for this eligibility policy.
     allowedJurisdictions : [Text]
+    -- ^ ISO country codes for permitted counterparty jurisdictions.
     allowedAssetClasses : [Text]
+    -- ^ Asset classes permitted under this policy (e.g. "GovernmentSecurity").
     minCreditRating : Text
+    -- ^ Minimum credit rating for eligible counterparties (e.g. "BBB-", "A").
     isActive : Bool
+    -- ^ Whether this policy is currently in force.
   where
     signatory policyManager
 
+    -- | Evaluate whether a given jurisdiction and asset class combination is eligible.
     nonconsuming choice EvaluateEligibility : PolicyDecision
       with
         targetJurisdiction : Text
@@ -31,3 +44,62 @@ template EligibilityPolicy
           pure (Rejected ("Asset class not allowed: " <> targetAssetClass))
         else
           pure Approved
+
+    -- | Activate this eligibility policy.
+    choice ActivatePolicy : ContractId EligibilityPolicy
+      controller policyManager
+      do
+        require (not isActive) "Policy is already active"
+        create this with isActive = True
+
+    -- | Deactivate this policy (e.g. during review or update cycle).
+    choice DeactivatePolicy : ContractId EligibilityPolicy
+      controller policyManager
+      do
+        require isActive "Policy is already inactive"
+        create this with isActive = False
+
+    -- | Add a jurisdiction to the allowed list.
+    choice AddAllowedJurisdiction : ContractId EligibilityPolicy
+      with
+        jurisdiction : Text
+      controller policyManager
+      do
+        requireNonEmpty jurisdiction "jurisdiction"
+        require (jurisdiction `notElem` allowedJurisdictions)
+          ("Jurisdiction already allowed: " <> jurisdiction)
+        create this with allowedJurisdictions = jurisdiction :: allowedJurisdictions
+
+    -- | Remove a jurisdiction from the allowed list.
+    choice RemoveAllowedJurisdiction : ContractId EligibilityPolicy
+      with
+        jurisdiction : Text
+      controller policyManager
+      do
+        require (jurisdiction `elem` allowedJurisdictions)
+          ("Jurisdiction not found in allowlist: " <> jurisdiction)
+        create this with
+          allowedJurisdictions = filter (/= jurisdiction) allowedJurisdictions
+
+    -- | Add an asset class to the allowed list.
+    choice AddAllowedAssetClass : ContractId EligibilityPolicy
+      with
+        assetClass : Text
+      controller policyManager
+      do
+        requireNonEmpty assetClass "assetClass"
+        require (assetClass `notElem` allowedAssetClasses)
+          ("Asset class already allowed: " <> assetClass)
+        create this with allowedAssetClasses = assetClass :: allowedAssetClasses
+
+    -- | Remove an asset class from the allowed list.
+    choice RemoveAllowedAssetClass : ContractId EligibilityPolicy
+      with
+        assetClass : Text
+      controller policyManager
+      do
+        require (assetClass `elem` allowedAssetClasses)
+          ("Asset class not found in allowlist: " <> assetClass)
+        create this with
+          allowedAssetClasses = filter (/= assetClass) allowedAssetClasses
+

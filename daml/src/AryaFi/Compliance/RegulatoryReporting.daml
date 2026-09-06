@@ -1,34 +1,98 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Institutional regulatory reporting records for trade repository reporting.
+-- RegulatoryReportRecord creates an on-chain audit trail for reportable transactions
+-- submitted to trade repositories under CAT, EMIR, MiFIR, and MAS regimes.
+-- The regulator is an observer who can acknowledge or reject reports without
+-- being a signatory on the reporting party's submission.
 module AryaFi.Compliance.RegulatoryReporting where
 
 import AryaFi.Common.Identifiers (CorrelationId)
+import AryaFi.Common.Errors (require, requireNonEmpty)
+
+-- ---------------------------------------------------------------------------
+-- Reporting Regime
+-- ---------------------------------------------------------------------------
 
 -- | Regulatory reporting regimes.
 data ReportingRegime
   = SEC_CAT
+    -- ^ SEC Consolidated Audit Trail — US equity and options markets.
   | CFTC_Part43_45
+    -- ^ CFTC Parts 43 & 45 — US swaps reporting to SDRs.
   | EMIR_Refit
+    -- ^ EMIR Refit — EU derivatives trade reporting to ARMs/TRs.
   | MiFIR
+    -- ^ MiFIR Article 26 — EU investment firm transaction reporting.
   | MAS_TradeReporting
+    -- ^ MAS Trade Reporting — Singapore securities and derivatives.
   deriving (Eq, Show)
+
+-- ---------------------------------------------------------------------------
+-- RegulatoryReportRecord Template
+-- ---------------------------------------------------------------------------
 
 -- | Institutional regulatory reporting record for trade repository reporting.
 template RegulatoryReportRecord
   with
     reportingParty : Party
+    -- ^ Party obligated to report this transaction (e.g. dealer, investment firm).
     regulator : Party
+    -- ^ Regulatory authority / trade repository receiving this report.
     regime : ReportingRegime
+    -- ^ Regulatory regime under which this report is filed.
     correlationId : CorrelationId
+    -- ^ Correlation ID linking this report to the underlying trade.
     reportPayload : Text
+    -- ^ Serialized report payload (JSON, XML, or FpML fragment).
     submissionTimestamp : Time
+    -- ^ Ledger time at which the report was submitted on-chain.
     isAcknowledged : Bool
+    -- ^ Whether the regulator has acknowledged receipt of this report.
+    isRejected : Bool
+    -- ^ Whether the regulator has rejected this report (e.g. validation failure).
+    rejectionReason : Optional Text
+    -- ^ Populated when isRejected = True. Contains the validation error.
+    amendmentCount : Int
+    -- ^ Number of amendments submitted for this report (0 = original filing).
   where
     signatory reportingParty
     observer regulator
 
+    -- | Regulator acknowledges receipt and validation of this report.
     choice AcknowledgeReport : ContractId RegulatoryReportRecord
       controller regulator
       do
+        require (not isRejected) "Cannot acknowledge a rejected report"
         create this with isAcknowledged = True
+
+    -- | Regulator rejects this report (e.g. failed validation, missing required fields).
+    choice RejectReport : ContractId RegulatoryReportRecord
+      with
+        reason : Text
+      controller regulator
+      do
+        requireNonEmpty reason "rejection reason"
+        require (not isAcknowledged) "Cannot reject an already acknowledged report"
+        create this with
+          isRejected = True
+          rejectionReason = Some reason
+
+    -- | Reporting party submits an amendment (corrected report).
+    -- Clears the rejection status and increments the amendment counter.
+    choice SubmitAmendment : ContractId RegulatoryReportRecord
+      with
+        amendedPayload : Text
+        amendmentTimestamp : Time
+      controller reportingParty
+      do
+        requireNonEmpty amendedPayload "amendedPayload"
+        create this with
+          reportPayload = amendedPayload
+          submissionTimestamp = amendmentTimestamp
+          isAcknowledged = False
+          isRejected = False
+          rejectionReason = None
+          amendmentCount = amendmentCount + 1
+
