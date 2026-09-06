@@ -1,32 +1,121 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Security interest (pledge / hypothecation) contract for AryaFi financing.
+-- AssetPledge records the perfection of a security interest by a pledgor in favor
+-- of a pledgee. The tri-party model (pledgor + pledgee + custodian) ensures all
+-- parties to the security arrangement have acknowledged the encumbrance.
+--
+-- Lifecycle: Active → Released (voluntary) | Defaulted (enforcement)
+-- Substitution: Active asset may be swapped for an equivalent eligible asset,
+-- subject to tri-party consent.
 module AryaFi.Contracts.Pledge where
 
 import AryaFi.Common.Types (Amount, LifecycleStatus(..))
-import AryaFi.Common.Identifiers (AccountId, ReferenceId)
+import AryaFi.Common.Identifiers (AccountId, ReferenceId, CorrelationId)
+import AryaFi.Common.Errors (require, requireNonEmpty)
 
 -- | Pledged asset / security interest contract.
+--
+-- Tri-party signatory model: pledgor + pledgee + custodian.
+-- All three parties co-sign creation, ensuring unanimous acknowledgement
+-- of the security interest and its perfection reference.
+--
+-- Privacy: additional observers (e.g. tri-party agents, regulators) can be added.
 template AssetPledge
   with
     pledgeId : ReferenceId
+    -- ^ Unique identifier for this pledge arrangement.
     pledgor : Party
+    -- ^ Party granting the security interest (borrower in a financing arrangement).
     pledgee : Party
+    -- ^ Party holding the benefit of the security interest (lender / secured party).
     custodian : Party
+    -- ^ Custodian safekeeping the pledged asset.
     accountId : AccountId
+    -- ^ Custody account where the pledged asset is held.
     assetId : ReferenceId
+    -- ^ Reference to the pledged asset or security.
     quantity : Amount
+    -- ^ Pledged quantity of the asset.
     perfectionReference : Text
+    -- ^ Legal perfection reference (e.g. UCC filing number, CREST pledge ref).
+    correlationId : CorrelationId
+    -- ^ Correlation ID linking this pledge to the underlying financing agreement.
     status : LifecycleStatus
+    -- ^ Current lifecycle status of this pledge.
+    enforceTimestamp : Optional Time
+    -- ^ Timestamp at which enforcement was triggered (populated on EnforcePledge).
+    observers : [Party]
+    -- ^ Additional observers (e.g. tri-party agent, regulator).
   where
     signatory pledgor, pledgee, custodian
+    observer observers
 
+    ensure quantity > 0.0
+
+    -- | Pledgee releases the security interest voluntarily (e.g. after loan repayment).
     choice ReleasePledge : ContractId AssetPledge
       controller pledgee
       do
+        require (status == Active)
+          "Pledge must be Active to release"
         create this with status = Closed
 
+    -- | Pledgee enforces the security interest following an event of default.
     choice EnforcePledge : ContractId AssetPledge
+      with
+        enforceTs : Time
       controller pledgee
       do
-        create this with status = Defaulted
+        require (status == Active)
+          "Pledge must be Active to enforce"
+        create this with
+          status = Defaulted
+          enforceTimestamp = Some enforceTs
+
+    -- | Substitute the pledged asset with an equivalent eligible asset.
+    -- Requires unanimous tri-party consent (pledgor, pledgee, custodian).
+    choice SubstitutePledge : ContractId AssetPledge
+      with
+        newAssetId : ReferenceId
+        newAccountId : AccountId
+        newQuantity : Amount
+        newPerfectionRef : Text
+      controller pledgor, pledgee, custodian
+      do
+        require (status == Active)
+          "Pledge must be Active to substitute"
+        requireNonEmpty newAssetId "newAssetId"
+        requireNonEmpty newPerfectionRef "newPerfectionRef"
+        require (newQuantity > 0.0) "New quantity must be positive"
+        create this with
+          assetId = newAssetId
+          accountId = newAccountId
+          quantity = newQuantity
+          perfectionReference = newPerfectionRef
+
+    -- | Update the legal perfection reference (e.g. amended UCC-1 filing number).
+    choice UpdatePerfectionRef : ContractId AssetPledge
+      with
+        newRef : Text
+      controller custodian
+      do
+        requireNonEmpty newRef "perfection reference"
+        create this with perfectionReference = newRef
+
+    -- | Add an observer to this pledge (e.g. tri-party collateral agent, regulator).
+    choice AddPledgeObserver : ContractId AssetPledge
+      with
+        newObserver : Party
+      controller pledgee
+      do
+        require (newObserver `notElem` observers) "Party is already an observer"
+        create this with observers = newObserver :: observers
+
+    -- | Nonconsuming query: is this pledge currently active and enforceable?
+    nonconsuming choice IsPledgeActive : Bool
+      controller pledgee
+      do
+        pure (status == Active)
+

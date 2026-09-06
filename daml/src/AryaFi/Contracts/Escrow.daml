@@ -1,40 +1,155 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Multi-party conditional escrow contract for AryaFi financial workflows.
+-- ConditionalEscrow holds assets pending satisfaction of a release condition
+-- agreed between the escrow agent and both depositor and beneficiary.
+--
+-- Lifecycle:
+--   EscrowHeld → EscrowReleased  (agent + beneficiary: condition met)
+--              | EscrowRefunded  (agent + depositor: return funds)
+--              | EscrowExpired   (post-deadline, agent triggers)
+--              | EscrowDisputed  (agent freezes pending resolution)
+-- EscrowExpired → EscrowRefunded (depositor claims refund after expiry)
+-- EscrowDisputed → EscrowReleased | EscrowRefunded (agent resolves dispute)
 module AryaFi.Contracts.Escrow where
 
 import AryaFi.Common.Types (Amount, Currency)
-import AryaFi.Common.Identifiers (ReferenceId)
+import AryaFi.Common.Identifiers (ReferenceId, CorrelationId)
+import AryaFi.Common.Errors (require, requireNonEmpty)
 
--- | Escrow status states.
+-- ---------------------------------------------------------------------------
+-- Escrow Status
+-- ---------------------------------------------------------------------------
+
+-- | Escrow lifecycle states.
 data EscrowStatus
   = EscrowHeld
+    -- ^ Assets are held in escrow pending the release condition.
   | EscrowReleased
+    -- ^ Release condition was met; assets delivered to beneficiary.
   | EscrowRefunded
+    -- ^ Condition not met or agreement to abort; assets returned to depositor.
+  | EscrowExpired
+    -- ^ Escrow expiry time has passed without release; eligible for refund.
   | EscrowDisputed
+    -- ^ A dispute has been raised; escrow is frozen pending resolution.
   deriving (Eq, Show)
 
+-- ---------------------------------------------------------------------------
+-- ConditionalEscrow Template
+-- ---------------------------------------------------------------------------
+
 -- | Multi-party conditional escrow contract.
+--
+-- Dual-signatory creation: escrow agent + depositor co-sign.
+-- Beneficiary is an observer (cannot control, but has visibility).
+--
+-- Release requires both agent and beneficiary authorization.
+-- Refund requires both agent and depositor authorization.
+-- Expiry and dispute management are agent-only.
 template ConditionalEscrow
   with
     escrowId : ReferenceId
+    -- ^ Unique identifier for this escrow arrangement.
     escrowAgent : Party
+    -- ^ Independent escrow agent controlling release and refund.
     depositor : Party
+    -- ^ Party depositing assets into escrow.
     beneficiary : Party
+    -- ^ Intended recipient of assets if the release condition is met.
     currency : Currency
+    -- ^ Currency of the escrowed amount.
     amount : Amount
+    -- ^ Amount held in escrow.
     releaseCondition : Text
+    -- ^ Human-readable description of the release condition.
     expiryTime : Time
+    -- ^ Absolute ledger time after which the escrow expires.
+    correlationId : CorrelationId
+    -- ^ Correlation ID linking to the underlying transaction or agreement.
     status : EscrowStatus
+    -- ^ Current lifecycle status of this escrow.
+    disputeReason : Optional Text
+    -- ^ Populated when status = EscrowDisputed.
+    observers : [Party]
+    -- ^ Additional observers (e.g. regulator, auditor).
   where
     signatory escrowAgent, depositor
+    observer beneficiary :: observers
 
+    ensure amount > 0.0
+
+    -- | Release escrowed assets to beneficiary (both agent and beneficiary must agree).
     choice ReleaseEscrow : ContractId ConditionalEscrow
       controller escrowAgent, beneficiary
       do
+        require (status == EscrowHeld)
+          "Escrow must be Held to release"
         create this with status = EscrowReleased
 
+    -- | Refund escrowed assets to depositor (both agent and depositor must agree).
+    -- Also valid when escrow is in Expired state.
     choice RefundEscrow : ContractId ConditionalEscrow
       controller escrowAgent, depositor
       do
+        require (status == EscrowHeld || status == EscrowExpired)
+          "Escrow must be Held or Expired to refund"
         create this with status = EscrowRefunded
+
+    -- | Expire the escrow after the expiry time has passed.
+    -- Can only be triggered by the escrow agent once ledger time exceeds expiryTime.
+    choice ExpireEscrow : ContractId ConditionalEscrow
+      controller escrowAgent
+      do
+        require (status == EscrowHeld)
+          "Escrow must be Held to expire"
+        now <- getTime
+        require (now >= expiryTime)
+          "Escrow expiry time has not yet passed"
+        create this with status = EscrowExpired
+
+    -- | Raise a dispute on this escrow (freezes it pending agent resolution).
+    -- Used when either party contests the release condition outcome.
+    choice DisputeEscrow : ContractId ConditionalEscrow
+      with
+        reason : Text
+      controller escrowAgent
+      do
+        require (status == EscrowHeld)
+          "Escrow must be Held to raise a dispute"
+        requireNonEmpty reason "dispute reason"
+        create this with
+          status = EscrowDisputed
+          disputeReason = Some reason
+
+    -- | Escrow agent resolves an active dispute, deciding whether to release or refund.
+    choice ResolveDispute : ContractId ConditionalEscrow
+      with
+        resolutionStatus : EscrowStatus
+      controller escrowAgent
+      do
+        require (status == EscrowDisputed)
+          "Escrow must be Disputed to resolve"
+        require
+          (resolutionStatus == EscrowReleased || resolutionStatus == EscrowRefunded)
+          "Resolution must be Released or Refunded"
+        create this with
+          status = resolutionStatus
+          disputeReason = None
+
+    -- | Add an observer to this escrow (e.g. regulator, auditor).
+    choice AddEscrowObserver : ContractId ConditionalEscrow
+      with
+        newObserver : Party
+      controller escrowAgent
+      do
+        require (newObserver `notElem` observers) "Party is already an observer"
+        create this with observers = newObserver :: observers
+
+    -- | Nonconsuming query: has this escrow reached a terminal state?
+    nonconsuming choice IsEscrowTerminal : Bool
+      controller escrowAgent
+      do
+        pure (status /= EscrowHeld && status /= EscrowDisputed)
+
