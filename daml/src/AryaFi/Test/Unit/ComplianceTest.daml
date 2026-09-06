@@ -1,0 +1,865 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Unit tests for all AryaFi Compliance modules.
+-- Covers: KYC attestation lifecycle, sanctions screening, eligibility policy evaluation,
+-- transfer restriction rules, ownership concentration limits, and regulatory reporting.
+module AryaFi.Test.Unit.ComplianceTest where
+
+import Daml.Script
+import AryaFi.Compliance.KYC
+import AryaFi.Compliance.Sanctions
+import AryaFi.Compliance.Eligibility
+import AryaFi.Compliance.TransferRestrictions
+import AryaFi.Compliance.OwnershipRestrictions
+import AryaFi.Compliance.RegulatoryReporting
+import AryaFi.Common.Identifiers
+import AryaFi.Common.Policies (PolicyDecision(..))
+
+-- ---------------------------------------------------------------------------
+-- KYC Tests
+-- ---------------------------------------------------------------------------
+
+testKycCreate : Script ()
+testKycCreate = script do
+  authority <- allocateParty "KycAuthority"
+  subject   <- allocateParty "DealerBankA"
+  now       <- getTime
+  let future = addRelTime now (days 365)
+
+  kycCid <- submit authority do
+    createCmd KycAttestation with
+      authority = authority
+      subjectParty = subject
+      lei = Some (LEI "5493001KJTIIGC8Y1R12")
+      status = KycPending
+      verificationTimestamp = now
+      expiryTimestamp = future
+      jurisdiction = "US"
+      riskTier = "STANDARD"
+      providerRef = None
+      observers = []
+
+  kycData <- queryContractId authority kycCid
+  case kycData of
+    None  -> abort "KYC attestation not visible to authority"
+    Some k -> do
+      assertMsg "Status is Pending"           (k.status == KycPending)
+      assertMsg "Jurisdiction set"            (k.jurisdiction == "US")
+      assertMsg "Risk tier set"               (k.riskTier == "STANDARD")
+      assertMsg "No observers initially"      (k.observers == [])
+
+  -- Subject can also see it
+  subjectView <- queryContractId subject kycCid
+  assertMsg "Subject sees attestation"        (subjectView /= None)
+
+testKycUpdateToVerified : Script ()
+testKycUpdateToVerified = script do
+  authority <- allocateParty "KycAuthority"
+  subject   <- allocateParty "DealerBankB"
+  now       <- getTime
+  let future = addRelTime now (days 365)
+
+  kycCid <- submit authority do
+    createCmd KycAttestation with
+      authority = authority
+      subjectParty = subject
+      lei = None
+      status = KycPending
+      verificationTimestamp = now
+      expiryTimestamp = future
+      jurisdiction = "GB"
+      riskTier = "STANDARD"
+      providerRef = None
+      observers = []
+
+  verifiedCid <- submit authority do
+    exerciseCmd kycCid UpdateKycStatus with
+      newStatus = KycVerified
+      newExpiry = addRelTime now (days 365)
+      newTimestamp = now
+
+  verifiedData <- queryContractId authority verifiedCid
+  case verifiedData of
+    None  -> abort "Updated KYC not found"
+    Some k -> assertMsg "Status is Verified" (k.status == KycVerified)
+
+testKycRevokeAttestation : Script ()
+testKycRevokeAttestation = script do
+  authority <- allocateParty "KycAuthority"
+  subject   <- allocateParty "DealerBankC"
+  now       <- getTime
+  let future = addRelTime now (days 365)
+
+  kycCid <- submit authority do
+    createCmd KycAttestation with
+      authority = authority
+      subjectParty = subject
+      lei = None
+      status = KycVerified
+      verificationTimestamp = now
+      expiryTimestamp = future
+      jurisdiction = "SG"
+      riskTier = "STANDARD"
+      providerRef = None
+      observers = []
+
+  revokedCid <- submit authority do
+    exerciseCmd kycCid RevokeKyc with
+      reason = "AML_ALERT_WATCHLIST_MATCH"
+      revokeTimestamp = now
+
+  revokedData <- queryContractId authority revokedCid
+  case revokedData of
+    None  -> abort "Revoked KYC not found"
+    Some k ->
+      case k.status of
+        KycRejected r -> assertMsg "Reason stored" (r == "AML_ALERT_WATCHLIST_MATCH")
+        _             -> abort "Expected KycRejected status"
+
+testKycIsValid : Script ()
+testKycIsValid = script do
+  authority <- allocateParty "KycAuthority"
+  subject   <- allocateParty "DealerBankD"
+  now       <- getTime
+  let future = addRelTime now (days 365)
+
+  kycCid <- submit authority do
+    createCmd KycAttestation with
+      authority = authority
+      subjectParty = subject
+      lei = None
+      status = KycVerified
+      verificationTimestamp = now
+      expiryTimestamp = future
+      jurisdiction = "US"
+      riskTier = "STANDARD"
+      providerRef = None
+      observers = []
+
+  isValid <- submit authority do
+    exerciseCmd kycCid IsKycValid
+
+  assertMsg "Verified KYC with future expiry is valid" isValid
+
+testKycIsValidWhenPending : Script ()
+testKycIsValidWhenPending = script do
+  authority <- allocateParty "KycAuthority"
+  subject   <- allocateParty "DealerBankE"
+  now       <- getTime
+  let future = addRelTime now (days 365)
+
+  kycCid <- submit authority do
+    createCmd KycAttestation with
+      authority = authority
+      subjectParty = subject
+      lei = None
+      status = KycPending
+      verificationTimestamp = now
+      expiryTimestamp = future
+      jurisdiction = "AE"
+      riskTier = "STANDARD"
+      providerRef = None
+      observers = []
+
+  isValid <- submit authority do
+    exerciseCmd kycCid IsKycValid
+
+  assertMsg "Pending KYC is NOT valid" (not isValid)
+
+testKycAddObserver : Script ()
+testKycAddObserver = script do
+  authority  <- allocateParty "KycAuthority"
+  subject    <- allocateParty "DealerBankF"
+  custodian  <- allocateParty "Custodian"
+  now        <- getTime
+  let future = addRelTime now (days 365)
+
+  kycCid <- submit authority do
+    createCmd KycAttestation with
+      authority = authority
+      subjectParty = subject
+      lei = None
+      status = KycVerified
+      verificationTimestamp = now
+      expiryTimestamp = future
+      jurisdiction = "US"
+      riskTier = "STANDARD"
+      providerRef = None
+      observers = []
+
+  kycWithObsCid <- submit authority do
+    exerciseCmd kycCid AddKycObserver with newObserver = custodian
+
+  -- Custodian can now see the KYC
+  custodianView <- queryContractId custodian kycWithObsCid
+  assertMsg "Custodian sees KYC after being added" (custodianView /= None)
+
+-- Negative: non-authority cannot revoke
+testKycNonAuthorityCannotRevoke : Script ()
+testKycNonAuthorityCannotRevoke = script do
+  authority <- allocateParty "KycAuthority"
+  subject   <- allocateParty "DealerBankG"
+  outsider  <- allocateParty "OutsiderCorp"
+  now       <- getTime
+  let future = addRelTime now (days 365)
+
+  kycCid <- submit authority do
+    createCmd KycAttestation with
+      authority = authority
+      subjectParty = subject
+      lei = None
+      status = KycVerified
+      verificationTimestamp = now
+      expiryTimestamp = future
+      jurisdiction = "US"
+      riskTier = "STANDARD"
+      providerRef = None
+      observers = []
+
+  submitMustFail outsider do
+    exerciseCmd kycCid RevokeKyc with
+      reason = "UNAUTHORIZED_ATTEMPT"
+      revokeTimestamp = now
+
+-- ---------------------------------------------------------------------------
+-- Sanctions Tests
+-- ---------------------------------------------------------------------------
+
+testSanctionsCreate : Script ()
+testSanctionsCreate = script do
+  screening <- allocateParty "ScreeningAuthority"
+  subject   <- allocateParty "InstitutionA"
+  now       <- getTime
+  let future = addRelTime now (days 90)
+
+  sanCid <- submit screening do
+    createCmd SanctionsAttestation with
+      screeningAuthority = screening
+      subjectParty = subject
+      lei = Some (LEI "529900T8BM49AURSDO55")
+      status = SanctionsClear
+      screeningTimestamp = now
+      expiryTimestamp = future
+      screeningProviderRef = "ACME-SDN-SCREEN-2026-001"
+      providerRef = None
+      observers = []
+
+  sanData <- queryContractId screening sanCid
+  case sanData of
+    None  -> abort "Sanctions attestation not found"
+    Some s -> assertMsg "Status is Clear" (s.status == SanctionsClear)
+
+testSanctionsBlockParty : Script ()
+testSanctionsBlockParty = script do
+  screening <- allocateParty "ScreeningAuthority"
+  subject   <- allocateParty "FlaggedInstitution"
+  now       <- getTime
+  let future = addRelTime now (days 90)
+
+  sanCid <- submit screening do
+    createCmd SanctionsAttestation with
+      screeningAuthority = screening
+      subjectParty = subject
+      lei = None
+      status = SanctionsClear
+      screeningTimestamp = now
+      expiryTimestamp = future
+      screeningProviderRef = "ACME-SDN-SCREEN-2026-002"
+      providerRef = None
+      observers = []
+
+  blockedCid <- submit screening do
+    exerciseCmd sanCid BlockParty with
+      sanctionsListRef = "OFAC-SDN-MATCH-ENTITY-12345"
+      blockTimestamp = now
+
+  blockedData <- queryContractId screening blockedCid
+  case blockedData of
+    None  -> abort "Blocked sanctions attestation not found"
+    Some s ->
+      case s.status of
+        SanctionsBlocked ref -> assertMsg "List ref stored" (ref == "OFAC-SDN-MATCH-ENTITY-12345")
+        _                    -> abort "Expected SanctionsBlocked status"
+
+testSanctionsClearParty : Script ()
+testSanctionsClearParty = script do
+  screening <- allocateParty "ScreeningAuthority"
+  subject   <- allocateParty "ResolvedInstitution"
+  now       <- getTime
+  let future = addRelTime now (days 90)
+
+  sanCid <- submit screening do
+    createCmd SanctionsAttestation with
+      screeningAuthority = screening
+      subjectParty = subject
+      lei = None
+      status = SanctionsFlagged "POTENTIAL_MATCH_PENDING_REVIEW"
+      screeningTimestamp = now
+      expiryTimestamp = future
+      screeningProviderRef = "ACME-SDN-SCREEN-2026-003"
+      providerRef = None
+      observers = []
+
+  clearedCid <- submit screening do
+    exerciseCmd sanCid ClearParty with
+      clearanceRef = "ACME-CLEARANCE-2026-003"
+      clearTimestamp = now
+
+  clearedData <- queryContractId screening clearedCid
+  case clearedData of
+    None  -> abort "Cleared sanctions attestation not found"
+    Some s -> assertMsg "Status is Clear" (s.status == SanctionsClear)
+
+testSanctionsIsClear : Script ()
+testSanctionsIsClear = script do
+  screening <- allocateParty "ScreeningAuthority"
+  subject   <- allocateParty "InstitutionB"
+  now       <- getTime
+  let future = addRelTime now (days 90)
+
+  sanCid <- submit screening do
+    createCmd SanctionsAttestation with
+      screeningAuthority = screening
+      subjectParty = subject
+      lei = None
+      status = SanctionsClear
+      screeningTimestamp = now
+      expiryTimestamp = future
+      screeningProviderRef = "ACME-SDN-SCREEN-2026-004"
+      providerRef = None
+      observers = []
+
+  isClear <- submit screening do
+    exerciseCmd sanCid IsSanctionsClear
+
+  assertMsg "SanctionsClear with future expiry returns true" isClear
+
+testSanctionsNotClearWhenBlocked : Script ()
+testSanctionsNotClearWhenBlocked = script do
+  screening <- allocateParty "ScreeningAuthority"
+  subject   <- allocateParty "BlockedInstitution"
+  now       <- getTime
+  let future = addRelTime now (days 90)
+
+  sanCid <- submit screening do
+    createCmd SanctionsAttestation with
+      screeningAuthority = screening
+      subjectParty = subject
+      lei = None
+      status = SanctionsBlocked "OFAC-SDN"
+      screeningTimestamp = now
+      expiryTimestamp = future
+      screeningProviderRef = "ACME-SDN-SCREEN-2026-005"
+      providerRef = None
+      observers = []
+
+  isClear <- submit screening do
+    exerciseCmd sanCid IsSanctionsClear
+
+  assertMsg "Blocked party is NOT sanctions clear" (not isClear)
+
+-- Negative: cannot clear an already-clear party
+testSanctionsCannotClearAlreadyClear : Script ()
+testSanctionsCannotClearAlreadyClear = script do
+  screening <- allocateParty "ScreeningAuthority"
+  subject   <- allocateParty "AlreadyClearInstitution"
+  now       <- getTime
+  let future = addRelTime now (days 90)
+
+  sanCid <- submit screening do
+    createCmd SanctionsAttestation with
+      screeningAuthority = screening
+      subjectParty = subject
+      lei = None
+      status = SanctionsClear
+      screeningTimestamp = now
+      expiryTimestamp = future
+      screeningProviderRef = "ACME-SDN-SCREEN-2026-006"
+      providerRef = None
+      observers = []
+
+  submitMustFail screening do
+    exerciseCmd sanCid ClearParty with
+      clearanceRef = "ACME-CLEARANCE-2026-006"
+      clearTimestamp = now
+
+-- ---------------------------------------------------------------------------
+-- Eligibility Tests
+-- ---------------------------------------------------------------------------
+
+testEligibilityApprove : Script ()
+testEligibilityApprove = script do
+  manager <- allocateParty "PolicyManager"
+
+  polCid <- submit manager do
+    createCmd EligibilityPolicy with
+      policyManager = manager
+      policyName = "TriPartyCollateralEligibility"
+      allowedJurisdictions = ["US", "GB", "DE", "CH"]
+      allowedAssetClasses = ["GovernmentSecurity", "CorporateBond"]
+      minCreditRating = "BBB-"
+      isActive = True
+
+  decision <- submit manager do
+    exerciseCmd polCid EvaluateEligibility with
+      targetJurisdiction = "US"
+      targetAssetClass = "GovernmentSecurity"
+
+  assertMsg "Valid jurisdiction+asset class is Approved"
+    (decision == Approved)
+
+testEligibilityRejectJurisdiction : Script ()
+testEligibilityRejectJurisdiction = script do
+  manager <- allocateParty "PolicyManager"
+
+  polCid <- submit manager do
+    createCmd EligibilityPolicy with
+      policyManager = manager
+      policyName = "TriPartyCollateralEligibility"
+      allowedJurisdictions = ["US", "GB"]
+      allowedAssetClasses = ["GovernmentSecurity"]
+      minCreditRating = "A"
+      isActive = True
+
+  decision <- submit manager do
+    exerciseCmd polCid EvaluateEligibility with
+      targetJurisdiction = "CN"
+      targetAssetClass = "GovernmentSecurity"
+
+  case decision of
+    Rejected _ -> pure ()
+    Approved   -> abort "Expected Rejected for disallowed jurisdiction"
+
+testEligibilityInactivePolicy : Script ()
+testEligibilityInactivePolicy = script do
+  manager <- allocateParty "PolicyManager"
+
+  polCid <- submit manager do
+    createCmd EligibilityPolicy with
+      policyManager = manager
+      policyName = "InactivePolicy"
+      allowedJurisdictions = ["US"]
+      allowedAssetClasses = ["GovernmentSecurity"]
+      minCreditRating = "BBB-"
+      isActive = False
+
+  decision <- submit manager do
+    exerciseCmd polCid EvaluateEligibility with
+      targetJurisdiction = "US"
+      targetAssetClass = "GovernmentSecurity"
+
+  case decision of
+    Rejected r -> assertMsg "Inactive reason" (r == "Policy is inactive")
+    Approved   -> abort "Inactive policy should not approve"
+
+testEligibilityActivateDeactivate : Script ()
+testEligibilityActivateDeactivate = script do
+  manager <- allocateParty "PolicyManager"
+
+  polCid <- submit manager do
+    createCmd EligibilityPolicy with
+      policyManager = manager
+      policyName = "TogglePolicy"
+      allowedJurisdictions = ["US"]
+      allowedAssetClasses = ["GovernmentSecurity"]
+      minCreditRating = "BBB-"
+      isActive = True
+
+  deactivatedCid <- submit manager do
+    exerciseCmd polCid DeactivatePolicy
+
+  decision <- submit manager do
+    exerciseCmd deactivatedCid EvaluateEligibility with
+      targetJurisdiction = "US"
+      targetAssetClass = "GovernmentSecurity"
+
+  case decision of
+    Rejected _ -> pure ()
+    Approved   -> abort "Deactivated policy should reject"
+
+  reactivatedCid <- submit manager do
+    exerciseCmd deactivatedCid ActivatePolicy
+
+  decision2 <- submit manager do
+    exerciseCmd reactivatedCid EvaluateEligibility with
+      targetJurisdiction = "US"
+      targetAssetClass = "GovernmentSecurity"
+
+  assertMsg "Reactivated policy approves valid request" (decision2 == Approved)
+
+-- ---------------------------------------------------------------------------
+-- TransferRestrictions Tests
+-- ---------------------------------------------------------------------------
+
+testTransferRestrictionCreate : Script ()
+testTransferRestrictionCreate = script do
+  co <- allocateParty "ComplianceOfficer"
+
+  ruleCid <- submit co do
+    createCmd TransferRestrictionRule with
+      complianceOfficer = co
+      isin = ISIN "US912828ZM24"
+      regulatoryCategory = Rule144A
+      holdingPeriodDays = 0
+      whitelistRequired = True
+      lockupExpiry = None
+      isActive = True
+
+  ruleData <- queryContractId co ruleCid
+  case ruleData of
+    None   -> abort "Rule not found"
+    Some r -> do
+      assertMsg "Rule is active"          (r.isActive == True)
+      assertMsg "Category is Rule144A"    (r.regulatoryCategory == Rule144A)
+      assertMsg "Whitelist required"      (r.whitelistRequired == True)
+
+testTransferRestrictionAllowedNoLockup : Script ()
+testTransferRestrictionAllowedNoLockup = script do
+  co <- allocateParty "ComplianceOfficer"
+
+  ruleCid <- submit co do
+    createCmd TransferRestrictionRule with
+      complianceOfficer = co
+      isin = ISIN "US912828ZM24"
+      regulatoryCategory = RetailUnrestricted
+      holdingPeriodDays = 0
+      whitelistRequired = False
+      lockupExpiry = None
+      isActive = True
+
+  allowed <- submit co do
+    exerciseCmd ruleCid IsTransferAllowed
+
+  assertMsg "No lockup → transfer allowed" allowed
+
+testTransferRestrictionNotAllowedWhenInactive : Script ()
+testTransferRestrictionNotAllowedWhenInactive = script do
+  co <- allocateParty "ComplianceOfficer"
+
+  ruleCid <- submit co do
+    createCmd TransferRestrictionRule with
+      complianceOfficer = co
+      isin = ISIN "US912828ZM24"
+      regulatoryCategory = RegD_506c
+      holdingPeriodDays = 180
+      whitelistRequired = True
+      lockupExpiry = None
+      isActive = False
+
+  allowed <- submit co do
+    exerciseCmd ruleCid IsTransferAllowed
+
+  assertMsg "Inactive rule → transfer not allowed" (not allowed)
+
+testTransferRestrictionActivateDeactivate : Script ()
+testTransferRestrictionActivateDeactivate = script do
+  co <- allocateParty "ComplianceOfficer"
+
+  ruleCid <- submit co do
+    createCmd TransferRestrictionRule with
+      complianceOfficer = co
+      isin = ISIN "US912828ZM24"
+      regulatoryCategory = RegS
+      holdingPeriodDays = 40
+      whitelistRequired = False
+      lockupExpiry = None
+      isActive = True
+
+  deactivatedCid <- submit co do
+    exerciseCmd ruleCid DeactivateRule
+
+  deactData <- queryContractId co deactivatedCid
+  case deactData of
+    None  -> abort "Deactivated rule not found"
+    Some r -> assertMsg "Rule is inactive" (not r.isActive)
+
+  reactivatedCid <- submit co do
+    exerciseCmd deactivatedCid ActivateRule
+
+  reactData <- queryContractId co reactivatedCid
+  case reactData of
+    None  -> abort "Reactivated rule not found"
+    Some r -> assertMsg "Rule is active again" r.isActive
+
+-- Negative: cannot deactivate an already-inactive rule
+testCannotDeactivateInactiveRule : Script ()
+testCannotDeactivateInactiveRule = script do
+  co <- allocateParty "ComplianceOfficer"
+
+  ruleCid <- submit co do
+    createCmd TransferRestrictionRule with
+      complianceOfficer = co
+      isin = ISIN "US912828ZM24"
+      regulatoryCategory = Rule144A
+      holdingPeriodDays = 0
+      whitelistRequired = False
+      lockupExpiry = None
+      isActive = False
+
+  submitMustFail co do
+    exerciseCmd ruleCid DeactivateRule
+
+-- ---------------------------------------------------------------------------
+-- OwnershipRestrictions Tests
+-- ---------------------------------------------------------------------------
+
+testOwnershipRestrictionCreate : Script ()
+testOwnershipRestrictionCreate = script do
+  regulator <- allocateParty "Regulator"
+
+  restrictionCid <- submit regulator do
+    createCmd OwnershipRestriction with
+      regulator = regulator
+      isin = ISIN "US912828ZM24"
+      maxOwnershipPercentage = 5.0
+      maxHoldingQuantity = 50000000.0
+      disallowedJurisdictions = ["IR", "KP"]
+      isActive = True
+
+  data_ <- queryContractId regulator restrictionCid
+  case data_ of
+    None  -> abort "Restriction not found"
+    Some r -> do
+      assertMsg "Max % set"     (r.maxOwnershipPercentage == 5.0)
+      assertMsg "Max qty set"   (r.maxHoldingQuantity == 50000000.0)
+      assertMsg "Jurisdictions" (r.disallowedJurisdictions == ["IR", "KP"])
+
+testCheckOwnershipLimitApproved : Script ()
+testCheckOwnershipLimitApproved = script do
+  regulator <- allocateParty "Regulator"
+
+  restrictionCid <- submit regulator do
+    createCmd OwnershipRestriction with
+      regulator = regulator
+      isin = ISIN "US912828ZM24"
+      maxOwnershipPercentage = 5.0
+      maxHoldingQuantity = 50000000.0
+      disallowedJurisdictions = ["IR", "KP"]
+      isActive = True
+
+  decision <- submit regulator do
+    exerciseCmd restrictionCid CheckOwnershipLimit with
+      proposedQuantity = 10000000.0
+      proposedPercentage = 2.0
+      holderJurisdiction = "US"
+
+  assertMsg "Within limits → Approved" (decision == Approved)
+
+testCheckOwnershipLimitExceedsQuantity : Script ()
+testCheckOwnershipLimitExceedsQuantity = script do
+  regulator <- allocateParty "Regulator"
+
+  restrictionCid <- submit regulator do
+    createCmd OwnershipRestriction with
+      regulator = regulator
+      isin = ISIN "US912828ZM24"
+      maxOwnershipPercentage = 5.0
+      maxHoldingQuantity = 50000000.0
+      disallowedJurisdictions = []
+      isActive = True
+
+  decision <- submit regulator do
+    exerciseCmd restrictionCid CheckOwnershipLimit with
+      proposedQuantity = 60000000.0
+      proposedPercentage = 2.0
+      holderJurisdiction = "US"
+
+  case decision of
+    Rejected _ -> pure ()
+    Approved   -> abort "Quantity exceeds max → should be Rejected"
+
+testCheckOwnershipLimitDisallowedJurisdiction : Script ()
+testCheckOwnershipLimitDisallowedJurisdiction = script do
+  regulator <- allocateParty "Regulator"
+
+  restrictionCid <- submit regulator do
+    createCmd OwnershipRestriction with
+      regulator = regulator
+      isin = ISIN "US912828ZM24"
+      maxOwnershipPercentage = 5.0
+      maxHoldingQuantity = 50000000.0
+      disallowedJurisdictions = ["CN", "RU"]
+      isActive = True
+
+  decision <- submit regulator do
+    exerciseCmd restrictionCid CheckOwnershipLimit with
+      proposedQuantity = 1000000.0
+      proposedPercentage = 0.1
+      holderJurisdiction = "CN"
+
+  case decision of
+    Rejected _ -> pure ()
+    Approved   -> abort "Disallowed jurisdiction → should be Rejected"
+
+-- ---------------------------------------------------------------------------
+-- RegulatoryReporting Tests
+-- ---------------------------------------------------------------------------
+
+testRegulatoryReportCreate : Script ()
+testRegulatoryReportCreate = script do
+  reporter  <- allocateParty "DealerBankA"
+  regulator <- allocateParty "SECRegulator"
+  now       <- getTime
+
+  reportCid <- submit reporter do
+    createCmd RegulatoryReportRecord with
+      reportingParty = reporter
+      regulator = regulator
+      regime = SEC_CAT
+      correlationId = CorrelationId "CORR-CAT-2026-001"
+      reportPayload = "{\"tradeId\":\"TRD-001\",\"assetClass\":\"UST\",\"notional\":5000000}"
+      submissionTimestamp = now
+      isAcknowledged = False
+      isRejected = False
+      rejectionReason = None
+      amendmentCount = 0
+
+  reportData <- queryContractId reporter reportCid
+  case reportData of
+    None  -> abort "Report not found"
+    Some r -> do
+      assertMsg "Not acknowledged" (not r.isAcknowledged)
+      assertMsg "Not rejected"     (not r.isRejected)
+      assertMsg "Amendment count"  (r.amendmentCount == 0)
+      assertMsg "Regime is SEC_CAT" (r.regime == SEC_CAT)
+
+testRegulatoryReportAcknowledge : Script ()
+testRegulatoryReportAcknowledge = script do
+  reporter  <- allocateParty "DealerBankA"
+  regulator <- allocateParty "SECRegulator"
+  now       <- getTime
+
+  reportCid <- submit reporter do
+    createCmd RegulatoryReportRecord with
+      reportingParty = reporter
+      regulator = regulator
+      regime = EMIR_Refit
+      correlationId = CorrelationId "CORR-EMIR-2026-001"
+      reportPayload = "{\"swap\":\"IRS-USD-5Y\"}"
+      submissionTimestamp = now
+      isAcknowledged = False
+      isRejected = False
+      rejectionReason = None
+      amendmentCount = 0
+
+  ackedCid <- submit regulator do
+    exerciseCmd reportCid AcknowledgeReport
+
+  ackedData <- queryContractId reporter ackedCid
+  case ackedData of
+    None  -> abort "Acknowledged report not found"
+    Some r -> assertMsg "Report acknowledged" r.isAcknowledged
+
+testRegulatoryReportRejectAndAmend : Script ()
+testRegulatoryReportRejectAndAmend = script do
+  reporter  <- allocateParty "DealerBankA"
+  regulator <- allocateParty "MiFIRRegulator"
+  now       <- getTime
+
+  reportCid <- submit reporter do
+    createCmd RegulatoryReportRecord with
+      reportingParty = reporter
+      regulator = regulator
+      regime = MiFIR
+      correlationId = CorrelationId "CORR-MIFIR-2026-001"
+      reportPayload = "{\"trade\":\"INCOMPLETE_PAYLOAD\"}"
+      submissionTimestamp = now
+      isAcknowledged = False
+      isRejected = False
+      rejectionReason = None
+      amendmentCount = 0
+
+  -- Regulator rejects the report
+  rejectedCid <- submit regulator do
+    exerciseCmd reportCid RejectReport with
+      reason = "MISSING_REQUIRED_FIELD_LEI"
+
+  rejectedData <- queryContractId reporter rejectedCid
+  case rejectedData of
+    None  -> abort "Rejected report not found"
+    Some r -> do
+      assertMsg "Is rejected"        r.isRejected
+      assertMsg "Rejection reason"   (r.rejectionReason == Some "MISSING_REQUIRED_FIELD_LEI")
+      assertMsg "Not acknowledged"   (not r.isAcknowledged)
+
+  -- Reporter submits an amendment
+  amendedCid <- submit reporter do
+    exerciseCmd rejectedCid SubmitAmendment with
+      amendedPayload = "{\"trade\":\"COMPLETE\",\"lei\":\"5493001KJTIIGC8Y1R12\"}"
+      amendmentTimestamp = now
+
+  amendedData <- queryContractId reporter amendedCid
+  case amendedData of
+    None  -> abort "Amended report not found"
+    Some r -> do
+      assertMsg "Amendment count incremented" (r.amendmentCount == 1)
+      assertMsg "Rejection cleared"           (not r.isRejected)
+      assertMsg "Rejection reason cleared"    (r.rejectionReason == None)
+      assertMsg "Not acknowledged yet"        (not r.isAcknowledged)
+
+-- Negative: cannot acknowledge a rejected report
+testCannotAcknowledgeRejectedReport : Script ()
+testCannotAcknowledgeRejectedReport = script do
+  reporter  <- allocateParty "DealerBankA"
+  regulator <- allocateParty "MASRegulator"
+  now       <- getTime
+
+  reportCid <- submit reporter do
+    createCmd RegulatoryReportRecord with
+      reportingParty = reporter
+      regulator = regulator
+      regime = MAS_TradeReporting
+      correlationId = CorrelationId "CORR-MAS-2026-001"
+      reportPayload = "{\"trade\":\"BAD\"}"
+      submissionTimestamp = now
+      isAcknowledged = False
+      isRejected = True
+      rejectionReason = Some "VALIDATION_FAILED"
+      amendmentCount = 0
+
+  submitMustFail regulator do
+    exerciseCmd reportCid AcknowledgeReport
+
+-- ---------------------------------------------------------------------------
+-- Entry Point
+-- ---------------------------------------------------------------------------
+
+runComplianceTests : Script ()
+runComplianceTests = script do
+  -- KYC
+  testKycCreate
+  testKycUpdateToVerified
+  testKycRevokeAttestation
+  testKycIsValid
+  testKycIsValidWhenPending
+  testKycAddObserver
+  testKycNonAuthorityCannotRevoke
+  -- Sanctions
+  testSanctionsCreate
+  testSanctionsBlockParty
+  testSanctionsClearParty
+  testSanctionsIsClear
+  testSanctionsNotClearWhenBlocked
+  testSanctionsCannotClearAlreadyClear
+  -- Eligibility
+  testEligibilityApprove
+  testEligibilityRejectJurisdiction
+  testEligibilityInactivePolicy
+  testEligibilityActivateDeactivate
+  -- TransferRestrictions
+  testTransferRestrictionCreate
+  testTransferRestrictionAllowedNoLockup
+  testTransferRestrictionNotAllowedWhenInactive
+  testTransferRestrictionActivateDeactivate
+  testCannotDeactivateInactiveRule
+  -- OwnershipRestrictions
+  testOwnershipRestrictionCreate
+  testCheckOwnershipLimitApproved
+  testCheckOwnershipLimitExceedsQuantity
+  testCheckOwnershipLimitDisallowedJurisdiction
+  -- RegulatoryReporting
+  testRegulatoryReportCreate
+  testRegulatoryReportAcknowledge
+  testRegulatoryReportRejectAndAmend
+  testCannotAcknowledgeRejectedReport

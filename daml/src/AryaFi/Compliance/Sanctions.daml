@@ -1,40 +1,122 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Institutional sanctions screening attestation for AryaFi participants.
+-- SanctionsAttestation records the outcome of an OFAC/EU/UN sanctions screening
+-- performed by an authorized screening authority against a subject institution.
+--
+-- Authorization model:
+--   - screeningAuthority: issues, updates, blocks, and clears attestations.
+--   - subjectParty: read-only observer — cannot control this contract.
+--
+-- Key: (screeningAuthority, subjectParty) — one attestation per authority per subject.
 module AryaFi.Compliance.Sanctions where
 
-import AryaFi.Common.Identifiers (LEI)
+import AryaFi.Common.Identifiers (LEI, ExternalRef)
+import AryaFi.Common.Errors (require, requireNonEmpty)
+
+-- ---------------------------------------------------------------------------
+-- Sanctions Status
+-- ---------------------------------------------------------------------------
 
 -- | Institutional sanctions clearance status.
 data SanctionsStatus
   = SanctionsClear
+    -- ^ Subject passed all applicable screening lists (OFAC SDN, EU, UN).
   | SanctionsFlagged Text
+    -- ^ Subject was flagged for manual review. Text contains the screening list or alert code.
   | SanctionsBlocked Text
+    -- ^ Subject is confirmed on a sanctions list and is blocked from all transactions.
   deriving (Eq, Show)
+
+-- ---------------------------------------------------------------------------
+-- SanctionsAttestation Template
+-- ---------------------------------------------------------------------------
 
 -- | Sanctions screening attestation issued by an authorized screening authority.
 template SanctionsAttestation
   with
     screeningAuthority : Party
+    -- ^ Authorized sanctions screening authority.
     subjectParty : Party
+    -- ^ Institution being screened (observer only — cannot control this contract).
     lei : Optional LEI
+    -- ^ ISO 17442 Legal Entity Identifier of the subject, if available.
     status : SanctionsStatus
+    -- ^ Current sanctions screening status.
     screeningTimestamp : Time
+    -- ^ Timestamp of the most recent screening run.
     expiryTimestamp : Time
+    -- ^ Timestamp after which re-screening is required.
     screeningProviderRef : Text
+    -- ^ Reference to the screening provider system (e.g. "ACME-AML-SCREEN-REF").
+    providerRef : Optional ExternalRef
+    -- ^ Typed external reference to the screening provider record.
+    observers : [Party]
+    -- ^ Additional observers (e.g. custodians, brokers, regulators).
   where
     signatory screeningAuthority
-    observer subjectParty
+    observer subjectParty :: observers
 
     key (screeningAuthority, subjectParty) : (Party, Party)
     maintainer key._1
 
+    -- | Update the sanctions status and extend validity.
     choice UpdateSanctionsStatus : ContractId SanctionsAttestation
       with
         newStatus : SanctionsStatus
         newExpiry : Time
+        newTimestamp : Time
       controller screeningAuthority
       do
         create this with
           status = newStatus
           expiryTimestamp = newExpiry
+          screeningTimestamp = newTimestamp
+
+    -- | Block a party following a confirmed sanctions hit.
+    -- Sets status to SanctionsBlocked with the mandatory sanctions list reference.
+    choice BlockParty : ContractId SanctionsAttestation
+      with
+        sanctionsListRef : Text
+        blockTimestamp : Time
+      controller screeningAuthority
+      do
+        requireNonEmpty sanctionsListRef "sanctionsListRef"
+        create this with
+          status = SanctionsBlocked sanctionsListRef
+          screeningTimestamp = blockTimestamp
+
+    -- | Clear a previously flagged or blocked party following compliance resolution.
+    choice ClearParty : ContractId SanctionsAttestation
+      with
+        clearanceRef : Text
+        clearTimestamp : Time
+      controller screeningAuthority
+      do
+        requireNonEmpty clearanceRef "clearanceRef"
+        require
+          (case status of { SanctionsClear -> False; _ -> True })
+          "Party is already clear"
+        create this with
+          status = SanctionsClear
+          screeningTimestamp = clearTimestamp
+          screeningProviderRef = clearanceRef
+
+    -- | Add an observer (e.g. custodian, prime broker, regulator).
+    choice AddSanctionsObserver : ContractId SanctionsAttestation
+      with
+        newObserver : Party
+      controller screeningAuthority
+      do
+        require (newObserver `notElem` observers) "Party is already an observer"
+        create this with observers = newObserver :: observers
+
+    -- | Nonconsuming query: is this party currently sanctions-clear and within validity?
+    -- Returns True only when status is SanctionsClear and attestation has not expired.
+    nonconsuming choice IsSanctionsClear : Bool
+      controller screeningAuthority
+      do
+        now <- getTime
+        pure (status == SanctionsClear && now < expiryTimestamp)
+
