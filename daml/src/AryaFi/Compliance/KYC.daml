@@ -1,42 +1,129 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Institutional KYC verification attestation for AryaFi platform participants.
+-- KycAttestation is issued by an authorized KYC authority on behalf of a subject institution.
+-- No personally identifiable information (PII) is stored on-chain; this contract
+-- captures only the verification outcome, risk tier, and expiry metadata required
+-- for compliance gating in finance contracts.
+--
+-- Authorization model:
+--   - authority: issues, updates, and revokes attestations.
+--   - subjectParty: read-only observer — cannot control this contract.
+--
+-- Key model: (authority, subjectParty) — one attestation per authority per subject.
+-- Maintainer: authority (issuer of the attestation).
 module AryaFi.Compliance.KYC where
 
-import AryaFi.Common.Identifiers (LEI)
+import AryaFi.Common.Identifiers (LEI, ExternalRef)
+import AryaFi.Common.Errors (require, requireNonEmpty)
 
--- | Institutional KYC verification status.
+-- ---------------------------------------------------------------------------
+-- KYC Status
+-- ---------------------------------------------------------------------------
+
+-- | KYC verification status lifecycle.
+-- Transitions: KycPending → KycVerified | KycRejected
+--              KycVerified → KycExpired (time-based, detected via IsKycValid)
+--              Any non-pending → KycRejected (via RevokeKyc)
 data KycStatus
   = KycPending
+    -- ^ Subject has been onboarded but verification has not yet completed.
   | KycVerified
+    -- ^ Subject has passed full KYC/AML verification within the expiry window.
   | KycRejected Text
+    -- ^ Subject failed verification. Text contains reason code (e.g. "HIGH_RISK_COUNTRY").
   | KycExpired
+    -- ^ Attestation has passed its expiry timestamp and must be renewed.
   deriving (Eq, Show)
 
+-- ---------------------------------------------------------------------------
+-- KycAttestation Template
+-- ---------------------------------------------------------------------------
+
 -- | Institutional KYC Attestation holding verified status without personal PII.
+--
+-- Dual-party model: authority is signatory; subjectParty is observer only.
+-- Additional observers can be granted visibility (e.g. custodians, clearing members).
+--
+-- The (authority, subjectParty) key prevents duplicate attestations and allows
+-- counterparties to fetch-by-key when gating compliance checks.
 template KycAttestation
   with
     authority : Party
+    -- ^ KYC authority (e.g. compliance officer, regulated KYC service provider).
     subjectParty : Party
+    -- ^ Institution being attested (observer only — cannot control this contract).
     lei : Optional LEI
+    -- ^ ISO 17442 Legal Entity Identifier of the subject, if registered.
     status : KycStatus
+    -- ^ Current KYC verification status.
     verificationTimestamp : Time
+    -- ^ Timestamp of the most recent status change.
     expiryTimestamp : Time
+    -- ^ Timestamp after which this attestation is considered expired.
     jurisdiction : Text
+    -- ^ ISO 3166-1 alpha-2 jurisdiction code (e.g. "US", "GB", "SG").
     riskTier : Text
+    -- ^ Risk classification of the subject (e.g. "STANDARD", "ENHANCED_DUE_DILIGENCE").
+    providerRef : Optional ExternalRef
+    -- ^ Reference to the external KYC/AML provider's record for this subject.
+    observers : [Party]
+    -- ^ Additional observers (e.g. custodians, clearing members, regulators).
   where
     signatory authority
-    observer subjectParty
+    observer subjectParty :: observers
 
     key (authority, subjectParty) : (Party, Party)
     maintainer key._1
 
+    -- | Update the KYC status and extend the validity window.
     choice UpdateKycStatus : ContractId KycAttestation
       with
         newStatus : KycStatus
         newExpiry : Time
+        newTimestamp : Time
       controller authority
       do
         create this with
           status = newStatus
           expiryTimestamp = newExpiry
+          verificationTimestamp = newTimestamp
+
+    -- | Revoke this KYC attestation (e.g. AML alert, watchlist match, data quality failure).
+    -- Sets status to KycRejected with a mandatory reason code.
+    choice RevokeKyc : ContractId KycAttestation
+      with
+        reason : Text
+        revokeTimestamp : Time
+      controller authority
+      do
+        requireNonEmpty reason "revocation reason"
+        create this with
+          status = KycRejected reason
+          verificationTimestamp = revokeTimestamp
+
+    -- | Link an external KYC provider reference to this attestation.
+    choice UpdateProviderRef : ContractId KycAttestation
+      with
+        ref : ExternalRef
+      controller authority
+      do
+        create this with providerRef = Some ref
+
+    -- | Grant read-only visibility to an additional party (e.g. custodian, clearing member).
+    choice AddKycObserver : ContractId KycAttestation
+      with
+        newObserver : Party
+      controller authority
+      do
+        require (newObserver `notElem` observers) "Party is already an observer"
+        create this with observers = newObserver :: observers
+
+    -- | Nonconsuming query: is this attestation currently valid?
+    -- Returns True only when status is KycVerified and ledger time has not passed expiryTimestamp.
+    nonconsuming choice IsKycValid : Bool
+      controller authority
+      do
+        now <- getTime
+        pure (status == KycVerified && now < expiryTimestamp)
