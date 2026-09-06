@@ -1,32 +1,102 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Ownership concentration restrictions for regulated securities.
+-- OwnershipRestriction enforces maximum holding caps, quantity limits,
+-- and jurisdiction exclusions to comply with regulatory ownership thresholds.
+-- The nonconsuming CheckOwnershipLimit choice enables compliance gating in
+-- transfer workflows without consuming the rule contract.
 module AryaFi.Compliance.OwnershipRestrictions where
 
 import AryaFi.Common.Types (Amount)
 import AryaFi.Common.Identifiers (ISIN)
+import AryaFi.Common.Errors (require, requireNonEmpty)
+import AryaFi.Common.Policies (PolicyDecision(..))
 
 -- | Maximum holding cap and investor concentration restrictions.
 template OwnershipRestriction
   with
     regulator : Party
+    -- ^ Regulatory authority enforcing this restriction.
     isin : ISIN
+    -- ^ ISIN of the security subject to ownership restrictions.
     maxOwnershipPercentage : Decimal
+    -- ^ Maximum ownership as a decimal percentage (e.g. 5.0 = 5%). 0.0 = no limit.
     maxHoldingQuantity : Amount
+    -- ^ Maximum absolute quantity allowed per holder. 0.0 = no limit.
     disallowedJurisdictions : [Text]
+    -- ^ ISO country codes prohibited from holding this security.
     isActive : Bool
+    -- ^ Whether this restriction is currently enforceable.
   where
     signatory regulator
 
     key (regulator, isin) : (Party, ISIN)
     maintainer key._1
 
+    -- | Update the ownership caps.
     choice UpdateCaps : ContractId OwnershipRestriction
       with
         newMaxPercentage : Decimal
         newMaxQuantity : Amount
       controller regulator
       do
+        require (newMaxPercentage >= 0.0) "maxOwnershipPercentage must be non-negative"
+        require (newMaxQuantity >= 0.0) "maxHoldingQuantity must be non-negative"
         create this with
           maxOwnershipPercentage = newMaxPercentage
           maxHoldingQuantity = newMaxQuantity
+
+    -- | Add a jurisdiction to the disallowed list.
+    choice AddDisallowedJurisdiction : ContractId OwnershipRestriction
+      with
+        jurisdiction : Text
+      controller regulator
+      do
+        requireNonEmpty jurisdiction "jurisdiction"
+        require (jurisdiction `notElem` disallowedJurisdictions)
+          ("Jurisdiction already disallowed: " <> jurisdiction)
+        create this with
+          disallowedJurisdictions = jurisdiction :: disallowedJurisdictions
+
+    -- | Remove a jurisdiction from the disallowed list.
+    choice RemoveDisallowedJurisdiction : ContractId OwnershipRestriction
+      with
+        jurisdiction : Text
+      controller regulator
+      do
+        require (jurisdiction `elem` disallowedJurisdictions)
+          ("Jurisdiction not in disallowed list: " <> jurisdiction)
+        create this with
+          disallowedJurisdictions = filter (/= jurisdiction) disallowedJurisdictions
+
+    -- | Activate or deactivate this restriction.
+    choice SetRestrictionActive : ContractId OwnershipRestriction
+      with
+        active : Bool
+      controller regulator
+      do
+        create this with isActive = active
+
+    -- | Nonconsuming query: does the proposed holding violate this restriction?
+    -- Returns Approved if within all limits, Rejected with reason if any limit is exceeded.
+    nonconsuming choice CheckOwnershipLimit : PolicyDecision
+      with
+        proposedQuantity : Amount
+        proposedPercentage : Decimal
+        holderJurisdiction : Text
+      controller regulator
+      do
+        if not isActive then
+          pure Approved
+        else if holderJurisdiction `elem` disallowedJurisdictions then
+          pure (Rejected ("Jurisdiction not permitted to hold this security: " <> holderJurisdiction))
+        else if maxHoldingQuantity > 0.0 && proposedQuantity > maxHoldingQuantity then
+          pure (Rejected ("Proposed quantity " <> show proposedQuantity
+                         <> " exceeds maximum allowed " <> show maxHoldingQuantity))
+        else if maxOwnershipPercentage > 0.0 && proposedPercentage > maxOwnershipPercentage then
+          pure (Rejected ("Proposed ownership " <> show proposedPercentage
+                         <> "% exceeds maximum " <> show maxOwnershipPercentage <> "%"))
+        else
+          pure Approved
+
