@@ -1,16 +1,103 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Reverse Repurchase Agreement (Reverse Repo) buyer position management.
+--
+-- Represents the buyer / cash lender side of a repurchase agreement:
+--   - Tracks cash lent and collateral encumbered
+--   - Mark-to-market valuation of collateral securities
+--   - Calculation of margin deficit against contractual haircut
+--   - Bilateral transparency with tri-party custodian supervision
 module AryaFi.Contracts.ReverseRepo where
 
-import AryaFi.Contracts.Repo (RepoAgreement)
+import AryaFi.Common.Types (Amount, Currency, Rate, LifecycleStatus(..))
+import AryaFi.Common.Identifiers (ISIN, ReferenceId, CorrelationId)
+import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
+import qualified DA.List as List
 
--- | Reverse Repo wrapper / counterparty composition interface.
+-- | Buyer-side Reverse Repo Position.
 template ReverseRepoPosition
   with
+    positionId : ReferenceId
+    -- ^ Unique identifier for this reverse repo book entry.
     buyer : Party
+    -- ^ Cash lender / Collateral receiver (position holder).
     seller : Party
-    repoContractId : ContractId RepoAgreement
+    -- ^ Cash borrower / Collateral provider.
+    custodian : Party
+    -- ^ Custodian safekeeping the repo securities.
+    repoId : ReferenceId
+    -- ^ Underlying Repo agreement trade identifier.
+    isin : ISIN
+    -- ^ ISIN of the underlying collateral securities.
+    collateralQuantity : Amount
+    -- ^ Quantity of collateral held.
+    currency : Currency
+    -- ^ Denominated currency.
+    purchasePrice : Amount
+    -- ^ Cash principal lent.
+    repurchasePrice : Amount
+    -- ^ Total cash receivable upon maturity.
+    repoRate : Rate
+    -- ^ Agreed repo rate.
+    startDate : Time
+    -- ^ Start date.
+    endDate : Time
+    -- ^ Repurchase date.
+    currentMarketValue : Amount
+    -- ^ Latest mark-to-market valuation of collateral securities.
+    status : LifecycleStatus
+    -- ^ Position status (Active, Matured, Closed).
+    correlationId : CorrelationId
+    -- ^ Master correlation ID.
+    observers : [Party]
+    -- ^ Observers.
   where
     signatory buyer
-    observer seller
+    observer (List.dedup (seller :: custodian :: observers))
+
+    ensure
+      purchasePrice > 0.0 &&
+      collateralQuantity > 0.0 &&
+      currentMarketValue >= 0.0 &&
+      positionId /= ""
+
+    -- | Buyer or valuation agent updates mark-to-market valuation.
+    choice UpdateMarkToMarket : ContractId ReverseRepoPosition
+      with
+        newMarketValue : Amount
+      controller buyer
+      do
+        requirePositive newMarketValue "Market value must be positive"
+        create this with
+          currentMarketValue = newMarketValue
+
+    -- | Close the position upon final repurchase settlement.
+    choice CloseReverseRepo : ContractId ReverseRepoPosition
+      controller buyer
+      do
+        create this with
+          status = Closed
+
+    -- | Add observer to reverse repo position.
+    choice AddReverseRepoObserver : ContractId ReverseRepoPosition
+      with
+        newObserver : Party
+      controller buyer
+      do
+        require (not (newObserver `elem` observers)) "Observer already registered"
+        create this with
+          observers = newObserver :: observers
+
+    -- | Nonconsuming query to calculate margin deficit given a minimum required haircut ratio.
+    nonconsuming choice CalculateMarginDeficit : Amount
+      with
+        requiredMarginRatio : Rate
+      controller buyer
+      do
+        let requiredCollateralValue = purchasePrice * (1.0 + requiredMarginRatio)
+        let deficit = if currentMarketValue < requiredCollateralValue
+                        then requiredCollateralValue - currentMarketValue
+                        else 0.0
+        return deficit
+

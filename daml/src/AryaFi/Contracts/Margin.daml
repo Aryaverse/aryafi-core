@@ -1,40 +1,172 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Institutional Margin Management Contract for AryaFi core.
+--
+-- Supports Initial Margin (IM) and Variation Margin (VM) workflows:
+--   - Cash margin settlement or AssetPledge collateral perfection
+--   - Formal dispute arbitration and agreed adjustment
+--   - Deadline enforcement and margin default declaration
+--   - Tri-party custodian supervision
 module AryaFi.Contracts.Margin where
 
 import AryaFi.Common.Types (Amount, Currency)
-import AryaFi.Common.Identifiers (ReferenceId)
+import AryaFi.Common.Identifiers (ReferenceId, CorrelationId)
+import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
+import qualified DA.List as List
 
--- | Margin call status.
+-- | Classification of margin requirement.
+data MarginType
+  = InitialMargin
+    -- ^ Upfront independent collateral to buffer against potential future exposure.
+  | VariationMargin
+    -- ^ Mark-to-market margin call to cover current net counterparty exposure.
+  deriving (Eq, Show)
+
+-- | Mode by which a margin call was fulfilled.
+data MarginFulfillmentType
+  = CashMargin ReferenceId
+    -- ^ Fulfilled via cash settlement reference.
+  | CollateralPledgeMargin ReferenceId
+    -- ^ Fulfilled via AssetPledge contract reference.
+  deriving (Eq, Show)
+
+-- | Lifecycle states of a margin call.
 data MarginCallStatus
-  = MarginCalled
-  | MarginMet
-  | MarginDisputed
-  | MarginDefaulted
+  = MarginCallIssued
+    -- ^ Margin call has been served to payer; awaiting fulfillment or dispute.
+  | MarginCallSatisfied MarginFulfillmentType
+    -- ^ Margin requirement satisfied via cash or pledged securities.
+  | MarginCallDisputed Text
+    -- ^ Payer has formally disputed the margin calculation with reason.
+  | MarginCallDefaulted Text
+    -- ^ Margin requirement missed past deadline; caller declared default.
+  | MarginCallCancelled
+    -- ^ Margin call cancelled by caller (e.g. market rebounded).
   deriving (Eq, Show)
 
 -- | Institutional Variation / Initial Margin Call Template.
 template MarginCall
   with
     marginCallId : ReferenceId
+    -- ^ Unique identifier for this margin call.
     caller : Party
+    -- ^ Beneficiary party demanding margin (e.g. buyer, lender, CCP).
     payer : Party
+    -- ^ Obligor party required to post margin (e.g. seller, borrower).
+    custodian : Party
+    -- ^ Custodian safekeeping the margin account / collateral.
+    marginType : MarginType
+    -- ^ Initial or Variation margin.
+    relatedAgreementRef : ReferenceId
+    -- ^ Underlying contract reference (e.g. Repo trade ID or Loan ID).
     currency : Currency
+    -- ^ Required margin currency (e.g. "USD").
     requiredAmount : Amount
+    -- ^ Net monetary amount demanded.
     deadline : Time
+    -- ^ Settlement cutoff time for margin posting.
     status : MarginCallStatus
+    -- ^ Current margin call status.
+    correlationId : CorrelationId
+    -- ^ Cross-system correlation identifier.
+    observers : [Party]
+    -- ^ Observers (e.g. tri-party valuation agents, regulators).
   where
     signatory caller, payer
+    observer (List.dedup (custodian :: observers))
 
-    choice FulfillMarginCall : ContractId MarginCall
+    ensure
+      requiredAmount > 0.0 &&
+      marginCallId /= ""
+
+    -- | Payer satisfies the margin call via cash transfer.
+    choice SatisfyWithCash : ContractId MarginCall
+      with
+        paymentRef : ReferenceId
       controller payer
       do
-        create this with status = MarginMet
+        require (status == MarginCallIssued || isDisputed status)
+          "Margin call must be Issued or Disputed to satisfy"
+        requireNonEmpty paymentRef "Payment reference must not be empty"
+        create this with
+          status = MarginCallSatisfied (CashMargin paymentRef)
 
+    -- | Payer satisfies the margin call via an AssetPledge collateral perfection.
+    choice SatisfyWithPledge : ContractId MarginCall
+      with
+        pledgeRef : ReferenceId
+      controller payer
+      do
+        require (status == MarginCallIssued || isDisputed status)
+          "Margin call must be Issued or Disputed to satisfy"
+        requireNonEmpty pledgeRef "Pledge reference must not be empty"
+        create this with
+          status = MarginCallSatisfied (CollateralPledgeMargin pledgeRef)
+
+    -- | Payer formally disputes the margin call calculation within deadline.
     choice DisputeMarginCall : ContractId MarginCall
       with
         disputeReason : Text
       controller payer
       do
-        create this with status = MarginDisputed
+        require (status == MarginCallIssued) "Only newly issued margin calls can be disputed"
+        requireNonEmpty disputeReason "Dispute reason must be provided"
+        create this with
+          status = MarginCallDisputed disputeReason
+
+    -- | Counterparties agree on resolved margin requirement following dispute.
+    choice ResolveMarginDispute : ContractId MarginCall
+      with
+        adjustedAmount : Amount
+      controller caller, payer
+      do
+        require (isDisputed status) "Margin call must be in Disputed status to resolve"
+        requirePositive adjustedAmount "Adjusted amount must be positive"
+        create this with
+          requiredAmount = adjustedAmount
+          status = MarginCallIssued
+
+    -- | Caller declares default if margin is unpaid past deadline.
+    choice DeclareMarginDefault : ContractId MarginCall
+      with
+        reason : Text
+      controller caller
+      do
+        require (status == MarginCallIssued || isDisputed status)
+          "Cannot declare default on already satisfied or cancelled call"
+        requireNonEmpty reason "Default reason must be specified"
+        create this with
+          status = MarginCallDefaulted reason
+
+    -- | Caller cancels the margin call prior to fulfillment.
+    choice CancelMarginCall : ContractId MarginCall
+      controller caller
+      do
+        require (status == MarginCallIssued) "Can only cancel newly issued margin calls"
+        create this with
+          status = MarginCallCancelled
+
+    -- | Add an authorized observer (e.g. tri-party agent).
+    choice AddMarginObserver : ContractId MarginCall
+      with
+        newObserver : Party
+      controller caller
+      do
+        require (not (newObserver `elem` observers)) "Observer already registered"
+        create this with
+          observers = newObserver :: observers
+
+    -- | Nonconsuming query to check if the margin call has been met.
+    nonconsuming choice IsMarginSatisfied : Bool
+      controller caller
+      do
+        case status of
+          MarginCallSatisfied _ -> return True
+          _ -> return False
+
+-- | Helper to test whether status is disputed.
+isDisputed : MarginCallStatus -> Bool
+isDisputed (MarginCallDisputed _) = True
+isDisputed _ = False
+
