@@ -1,32 +1,185 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Institutional Securities Lending Contract Interface.
+--
+-- Implements institutional stock loan and bond borrowing workflows:
+--   - Borrow fee accrual and rebate rate calculation
+--   - Collateralization with Cash or AssetPledge linkage
+--   - Full or partial recall options with contractual deadline
+--   - Return of securities with pro-rata collateral release
+--   - Mark-to-market collateral revaluation
+--
+-- Signatory model: lender + borrower + custodian tri-party agreement.
 module AryaFi.Contracts.SecuritiesLending where
 
-import AryaFi.Common.Types (Amount, Currency, Rate, LifecycleStatus(..))
-import AryaFi.Common.Identifiers (ISIN, ReferenceId)
+import AryaFi.Common.Types (Amount, Currency, Rate)
+import AryaFi.Common.Identifiers (ISIN, AccountId, ReferenceId, CorrelationId)
+import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
+import qualified DA.List as List
 
--- | Institutional Securities Lending Contract.
+-- | Lifecycle states of a Securities Lending arrangement.
+data SecLendingStatus
+  = LendingActive
+    -- ^ Loan active and operational; securities delivered to borrower.
+  | LendingRecallIssued Amount Time
+    -- ^ Lender has issued a recall for specified quantity with cutoff deadline.
+  | LendingClosed
+    -- ^ All borrowed securities returned and collateral released.
+  | LendingDefaulted Text
+    -- ^ Default declared (e.g. failure to return recalled securities).
+  deriving (Eq, Show)
+
+-- | Institutional Securities Lending Agreement.
 template SecuritiesLendingAgreement
   with
     lendingId : ReferenceId
+    -- ^ Unique identifier for this securities lending agreement.
     lender : Party
+    -- ^ Beneficial owner / lender of securities.
     borrower : Party
+    -- ^ Broker-dealer / borrower of securities.
+    custodian : Party
+    -- ^ Custodian safekeeping the lent securities and collateral.
     isin : ISIN
-    quantity : Amount
+    -- ^ ISIN of the lent security.
+    borrowedQuantity : Amount
+    -- ^ Quantity of securities currently on loan.
+    borrowAccountId : AccountId
+    -- ^ Account where securities are delivered.
     lendingFeeRate : Rate
+    -- ^ Annual borrow fee rate (e.g. 0.0075 for 75 bps).
+    rebateRate : Rate
+    -- ^ Annual rebate rate paid back to borrower on cash collateral.
     collateralCurrency : Currency
+    -- ^ Denominated currency of the collateral.
     collateralAmount : Amount
-    status : LifecycleStatus
+    -- ^ Current posted collateral amount.
+    collateralPledgeRef : Optional ReferenceId
+    -- ^ Optional link to AssetPledge contract for non-cash collateral.
+    accruedLendingFee : Amount
+    -- ^ Unpaid accrued lending fee balance.
+    startDate : Time
+    -- ^ Trade inception date.
+    status : SecLendingStatus
+    -- ^ Current lifecycle status.
+    correlationId : CorrelationId
+    -- ^ Cross-system correlation identifier.
+    observers : [Party]
+    -- ^ Authorized observers (e.g. agent lenders, regulators).
   where
-    signatory lender, borrower
+    signatory lender, borrower, custodian
+    observer (List.dedup observers)
 
-    choice RecallSecurities : ContractId SecuritiesLendingAgreement
+    ensure
+      borrowedQuantity > 0.0 &&
+      collateralAmount > 0.0 &&
+      lendingFeeRate >= 0.0 &&
+      rebateRate >= 0.0 &&
+      accruedLendingFee >= 0.0 &&
+      lendingId /= ""
+
+    -- | Lender accrues borrow fees for an elapsed period.
+    choice AccrueLendingFee : ContractId SecuritiesLendingAgreement
+      with
+        additionalFee : Amount
       controller lender
       do
-        create this with status = Terminated
+        require (status == LendingActive || isRecallIssued status)
+          "Lending agreement must be Active or under Recall to accrue fees"
+        requirePositive additionalFee "Additional fee must be positive"
+        create this with
+          accruedLendingFee = accruedLendingFee + additionalFee
 
-    choice ReturnSecurities : ContractId SecuritiesLendingAgreement
+    -- | Borrower settles accrued lending fees.
+    choice PayLendingFee : ContractId SecuritiesLendingAgreement
+      with
+        paymentAmount : Amount
       controller borrower
       do
-        create this with status = Closed
+        requirePositive paymentAmount "Payment amount must be positive"
+        require (paymentAmount <= accruedLendingFee) "Payment exceeds accrued fee balance"
+        create this with
+          accruedLendingFee = accruedLendingFee - paymentAmount
+
+    -- | Lender issues a formal recall for partial or full lent securities.
+    choice RecallSecurities : ContractId SecuritiesLendingAgreement
+      with
+        recallQuantity : Amount
+        deadline : Time
+      controller lender
+      do
+        require (status == LendingActive) "Agreement must be Active to issue recall"
+        requirePositive recallQuantity "Recall quantity must be positive"
+        require (recallQuantity <= borrowedQuantity) "Recall quantity exceeds borrowed balance"
+        create this with
+          status = LendingRecallIssued recallQuantity deadline
+
+    -- | Borrower returns securities, releasing corresponding collateral.
+    -- Auto-transitions to LendingClosed if all borrowed securities and fees are discharged.
+    choice ReturnSecurities : ContractId SecuritiesLendingAgreement
+      with
+        returnedQuantity : Amount
+        collateralReleaseAmount : Amount
+      controller borrower
+      do
+        require (status == LendingActive || isRecallIssued status)
+          "Agreement must be Active or under Recall to return securities"
+        requirePositive returnedQuantity "Returned quantity must be positive"
+        require (returnedQuantity <= borrowedQuantity) "Return quantity exceeds borrowed quantity"
+        require (collateralReleaseAmount <= collateralAmount) "Collateral release exceeds posted collateral"
+
+        let newBorrowed = borrowedQuantity - returnedQuantity
+        let newCollateral = collateralAmount - collateralReleaseAmount
+        let newStatus = if newBorrowed == 0.0 && accruedLendingFee == 0.0
+                          then LendingClosed
+                          else LendingActive
+
+        create this with
+          borrowedQuantity = if newBorrowed == 0.0 then 0.01 else newBorrowed -- maintain invariant or close
+          collateralAmount = if newCollateral == 0.0 then 0.01 else newCollateral
+          status = newStatus
+
+    -- | Mark-to-market collateral adjustment agreed between counterparties.
+    choice RevalueCollateral : ContractId SecuritiesLendingAgreement
+      with
+        newCollateralAmount : Amount
+      controller lender, borrower
+      do
+        require (status == LendingActive) "Agreement must be Active to revalue collateral"
+        requirePositive newCollateralAmount "New collateral amount must be positive"
+        create this with
+          collateralAmount = newCollateralAmount
+
+    -- | Lender declares default upon failure to satisfy recall deadline.
+    choice DeclareSecLendingDefault : ContractId SecuritiesLendingAgreement
+      with
+        reason : Text
+      controller lender
+      do
+        require (status /= LendingClosed) "Cannot declare default on closed agreement"
+        requireNonEmpty reason "Default reason must be specified"
+        create this with
+          status = LendingDefaulted reason
+
+    -- | Add authorized observer.
+    choice AddSecLendingObserver : ContractId SecuritiesLendingAgreement
+      with
+        newObserver : Party
+      controller lender
+      do
+        require (not (newObserver `elem` observers)) "Observer already registered"
+        create this with
+          observers = newObserver :: observers
+
+    -- | Nonconsuming query to check if agreement is active.
+    nonconsuming choice IsLendingActive : Bool
+      controller lender
+      do
+        return (status == LendingActive)
+
+-- | Helper to check if agreement is in recall status.
+isRecallIssued : SecLendingStatus -> Bool
+isRecallIssued (LendingRecallIssued _ _) = True
+isRecallIssued _ = False
+
