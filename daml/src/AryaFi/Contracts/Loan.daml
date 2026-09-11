@@ -1,44 +1,186 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Institutional Loan Agreement contract for AryaFi core.
+--
+-- Models bilateral and syndicated institutional credit facilities:
+--   - Multi-drawdown facility with credit limit enforcement
+--   - Accrued interest tracking with institutional day-count conventions
+--   - Principal paydown and interest settlement waterfall
+--   - First-class linkage to AssetPledge collateral perfection
+--   - Default declaration, cure, and final facility closeout
+--
+-- Signatory model: lender + borrower bilateral co-signature.
+-- Agent bank and regulatory bodies participate as observers.
 module AryaFi.Contracts.Loan where
 
-import AryaFi.Common.Types (Amount, Currency, Rate, LifecycleStatus(..))
-import AryaFi.Common.Identifiers (ReferenceId)
-import AryaFi.Common.Errors (require)
+import AryaFi.Common.Types (Amount, Currency, Rate, DayCountConvention(..), LifecycleStatus(..))
+import AryaFi.Common.Identifiers (ReferenceId, CorrelationId)
+import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
+import qualified DA.List as List
 
--- | Institutional Loan Contract Interface.
+-- | Institutional Loan Facility contract.
 template InstitutionalLoan
   with
     loanId : ReferenceId
+    -- ^ Unique identifier for this loan facility.
     lender : Party
+    -- ^ Institutional lender / facility agent.
     borrower : Party
+    -- ^ Institutional borrower / obligor.
     agentBank : Optional Party
+    -- ^ Administrative agent bank (optional).
     currency : Currency
-    principalAmount : Amount
-    outstandingBalance : Amount
+    -- ^ Facility denominated currency (e.g. "USD", "EUR").
+    facilityLimit : Amount
+    -- ^ Maximum committed credit facility amount.
+    drawnPrincipal : Amount
+    -- ^ Current outstanding drawn principal balance.
+    accruedInterest : Amount
+    -- ^ Unpaid accrued interest balance.
     interestRate : Rate
+    -- ^ Annual contractual interest rate (e.g. 0.065 for 6.5%).
+    dayCountConvention : DayCountConvention
+    -- ^ Institutional day-count convention (e.g. Act360).
+    startDate : Time
+    -- ^ Facility effective start date.
     maturityDate : Time
+    -- ^ Facility contractual maturity date.
+    collateralPledgeRef : Optional ReferenceId
+    -- ^ Correlation reference to active AssetPledge contract, if secured.
     status : LifecycleStatus
+    -- ^ Current lifecycle status (Active, Defaulted, Closed).
+    defaultReason : Optional Text
+    -- ^ Reason for default if declared.
+    correlationId : CorrelationId
+    -- ^ Master correlation identifier across external booking systems.
+    observers : [Party]
+    -- ^ Additional observers (e.g. auditors, rating agencies, regulators).
   where
     signatory lender, borrower
+    observer (List.dedup (observers ++ optional [] (\a -> [a]) agentBank))
 
+    ensure
+      facilityLimit > 0.0 &&
+      drawnPrincipal >= 0.0 &&
+      drawnPrincipal <= facilityLimit &&
+      accruedInterest >= 0.0 &&
+      interestRate >= 0.0 &&
+      loanId /= ""
+
+    -- | Borrower executes a drawdown against the remaining facility limit.
+    choice DrawdownPrincipal : ContractId InstitutionalLoan
+      with
+        drawdownAmount : Amount
+      controller borrower
+      do
+        require (status == Active) "Loan must be Active to draw down principal"
+        requirePositive drawdownAmount "Drawdown amount must be positive"
+        require (drawnPrincipal + drawdownAmount <= facilityLimit) "Drawdown exceeds available facility limit"
+        create this with
+          drawnPrincipal = drawnPrincipal + drawdownAmount
+
+    -- | Lender or Agent Bank accrues interest for an elapsed interest period.
+    choice AccrueInterest : ContractId InstitutionalLoan
+      with
+        additionalInterest : Amount
+      controller lender
+      do
+        require (status == Active) "Loan must be Active to accrue interest"
+        requirePositive additionalInterest "Accrued interest must be positive"
+        create this with
+          accruedInterest = accruedInterest + additionalInterest
+
+    -- | Borrower pays down accrued interest.
+    choice PayAccruedInterest : ContractId InstitutionalLoan
+      with
+        paymentAmount : Amount
+      controller borrower
+      do
+        require (status == Active || status == Defaulted) "Loan must be Active or Defaulted to service interest"
+        requirePositive paymentAmount "Payment amount must be positive"
+        require (paymentAmount <= accruedInterest) "Payment exceeds accrued interest balance"
+        create this with
+          accruedInterest = accruedInterest - paymentAmount
+
+    -- | Borrower pays down outstanding principal balance.
+    -- If both principal and interest reach zero, the loan auto-transitions to Closed.
     choice PayDownPrincipal : ContractId InstitutionalLoan
       with
         paymentAmount : Amount
       controller borrower
       do
-        require (paymentAmount > 0.0) "Payment must be greater than zero"
-        require (paymentAmount <= outstandingBalance) "Payment exceeds outstanding balance"
-        let newBalance = outstandingBalance - paymentAmount
-        let newStatus = if newBalance == 0.0 then Closed else Active
+        require (status == Active || status == Defaulted) "Loan must be Active or Defaulted to pay down principal"
+        requirePositive paymentAmount "Principal payment must be positive"
+        require (paymentAmount <= drawnPrincipal) "Payment exceeds outstanding drawn principal"
+        let newDrawn = drawnPrincipal - paymentAmount
+        let newStatus = if newDrawn == 0.0 && accruedInterest == 0.0 then Closed else status
         create this with
-          outstandingBalance = newBalance
+          drawnPrincipal = newDrawn
           status = newStatus
 
-    choice DeclareLoanDefault : ContractId InstitutionalLoan
+    -- | Link an active AssetPledge collateral reference to secure the loan.
+    choice LinkCollateralPledge : ContractId InstitutionalLoan
       with
-        defaultReason : Text
+        pledgeRef : ReferenceId
+      controller borrower
+      do
+        require (status == Active) "Loan must be Active to link collateral"
+        requireNonEmpty pledgeRef "Pledge reference must not be empty"
+        create this with
+          collateralPledgeRef = Some pledgeRef
+
+    -- | Unlink collateral pledge once loan obligations are discharged.
+    choice UnlinkCollateralPledge : ContractId InstitutionalLoan
       controller lender
       do
-        create this with status = Defaulted
+        require (drawnPrincipal == 0.0 && accruedInterest == 0.0)
+          "Cannot unlink collateral while obligations remain outstanding"
+        create this with
+          collateralPledgeRef = None
+
+    -- | Lender declares default upon non-payment or covenant breach.
+    choice DeclareLoanDefault : ContractId InstitutionalLoan
+      with
+        reason : Text
+      controller lender
+      do
+        require (status == Active) "Loan must be Active to declare default"
+        requireNonEmpty reason "Default reason must be specified"
+        create this with
+          status = Defaulted
+          defaultReason = Some reason
+
+    -- | Lender acknowledges default cure following borrower rectification.
+    choice CureLoanDefault : ContractId InstitutionalLoan
+      controller lender
+      do
+        require (status == Defaulted) "Loan must be in Defaulted status to cure"
+        create this with
+          status = Active
+          defaultReason = None
+
+    -- | Formally close out the facility once all principal and interest are paid.
+    choice CloseLoan : ContractId InstitutionalLoan
+      controller lender
+      do
+        require (drawnPrincipal == 0.0 && accruedInterest == 0.0)
+          "Cannot close loan with outstanding balance or interest"
+        create this with
+          status = Closed
+
+    -- | Add an authorized observer (e.g. regulator, auditor) to the loan.
+    choice AddLoanObserver : ContractId InstitutionalLoan
+      with
+        newObserver : Party
+      controller lender
+      do
+        require (not (newObserver `elem` observers)) "Observer already exists on loan"
+        create this with
+          observers = newObserver :: observers
+
+    -- | Nonconsuming query to check if the loan is active and operational.
+    nonconsuming choice IsLoanActive : Bool
+      controller lender
+      do
+        return (status == Active)

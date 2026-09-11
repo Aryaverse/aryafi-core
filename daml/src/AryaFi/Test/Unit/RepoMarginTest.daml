@@ -1,0 +1,355 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Comprehensive unit and lifecycle tests for RepoAgreement, ReverseRepoPosition, and MarginCall.
+module AryaFi.Test.Unit.RepoMarginTest where
+
+import Daml.Script
+import AryaFi.Contracts.Repo
+import AryaFi.Contracts.ReverseRepo
+import AryaFi.Contracts.Margin
+import AryaFi.Common.Types (DayCountConvention(..), LifecycleStatus(..))
+import AryaFi.Common.Identifiers (AccountId(..), CorrelationId(..))
+import DA.Date (date, Month(..))
+import DA.Time (time)
+
+setupParties : Script (Party, Party, Party, Party, Party)
+setupParties = do
+  seller <- allocateParty "GoldmanSachs"
+  buyer <- allocateParty "MorganStanley"
+  custodian <- allocateParty "BNYMellon"
+  triparty <- allocateParty "Euroclear"
+  regulator <- allocateParty "SEC"
+  pure (seller, buyer, custodian, triparty, regulator)
+
+startDate : Time
+startDate = time (date 2026 Sep 1) 10 0 0
+
+endDate : Time
+endDate = time (date 2026 Sep 8) 10 0 0
+
+rollEndDate : Time
+rollEndDate = time (date 2026 Sep 15) 10 0 0
+
+deadlineTime : Time
+deadlineTime = time (date 2026 Sep 2) 17 0 0
+
+-- ---------------------------------------------------------------------------
+-- Repo Agreement Tests
+-- ---------------------------------------------------------------------------
+
+-- | Test full Repo lifecycle: creation -> open leg -> substitution -> roll -> close leg -> settled
+testRepoFullLifecycle : Script ()
+testRepoFullLifecycle = script do
+  (seller, buyer, custodian, triparty, regulator) <- setupParties
+
+  repoCid <- submitMulti [seller, buyer, custodian] [] do
+    createCmd RepoAgreement with
+      repoId = "REPO-2026-001"
+      seller = seller
+      buyer = buyer
+      tripartyAgent = Some triparty
+      custodian = custodian
+      isin = "US912828ZM24"
+      collateralQuantity = 5000000.0
+      collateralAccountId = AccountId "ACC-COLLAT-001"
+      haircut = 0.02
+      currency = "USD"
+      purchasePrice = 5000000.0
+      repurchasePrice = 5005152.78
+      repoRate = 0.053
+      dayCountConvention = Act360
+      startDate = startDate
+      endDate = endDate
+      status = RepoPendingOpening
+      openingSettlementRef = None
+      closingSettlementRef = None
+      correlationId = CorrelationId "CORR-REPO-001"
+      observers = [regulator]
+
+  -- Custodian executes opening leg
+  repoCidActive <- submit custodian do
+    exerciseCmd repoCid ExecuteOpeningLeg with
+      settlementRef = "SETTLE-OPEN-001"
+
+  Some activeRepo <- queryContractId buyer repoCidActive
+  assertMsg "Status must be RepoActive" (activeRepo.status == RepoActive)
+  assertMsg "Opening settlement ref must be set" (activeRepo.openingSettlementRef == Some "SETTLE-OPEN-001")
+
+  -- Check IsRepoActive query
+  isActive <- submit buyer do
+    exerciseCmd repoCidActive IsRepoActive
+  assertMsg "Repo must be active" isActive
+
+  -- Substitute collateral to equivalent Treasury note
+  repoCidSubstituted <- submitMulti [seller, buyer] [] do
+    exerciseCmd repoCidActive SubstituteCollateral with
+      newIsin = "US912828XG34"
+      newQuantity = 5100000.0
+      newHaircut = 0.025
+
+  Some subRepo <- queryContractId seller repoCidSubstituted
+  assertMsg "ISIN must be updated" (subRepo.isin == "US912828XG34")
+  assertMsg "Quantity must be updated" (subRepo.collateralQuantity == 5100000.0)
+  assertMsg "Haircut must be updated" (subRepo.haircut == 0.025)
+
+  -- Roll repo for an additional week
+  repoCidRolled <- submitMulti [seller, buyer] [] do
+    exerciseCmd repoCidSubstituted RollRepo with
+      newEndDate = rollEndDate
+      newRepurchasePrice = 5010305.56
+      newRepoRate = 0.0535
+
+  Some rolledRepo <- queryContractId buyer repoCidRolled
+  assertMsg "Maturity date must be rolled" (rolledRepo.endDate == rollEndDate)
+  assertMsg "Repurchase price must be updated" (rolledRepo.repurchasePrice == 5010305.56)
+
+  -- Initiate closing leg
+  repoCidClosing <- submit seller do
+    exerciseCmd repoCidRolled InitiateClosingLeg
+
+  Some closingRepo <- queryContractId seller repoCidClosing
+  assertMsg "Status must be RepoPendingClosing" (closingRepo.status == RepoPendingClosing)
+
+  -- Custodian executes closing leg
+  repoCidSettled <- submit custodian do
+    exerciseCmd repoCidClosing ExecuteClosingLeg with
+      settlementRef = "SETTLE-CLOSE-001"
+
+  Some settledRepo <- queryContractId buyer repoCidSettled
+  assertMsg "Status must be RepoSettled" (settledRepo.status == RepoSettled)
+  assertMsg "Closing settlement ref must be populated" (settledRepo.closingSettlementRef == Some "SETTLE-CLOSE-001")
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- Reverse Repo and Valuation Tests
+-- ---------------------------------------------------------------------------
+
+-- | Test ReverseRepo position mark-to-market and margin deficit calculation
+testReverseRepoValuationAndMarginDeficit : Script ()
+testReverseRepoValuationAndMarginDeficit = script do
+  (seller, buyer, custodian, _, _) <- setupParties
+
+  revCid <- submit buyer do
+    createCmd ReverseRepoPosition with
+      positionId = "REV-POS-001"
+      buyer = buyer
+      seller = seller
+      custodian = custodian
+      repoId = "REPO-2026-001"
+      isin = "US912828ZM24"
+      collateralQuantity = 5000000.0
+      currency = "USD"
+      purchasePrice = 5000000.0
+      repurchasePrice = 5005152.78
+      repoRate = 0.053
+      startDate = startDate
+      endDate = endDate
+      currentMarketValue = 5100000.0
+      status = Active
+      correlationId = CorrelationId "CORR-REV-001"
+      observers = []
+
+  -- Market drops to 4,800,000
+  revCidUpdated <- submit buyer do
+    exerciseCmd revCid UpdateMarkToMarket with
+      newMarketValue = 4800000.0
+
+  Some rev <- queryContractId buyer revCidUpdated
+  assertMsg "Market value must be 4.8M" (rev.currentMarketValue == 4800000.0)
+
+  -- Calculate deficit against 2% margin requirement (Required = 5M * 1.02 = 5.1M; Deficit = 5.1M - 4.8M = 300K)
+  deficit <- submit buyer do
+    exerciseCmd revCidUpdated CalculateMarginDeficit with
+      requiredMarginRatio = 0.02
+
+  assertMsg "Deficit must equal 300,000.0" (deficit == 300000.0)
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- Margin Call Tests
+-- ---------------------------------------------------------------------------
+
+-- | Test MarginCall satisfied with cash
+testMarginCallCashFulfillment : Script ()
+testMarginCallCashFulfillment = script do
+  (seller, buyer, custodian, _, _) <- setupParties
+
+  callCid <- submitMulti [buyer, seller] [] do
+    createCmd MarginCall with
+      marginCallId = "MC-2026-001"
+      caller = buyer
+      payer = seller
+      custodian = custodian
+      marginType = VariationMargin
+      relatedAgreementRef = "REPO-2026-001"
+      currency = "USD"
+      requiredAmount = 300000.0
+      deadline = deadlineTime
+      status = MarginCallIssued
+      correlationId = CorrelationId "CORR-MC-001"
+      observers = []
+
+  -- Satisfy with cash payment
+  callCidSatisfied <- submit seller do
+    exerciseCmd callCid SatisfyWithCash with
+      paymentRef = "PAY-WIRE-FED-001"
+
+  Some satisfiedCall <- queryContractId buyer callCidSatisfied
+  case satisfiedCall.status of
+    MarginCallSatisfied (CashMargin ref) ->
+      assertMsg "Payment reference must match" (ref == "PAY-WIRE-FED-001")
+    _ ->
+      assertMsg "Status must be MarginCallSatisfied CashMargin" False
+
+  isSatisfied <- submit buyer do
+    exerciseCmd callCidSatisfied IsMarginSatisfied
+  assertMsg "IsMarginSatisfied must be True" isSatisfied
+  pure ()
+
+-- | Test MarginCall satisfied with collateral pledge
+testMarginCallPledgeFulfillment : Script ()
+testMarginCallPledgeFulfillment = script do
+  (seller, buyer, custodian, _, _) <- setupParties
+
+  callCid <- submitMulti [buyer, seller] [] do
+    createCmd MarginCall with
+      marginCallId = "MC-2026-002"
+      caller = buyer
+      payer = seller
+      custodian = custodian
+      marginType = InitialMargin
+      relatedAgreementRef = "REPO-2026-001"
+      currency = "USD"
+      requiredAmount = 250000.0
+      deadline = deadlineTime
+      status = MarginCallIssued
+      correlationId = CorrelationId "CORR-MC-002"
+      observers = []
+
+  -- Satisfy with pledge
+  callCidSatisfied <- submit seller do
+    exerciseCmd callCid SatisfyWithPledge with
+      pledgeRef = "PLEDGE-MARGIN-UST-001"
+
+  Some satisfiedCall <- queryContractId buyer callCidSatisfied
+  case satisfiedCall.status of
+    MarginCallSatisfied (CollateralPledgeMargin ref) ->
+      assertMsg "Pledge reference must match" (ref == "PLEDGE-MARGIN-UST-001")
+    _ ->
+      assertMsg "Status must be MarginCallSatisfied CollateralPledgeMargin" False
+  pure ()
+
+-- | Test MarginCall dispute and resolution
+testMarginCallDisputeAndResolution : Script ()
+testMarginCallDisputeAndResolution = script do
+  (seller, buyer, custodian, _, _) <- setupParties
+
+  callCid <- submitMulti [buyer, seller] [] do
+    createCmd MarginCall with
+      marginCallId = "MC-DISPUTE-001"
+      caller = buyer
+      payer = seller
+      custodian = custodian
+      marginType = VariationMargin
+      relatedAgreementRef = "REPO-2026-001"
+      currency = "USD"
+      requiredAmount = 500000.0
+      deadline = deadlineTime
+      status = MarginCallIssued
+      correlationId = CorrelationId "CORR-DISP-001"
+      observers = []
+
+  -- Seller disputes calculation
+  callCidDisputed <- submit seller do
+    exerciseCmd callCid DisputeMarginCall with
+      disputeReason = "Haircut pricing discrepancy on collateral valuation"
+
+  Some dispCall <- queryContractId seller callCidDisputed
+  case dispCall.status of
+    MarginCallDisputed reason ->
+      assertMsg "Reason must match" (reason == "Haircut pricing discrepancy on collateral valuation")
+    _ ->
+      assertMsg "Status must be MarginCallDisputed" False
+
+  -- Parties agree on adjusted resolution
+  callCidResolved <- submitMulti [buyer, seller] [] do
+    exerciseCmd callCidDisputed ResolveMarginDispute with
+      adjustedAmount = 350000.0
+
+  Some resCall <- queryContractId buyer callCidResolved
+  assertMsg "Amount must be updated to 350,000" (resCall.requiredAmount == 350000.0)
+  assertMsg "Status must revert to Issued" (resCall.status == MarginCallIssued)
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- Negative Tests
+-- ---------------------------------------------------------------------------
+
+-- | Negative: Non-custodian cannot execute opening leg
+testUnauthorizedOpeningExecutionFails : Script ()
+testUnauthorizedOpeningExecutionFails = script do
+  (seller, buyer, custodian, triparty, _) <- setupParties
+
+  repoCid <- submitMulti [seller, buyer, custodian] [] do
+    createCmd RepoAgreement with
+      repoId = "REPO-FAIL-001"
+      seller = seller
+      buyer = buyer
+      tripartyAgent = Some triparty
+      custodian = custodian
+      isin = "US912828ZM24"
+      collateralQuantity = 1000000.0
+      collateralAccountId = AccountId "ACC-001"
+      haircut = 0.02
+      currency = "USD"
+      purchasePrice = 1000000.0
+      repurchasePrice = 1001000.0
+      repoRate = 0.05
+      dayCountConvention = Act360
+      startDate = startDate
+      endDate = endDate
+      status = RepoPendingOpening
+      openingSettlementRef = None
+      closingSettlementRef = None
+      correlationId = CorrelationId "CORR-FAIL-001"
+      observers = []
+
+  submitMustFail seller do
+    exerciseCmd repoCid ExecuteOpeningLeg with
+      settlementRef = "SETTLE-UNAUTH"
+
+-- | Negative: Substitution with invalid haircut (>= 1.0) must fail
+testInvalidHaircutSubstitutionFails : Script ()
+testInvalidHaircutSubstitutionFails = script do
+  (seller, buyer, custodian, _, _) <- setupParties
+
+  repoCid <- submitMulti [seller, buyer, custodian] [] do
+    createCmd RepoAgreement with
+      repoId = "REPO-HAIRCUT-FAIL"
+      seller = seller
+      buyer = buyer
+      tripartyAgent = None
+      custodian = custodian
+      isin = "US912828ZM24"
+      collateralQuantity = 1000000.0
+      collateralAccountId = AccountId "ACC-001"
+      haircut = 0.02
+      currency = "USD"
+      purchasePrice = 1000000.0
+      repurchasePrice = 1001000.0
+      repoRate = 0.05
+      dayCountConvention = Act360
+      startDate = startDate
+      endDate = endDate
+      status = RepoActive
+      openingSettlementRef = Some "SETTLE-001"
+      closingSettlementRef = None
+      correlationId = CorrelationId "CORR-FAIL-002"
+      observers = []
+
+  submitMustFailMulti [seller, buyer] [] do
+    exerciseCmd repoCid SubstituteCollateral with
+      newIsin = "US912828XG34"
+      newQuantity = 1000000.0
+      newHaircut = 1.05 -- Invalid >= 1.0
