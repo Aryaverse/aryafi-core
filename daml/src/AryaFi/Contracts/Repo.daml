@@ -1,38 +1,190 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Institutional Repurchase Agreement (Repo) Contract Interface.
+--
+-- Implements bilateral and tri-party repo trade lifecycle:
+--   - Two-leg DvP settlement: Opening Purchase Leg and Closing Repurchase Leg
+--   - Collateral haircut and valuation margin parameters
+--   - Collateral substitution during active trade life
+--   - Roll / term extension with adjusted repo rate and repurchase price
+--   - Tri-party custodian supervision and default execution
+--
+-- Signatory model: seller + buyer + custodian tri-party agreement.
+-- Tri-party agent and trade repository / regulators participate as observers.
 module AryaFi.Contracts.Repo where
 
-import AryaFi.Common.Types (Amount, Currency, Rate, LifecycleStatus(..))
-import AryaFi.Common.Identifiers (ISIN, ReferenceId)
+import AryaFi.Common.Types (Amount, Currency, Rate, DayCountConvention(..))
+import AryaFi.Common.Identifiers (ISIN, AccountId, ReferenceId, CorrelationId)
+import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
+import qualified DA.List as List
 
--- | Institutional Repurchase Agreement (Repo) Contract Interface.
+-- | Comprehensive lifecycle status states for Repurchase Agreements.
+data RepoStatus
+  = RepoPendingOpening
+    -- ^ Agreement executed; awaiting opening leg settlement (collateral vs cash).
+  | RepoActive
+    -- ^ Opening leg settled; collateral encumbered; cash funded.
+  | RepoPendingClosing
+    -- ^ Maturity reached; awaiting closing leg settlement (repurchase cash vs collateral return).
+  | RepoSettled
+    -- ^ Closing leg completed; all obligations fully discharged.
+  | RepoDefaulted Text
+    -- ^ Default declared by non-defaulting counterparty.
+  | RepoTerminated Text
+    -- ^ Early termination by mutual agreement.
+  deriving (Eq, Show)
+
+-- | Institutional Repurchase Agreement (Repo) Contract.
 template RepoAgreement
   with
     repoId : ReferenceId
-    seller : Party  -- Cash borrower / Security seller
-    buyer : Party   -- Cash lender / Security buyer
+    -- ^ Unique identifier for this repo trade.
+    seller : Party
+    -- ^ Cash borrower / Collateral provider.
+    buyer : Party
+    -- ^ Cash lender / Collateral receiver.
     tripartyAgent : Optional Party
+    -- ^ Tri-party agent managing collateral valuation and margin (optional).
+    custodian : Party
+    -- ^ Custodian safekeeping the collateral securities.
     isin : ISIN
+    -- ^ ISIN of the underlying collateral instrument.
     collateralQuantity : Amount
+    -- ^ Quantity / face amount of collateral securities.
+    collateralAccountId : AccountId
+    -- ^ Custody account where collateral is held.
+    haircut : Rate
+    -- ^ Collateral haircut percentage (e.g. 0.02 for 2%).
     currency : Currency
+    -- ^ Cash leg settlement currency (e.g. "USD", "EUR").
     purchasePrice : Amount
+    -- ^ Cash amount paid by buyer at opening leg.
     repurchasePrice : Amount
+    -- ^ Repurchase cash amount owed by seller at closing leg.
     repoRate : Rate
+    -- ^ Annual contractual repo rate (e.g. 0.053 for 5.30%).
+    dayCountConvention : DayCountConvention
+    -- ^ Institutional day count convention (e.g. Act360).
     startDate : Time
+    -- ^ Opening settlement date.
     endDate : Time
-    status : LifecycleStatus
+    -- ^ Repurchase maturity date.
+    status : RepoStatus
+    -- ^ Current lifecycle status of the repo.
+    openingSettlementRef : Optional ReferenceId
+    -- ^ Reference to opening leg DvP settlement execution.
+    closingSettlementRef : Optional ReferenceId
+    -- ^ Reference to closing leg DvP settlement execution.
+    correlationId : CorrelationId
+    -- ^ Master correlation identifier across external trading and clearing systems.
+    observers : [Party]
+    -- ^ Additional observers (e.g. regulators, trade repository).
   where
-    signatory seller, buyer
+    signatory seller, buyer, custodian
+    observer (List.dedup (observers ++ optional [] (\t -> [t]) tripartyAgent))
 
-    choice CloseoutRepo : ContractId RepoAgreement
+    ensure
+      collateralQuantity > 0.0 &&
+      purchasePrice > 0.0 &&
+      repurchasePrice >= purchasePrice &&
+      haircut >= 0.0 && haircut < 1.0 &&
+      repoRate >= 0.0 &&
+      repoId /= ""
+
+    -- | Custodian confirms completion of opening leg DvP settlement.
+    choice ExecuteOpeningLeg : ContractId RepoAgreement
+      with
+        settlementRef : ReferenceId
+      controller custodian
+      do
+        require (status == RepoPendingOpening) "Repo must be PendingOpening to execute opening leg"
+        requireNonEmpty settlementRef "Settlement reference must be provided"
+        create this with
+          status = RepoActive
+          openingSettlementRef = Some settlementRef
+
+    -- | Collateral substitution: replace active collateral with equivalent eligible collateral.
+    choice SubstituteCollateral : ContractId RepoAgreement
+      with
+        newIsin : ISIN
+        newQuantity : Amount
+        newHaircut : Rate
       controller seller, buyer
       do
-        create this with status = Closed
+        require (status == RepoActive) "Repo must be Active to substitute collateral"
+        requireNonEmpty newIsin "New ISIN must not be empty"
+        requirePositive newQuantity "New collateral quantity must be positive"
+        require (newHaircut >= 0.0 && newHaircut < 1.0) "New haircut must be between 0 and 1"
+        create this with
+          isin = newIsin
+          collateralQuantity = newQuantity
+          haircut = newHaircut
 
+    -- | Initiate closing leg upon reaching maturity.
+    choice InitiateClosingLeg : ContractId RepoAgreement
+      controller seller
+      do
+        require (status == RepoActive) "Repo must be Active to initiate closing leg"
+        create this with
+          status = RepoPendingClosing
+
+    -- | Custodian confirms completion of closing leg repurchase settlement.
+    choice ExecuteClosingLeg : ContractId RepoAgreement
+      with
+        settlementRef : ReferenceId
+      controller custodian
+      do
+        require (status == RepoPendingClosing || status == RepoActive)
+          "Repo must be Active or PendingClosing to execute closing leg"
+        requireNonEmpty settlementRef "Settlement reference must be provided"
+        create this with
+          status = RepoSettled
+          closingSettlementRef = Some settlementRef
+
+    -- | Roll / extend the repo term with updated rate and maturity date.
+    choice RollRepo : ContractId RepoAgreement
+      with
+        newEndDate : Time
+        newRepurchasePrice : Amount
+        newRepoRate : Rate
+      controller seller, buyer
+      do
+        require (status == RepoActive) "Repo must be Active to roll"
+        require (newRepurchasePrice >= purchasePrice) "New repurchase price must not be below purchase price"
+        require (newRepoRate >= 0.0) "New repo rate must be non-negative"
+        create this with
+          endDate = newEndDate
+          repurchasePrice = newRepurchasePrice
+          repoRate = newRepoRate
+
+    -- | Declare default upon failure to settle closing repurchase or post margin.
     choice DeclareRepoDefault : ContractId RepoAgreement
       with
+        declaringParty : Party
         reason : Text
+      controller declaringParty
+      do
+        require (declaringParty == seller || declaringParty == buyer)
+          "Only seller or buyer can declare repo default"
+        require (status == RepoActive || status == RepoPendingOpening || status == RepoPendingClosing)
+          "Repo must be non-terminal to declare default"
+        requireNonEmpty reason "Default reason must be specified"
+        create this with
+          status = RepoDefaulted reason
+
+    -- | Add an authorized observer (e.g. regulator, central clearing counterparty).
+    choice AddRepoObserver : ContractId RepoAgreement
+      with
+        newObserver : Party
       controller buyer
       do
-        create this with status = Defaulted
+        require (not (newObserver `elem` observers)) "Observer already registered on repo"
+        create this with
+          observers = newObserver :: observers
+
+    -- | Nonconsuming query to check if repo is currently active and encumbering collateral.
+    nonconsuming choice IsRepoActive : Bool
+      controller buyer
+      do
+        return (status == RepoActive)
