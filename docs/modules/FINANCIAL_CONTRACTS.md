@@ -1,14 +1,73 @@
 # Financial Contracts Specification
 
-AryaFi Core contract workflows in `daml/src/AryaFi/Contracts/`:
+AryaFi Core institutional financial contract workflows implemented in `daml/src/AryaFi/Contracts/`.
 
-- **Loan (`Loan.daml`)**: Bilateral institutional loan agreements with principal pay-down and default mechanics.
-- **Repo (`Repo.daml`)**: Standard repurchase agreements with opening/closing settlement legs, repo rate, and closeout lifecycle.
-- **Reverse Repo (`ReverseRepo.daml`)**: Buyer-side composition and view over active repos.
-- **Securities Lending (`SecuritiesLending.daml`)**: Institutional stock loan contracts with borrow fees and recall options.
-- **Margin (`Margin.daml`)**: Variation and initial margin calls with dispute resolution.
-- **Escrow (`Escrow.daml`)**: Multi-party condition-based holding and release mechanisms.
-- **Subscription (`Subscription.daml`)**: Institutional private credit and fund subscriptions.
-- **Redemption (`Redemption.daml`)**: Liquidity redemption requests and approval flows.
-- **Transfer (`Transfer.daml`)**: Multi-signatory asset transfers subject to compliance approval.
-- **Pledge (`Pledge.daml`)**: Security interests and collateral pledges with perfection references.
+---
+
+## Architecture & Contract Matrix
+
+| Contract Template | Module | Primary Signatories | Observers | Lifecycle States | Key Choices |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **`InstitutionalLoan`** | `Loan.daml` | Lender, Borrower | AgentBank, Regulators | Active, Defaulted, Closed | `DrawdownPrincipal`, `AccrueInterest`, `PayAccruedInterest`, `PayDownPrincipal`, `LinkCollateralPledge`, `DeclareLoanDefault`, `CureLoanDefault`, `CloseLoan` |
+| **`RepoAgreement`** | `Repo.daml` | Seller, Buyer, Custodian | TripartyAgent, Regulators | RepoPendingOpening, RepoActive, RepoPendingClosing, RepoSettled, RepoDefaulted, RepoTerminated | `ExecuteOpeningLeg`, `SubstituteCollateral`, `InitiateClosingLeg`, `ExecuteClosingLeg`, `RollRepo`, `DeclareRepoDefault` |
+| **`ReverseRepoPosition`**| `ReverseRepo.daml`| Buyer | Seller, Custodian | Active, Closed | `UpdateMarkToMarket`, `CalculateMarginDeficit`, `CloseReverseRepo` |
+| **`MarginCall`** | `Margin.daml` | Caller, Payer | Custodian, Regulators | MarginCallIssued, MarginCallSatisfied, MarginCallDisputed, MarginCallDefaulted, MarginCallCancelled | `SatisfyWithCash`, `SatisfyWithPledge`, `DisputeMarginCall`, `ResolveMarginDispute`, `DeclareMarginDefault`, `CancelMarginCall` |
+| **`SecuritiesLendingAgreement`** | `SecuritiesLending.daml` | Lender, Borrower, Custodian | Regulators, Agents | LendingActive, LendingRecallIssued, LendingClosed, LendingDefaulted | `AccrueLendingFee`, `PayLendingFee`, `RecallSecurities`, `ReturnSecurities`, `RevalueCollateral`, `DeclareSecLendingDefault` |
+| **`AssetPledge`** | `Pledge.daml` | Pledgor, Pledgee, Custodian | TripartyAgent, Regulators | Active, Defaulted, Closed | `ReleasePledge`, `EnforcePledge`, `SubstitutePledge`, `UpdatePerfectionRef` |
+| **`ConditionalEscrow`** | `Escrow.daml` | Depositor, Custodian | Beneficiary | EscrowPending, EscrowFulfilled, EscrowReleased, EscrowRefunded, EscrowDisputed, EscrowExpired | `FulfillCondition`, `ReleaseEscrow`, `RefundEscrow`, `DisputeEscrow`, `ResolveDispute` |
+| **`AssetTransferRequest`**| `Transfer.daml`| Sender, Custodian | Receiver, ComplianceOfficer| TransferPendingCompliance, TransferApproved, TransferCompleted, TransferRejected, TransferCancelled | `ApproveTransfer`, `RejectTransfer`, `CompleteTransfer`, `CancelTransfer` |
+
+---
+
+## 1. Institutional Loan (`Loan.daml`)
+
+### Overview
+`InstitutionalLoan` models bilateral and syndicated credit facilities:
+* **Committed Facility Limits:** Invariant checks guarantee that cumulative drawn principal cannot exceed `facilityLimit`.
+* **Day-Count Interest Accrual:** Integrates with `AryaFi.Common.Types.DayCountConvention` (Act360, Act365Fixed, Thirty360).
+* **Payment Waterfall:** Separate interest servicing (`PayAccruedInterest`) and principal paydown (`PayDownPrincipal`), with automatic transition to `Closed` upon full discharge.
+* **Collateral Perfection Linkage:** Explicitly binds an active `AssetPledge` contract identifier (`collateralPledgeRef`).
+* **Default & Cure Mechanics:** Transparent default declaration (`DeclareLoanDefault`) and cure acknowledgement (`CureLoanDefault`).
+
+---
+
+## 2. Repurchase Agreement (`Repo.daml` & `ReverseRepo.daml`)
+
+### Overview
+Models institutional fixed-income repo and reverse repo transactions across bilateral and tri-party settlement environments:
+* **Two-Leg DvP Settlement:**
+  1. *Opening Purchase Leg (`ExecuteOpeningLeg`):* Custodian verifies initial cash funding against collateral encumbrance.
+  2. *Closing Repurchase Leg (`ExecuteClosingLeg`):* Custodian executes final repurchase payment and releases collateral.
+* **Collateral Substitution (`SubstituteCollateral`):* Counterparties agree to substitute collateral during trade life without terminating the financing agreement.
+* **Term Extension (`RollRepo`):* Rollover mechanics with updated repo rates and repurchase prices.
+* **Buyer Book Composition (`ReverseRepoPosition`):* Allows cash lenders to track mark-to-market collateral valuation and query net margin deficits (`CalculateMarginDeficit`).
+
+---
+
+## 3. Margin Management (`Margin.daml`)
+
+### Overview
+Provides regulatory-compliant margin call workflows for repo, securities lending, and derivatives exposures:
+* **Margin Types:** Differentiates Initial Margin (`InitialMargin`) and Variation Margin (`VariationMargin`).
+* **Dual Settlement Rails:** Supports satisfaction via cash transfer (`SatisfyWithCash`) or collateral hypothecation (`SatisfyWithPledge`).
+* **Dispute Arbitration Window:** Formal dispute tracking (`DisputeMarginCall`) and agreed dispute resolution (`ResolveMarginDispute`).
+* **Enforcement:** Explicit default declaration (`DeclareMarginDefault`) upon breach of margin deadline.
+
+---
+
+## 4. Securities Lending (`SecuritiesLending.daml`)
+
+### Overview
+Institutional stock borrowing and lending contracts:
+* **Continuous Borrow Fee Accrual:** Lender accrues borrow fees (`AccrueLendingFee`) based on contractual borrow fee rate.
+* **Cash Rebate Rate:** Tracks contractual rebate rate owed back to borrower on cash collateral.
+* **Recall Choices:** Full or partial recall options (`RecallSecurities`) with notice period deadlines.
+* **Return & Pro-Rata Release:** Borrower returns securities (`ReturnSecurities`), proportionally unlocking posted collateral.
+
+---
+
+## 5. Security & Privacy Guarantees on Canton
+
+1. **Sub-Transaction Privacy:** Only bilateral/tri-party counterparties, custodians, and designated regulators observe position balances, margin calls, or default events. Unrelated dealers have zero ledger visibility.
+2. **Atomic State Transition:** Settlement legs and collateral substitutions transition atomically with no leg-risk or unhedged exposure.
+3. **Audit Readiness:** All contracts maintain `correlationId` fields and emit audit events for CAT, EMIR, and MiFIR reporting.
