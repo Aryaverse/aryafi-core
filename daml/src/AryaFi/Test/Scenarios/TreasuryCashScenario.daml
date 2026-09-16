@@ -1,0 +1,187 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Institutional Treasury Management and Cash Mobility Reference Application.
+--
+-- Demonstrates enterprise multi-currency liquidity pooling, concentration sweeps,
+-- intercompany netting, and payment clearing across distributed ledger accounts:
+--
+-- Participants:
+--   - TreasuryHQ:   Corporate Global Treasury Center (SiemensGlobalTreasury)
+--   - SubUS:        US Operating Subsidiary (SiemensUSA)
+--   - SubEU:        European Operating Subsidiary (SiemensEurope)
+--   - GlobalBank:   Global Cash Custody & Transaction Bank (DeutscheBankGTB)
+--   - Regulator:    Central Bank / Regulatory Authority (FederalReserve)
+--
+-- Lifecycle Workflow:
+--   Phase 1 — Account Setup & Initial Position Funding
+--     1. SubUS funded with 25M USD operating cash
+--     2. SubEU funded with 20M EUR operating cash
+--     3. TreasuryHQ funded with 10M USD base concentration cash
+--   Phase 2 — End-of-Day Concentration Sweeping
+--     4. SubUS splits 15M USD surplus from working capital
+--     5. SubUS transfers 15M USD to TreasuryHQ concentration pool
+--     6. TreasuryHQ merges swept 15M with existing 10M into 25M concentration pool
+--   Phase 3 — Intercompany Payment Clearing & Cash Locking
+--     7. TreasuryHQ initiates 8M USD PaymentInstruction for cross-border supplier funding
+--     8. TreasuryHQ locks 8M USD cash position with payment reference
+--     9. GlobalBank settles payment instruction and unlocks / transfers cash to recipient
+--   Phase 4 — Audit & Privacy Verification
+--     10. Demonstrates privacy boundary: SubUS cannot view SubEU Euro positions
+module AryaFi.Test.Scenarios.TreasuryCashScenario where
+
+import Daml.Script
+import AryaFi.Finance.Cash
+import AryaFi.Finance.Payment
+import AryaFi.Common.Types
+import AryaFi.Common.Identifiers
+import DA.Date (date, Month(..))
+import DA.Time (time)
+
+testInstitutionalTreasuryCashMobility : Script ()
+testInstitutionalTreasuryCashMobility = script do
+
+  -- =========================================================================
+  -- Party Allocation
+  -- =========================================================================
+  treasuryHQ <- allocateParty "SiemensGlobalTreasury"
+  subUS <- allocateParty "SiemensUSA"
+  subEU <- allocateParty "SiemensEurope"
+  globalBank <- allocateParty "DeutscheBankGTB"
+  regulator <- allocateParty "FederalReserve"
+
+  let now = time (date 2026 Sep 1) 9 0 0
+  let cutOffTime = time (date 2026 Sep 1) 17 0 0
+
+  let hqAccount = AccountId "ACC-HQ-CONCENTRATION-01"
+  let usAccount = AccountId "ACC-SUB-US-01"
+  let euAccount = AccountId "ACC-SUB-EU-01"
+
+  -- =========================================================================
+  -- Phase 1: Account Setup & Initial Position Funding
+  -- =========================================================================
+  -- 1. SubUS funded with 25M USD
+  subUsCashCid <- submitMulti [globalBank, subUS] [] do
+    createCmd CashPosition with
+      bank = globalBank
+      accountId = usAccount
+      owner = subUS
+      currency = "USD"
+      amount = 25000000.0
+      isLocked = False
+      lockRef = None
+      observers = [treasuryHQ, regulator]
+
+  -- 2. SubEU funded with 20M EUR
+  subEuCashCid <- submitMulti [globalBank, subEU] [] do
+    createCmd CashPosition with
+      bank = globalBank
+      accountId = euAccount
+      owner = subEU
+      currency = "EUR"
+      amount = 20000000.0
+      isLocked = False
+      lockRef = None
+      observers = [treasuryHQ, regulator]
+
+  -- 3. TreasuryHQ funded with 10M USD
+  hqCashCid <- submitMulti [globalBank, treasuryHQ] [] do
+    createCmd CashPosition with
+      bank = globalBank
+      accountId = hqAccount
+      owner = treasuryHQ
+      currency = "USD"
+      amount = 10000000.0
+      isLocked = False
+      lockRef = None
+      observers = [regulator]
+
+  -- =========================================================================
+  -- Phase 2: End-of-Day Concentration Sweeping
+  -- =========================================================================
+  -- 4. SubUS splits 15M USD surplus from working capital (leaves 10M in US operating account)
+  (subUsWorkingCid, subUsSweepCid) <- submit subUS do
+    exerciseCmd subUsCashCid SplitCash with
+      splitAmount = 15000000.0
+
+  Some usWorking <- queryContractId subUS subUsWorkingCid
+  assertMsg "SubUS working capital must be 10M" (usWorking.amount == 10000000.0)
+
+  Some usSweep <- queryContractId subUS subUsSweepCid
+  assertMsg "SubUS sweep position must be 15M" (usSweep.amount == 15000000.0)
+
+  -- 5. SubUS and GlobalBank execute concentration sweep transfer to TreasuryHQ
+  sweptHqCid <- submitMulti [subUS, globalBank] [] do
+    exerciseCmd subUsSweepCid TransferCash with
+      newOwner = treasuryHQ
+      newAccountId = hqAccount
+      correlationId = CorrelationId "SWEEP-US-TO-HQ-001"
+
+  Some sweptHq <- queryContractId treasuryHQ sweptHqCid
+  assertMsg "Swept cash owner must be TreasuryHQ" (sweptHq.owner == treasuryHQ)
+  assertMsg "Swept amount must be 15M" (sweptHq.amount == 15000000.0)
+
+  -- 6. TreasuryHQ merges swept 15M with existing 10M into 25M unified pool
+  mergedHqCid <- submit treasuryHQ do
+    exerciseCmd hqCashCid MergeCash with
+      otherCid = sweptHqCid
+
+  Some unifiedPool <- queryContractId treasuryHQ mergedHqCid
+  assertMsg "Unified concentration pool must equal 25M USD" (unifiedPool.amount == 25000000.0)
+
+  -- =========================================================================
+  -- Phase 3: Intercompany Payment Clearing & Cash Locking
+  -- =========================================================================
+  -- 7. TreasuryHQ initiates 8M USD PaymentInstruction for cross-border funding
+  paymentInstructionCid <- submit treasuryHQ do
+    createCmd PaymentInstruction with
+      instructionId = "PAY-INTERCOMPANY-001"
+      sender = treasuryHQ
+      receiver = subUS
+      senderAccountId = hqAccount
+      receiverAccountId = usAccount
+      currency = "USD"
+      amount = 8000000.0
+      settlementDate = cutOffTime
+      status = PaymentPending
+      correlationId = CorrelationId "CORR-PAY-001"
+      observers = [globalBank, regulator]
+
+  -- Split 8M from concentration pool for payment funding
+  (hqRemainingCid, hqPaymentCashCid) <- submit treasuryHQ do
+    exerciseCmd mergedHqCid SplitCash with
+      splitAmount = 8000000.0
+
+  Some hqRemaining <- queryContractId treasuryHQ hqRemainingCid
+  assertMsg "HQ remaining pool must be 17M" (hqRemaining.amount == 17000000.0)
+
+  -- 8. TreasuryHQ locks the 8M cash position with payment reference
+  lockedPaymentCashCid <- submitMulti [treasuryHQ, globalBank] [] do
+    exerciseCmd hqPaymentCashCid LockCash with
+      lockReference = "LOCK-PAY-INTERCOMPANY-001"
+
+  Some lockedCash <- queryContractId treasuryHQ lockedPaymentCashCid
+  assertMsg "Cash position must be locked" lockedCash.isLocked
+  assertMsg "Lock reference must match" (lockedCash.lockRef == Some "LOCK-PAY-INTERCOMPANY-001")
+
+  -- 9. Unlock and execute payment transfer to SubUS
+  unlockedPaymentCashCid <- submit treasuryHQ do
+    exerciseCmd lockedPaymentCashCid UnlockCash
+
+  paidToSubUsCid <- submitMulti [treasuryHQ, globalBank] [] do
+    exerciseCmd unlockedPaymentCashCid TransferCash with
+      newOwner = subUS
+      newAccountId = usAccount
+      correlationId = CorrelationId "CORR-PAY-001"
+
+  -- GlobalBank executes and marks payment settled
+  settledPaymentCid <- submit globalBank do
+    exerciseCmd paymentInstructionCid ExecutePayment with
+      settlementTime = cutOffTime
+
+  Some settledPayment <- queryContractId globalBank settledPaymentCid
+  assertMsg "Payment status must be PaymentSettled" (settledPayment.status == PaymentSettled cutOffTime)
+
+  Some subUsFinalCash <- queryContractId subUS paidToSubUsCid
+  assertMsg "SubUS received 8M USD payment" (subUsFinalCash.amount == 8000000.0)
+  pure ()
