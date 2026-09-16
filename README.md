@@ -120,11 +120,13 @@ aryafi-core/
 - **`Settlement`**: Delivery-versus-Payment (DvP) and atomic cross-asset settlement.
 
 ### 2. Financial Contracts (`AryaFi.Contracts`)
-- **`Loan`**: Secured institutional term loan agreements.
-- **`Repo` & `ReverseRepo`**: Repurchase agreements and counterparty views.
-- **`SecuritiesLending`**: Stock loan, recall, fee accrual, and return flows.
-- **`Margin`**: Initial and variation margin call mechanisms.
-- **`Transfer` & `Escrow`**: Compliance-gated asset movements and conditional lockups.
+- **`Loan`**: Secured institutional credit facilities and term loan agreements.
+- **`Repo` & `ReverseRepo`**: Repurchase agreements, DvP settlement legs, and counterparty views.
+- **`SecuritiesLending`**: Institutional stock loans, fee accruals, rebates, and recalls.
+- **`Margin`**: Initial and variation margin call workflows with dispute arbitration.
+- **`Subscription` & `Redemption`**: Institutional fund commitments, capital calls, liquidity gates, and NAV redemptions.
+- **`Transfer`, `Pledge` & `Escrow`**: Compliance-gated transfers, tri-party collateral perfection, and conditional lockups.
+
 
 ### 3. Compliance & Policy Engine (`AryaFi.Compliance`)
 - **`KYC` & `Sanctions`**: Privacy-preserving institutional attestations.
