@@ -1,0 +1,332 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Comprehensive unit and lifecycle tests for FundSubscription and AssetRedemption.
+module AryaFi.Test.Unit.FundLifecycleTest where
+
+import Daml.Script
+import AryaFi.Contracts.Subscription
+import AryaFi.Contracts.Redemption
+import AryaFi.Common.Identifiers (CorrelationId(..))
+import DA.Date (date, Month(..))
+import DA.Time (time)
+
+setupParties : Script (Party, Party, Party, Party)
+setupParties = do
+  gp <- allocateParty "BlackstoneGP"
+  lp <- allocateParty "YaleEndowmentLP"
+  custodian <- allocateParty "StateStreetCustodian"
+  regulator <- allocateParty "SEC"
+  pure (gp, lp, custodian, regulator)
+
+nowTime : Time
+nowTime = time (date 2026 Sep 1) 9 0 0
+
+settleTime : Time
+settleTime = time (date 2026 Sep 15) 12 0 0
+
+-- ---------------------------------------------------------------------------
+-- Subscription Tests
+-- ---------------------------------------------------------------------------
+
+-- | Test full subscription lifecycle: request -> approve -> partial call & funding -> full call & funding -> close
+testSubscriptionFullLifecycle : Script ()
+testSubscriptionFullLifecycle = script do
+  (gp, lp, custodian, regulator) <- setupParties
+
+  subCid <- submitMulti [gp, lp] [] do
+    createCmd FundSubscription with
+      subscriptionId = "SUB-2026-001"
+      fundManager = gp
+      investor = lp
+      custodian = custodian
+      fundId = "FUND-PC-01"
+      fundName = "AryaFi Senior Private Credit Fund I"
+      currency = "USD"
+      committedAmount = 25000000.0
+      calledAmount = 0.0
+      fundedAmount = 0.0
+      unitsIssued = 0.0
+      unitPrice = 1000.0
+      status = SubscriptionRequested
+      rejectionReason = None
+      correlationId = CorrelationId "CORR-SUB-001"
+      observers = []
+
+  -- 1. GP approves subscription
+  subCidApproved <- submit gp do
+    exerciseCmd subCid ApproveSubscription
+
+  Some subApp <- queryContractId gp subCidApproved
+  assertMsg "Status must be Approved" (subApp.status == SubscriptionApproved)
+
+  -- 2. GP issues initial capital call of 10M USD
+  subCidCall1 <- submit gp do
+    exerciseCmd subCidApproved IssueCapitalCall with
+      callAmount = 10000000.0
+
+  Some subC1 <- queryContractId lp subCidCall1
+  assertMsg "Called amount must be 10M" (subC1.calledAmount == 10000000.0)
+
+  -- 3. Custodian confirms funding of 10M and issues 10,000 LP units
+  subCidFunded1 <- submit custodian do
+    exerciseCmd subCidCall1 ConfirmCapitalFunding with
+      paymentRef = "FEDWIRE-CAP-001"
+      fundedPaymentAmount = 10000000.0
+      newUnitsAllocated = 10000.0
+
+  Some subF1 <- queryContractId lp subCidFunded1
+  assertMsg "Status must be PartiallyFunded" (subF1.status == SubscriptionPartiallyFunded)
+  assertMsg "Units issued must be 10,000" (subF1.unitsIssued == 10000.0)
+
+  -- 4. GP calls remaining 15M USD
+  subCidCall2 <- submit gp do
+    exerciseCmd subCidFunded1 IssueCapitalCall with
+      callAmount = 15000000.0
+
+  Some subC2 <- queryContractId lp subCidCall2
+  assertMsg "Called amount must equal committed 25M" (subC2.calledAmount == 25000000.0)
+
+  -- 5. Custodian confirms remaining 15M funding and issues 15,000 units
+  subCidFunded2 <- submit custodian do
+    exerciseCmd subCidCall2 ConfirmCapitalFunding with
+      paymentRef = "FEDWIRE-CAP-002"
+      fundedPaymentAmount = 15000000.0
+      newUnitsAllocated = 15000.0
+
+  Some subF2 <- queryContractId lp subCidFunded2
+  assertMsg "Status must be FullyFunded" (subF2.status == SubscriptionFullyFunded)
+  assertMsg "Total units issued must be 25,000" (subF2.unitsIssued == 25000.0)
+
+  -- Check IsSubscriptionActive query
+  isActive <- submit gp do
+    exerciseCmd subCidFunded2 IsSubscriptionActive
+  assertMsg "Subscription must be active" isActive
+
+  -- 6. Add observer and close
+  subCidObserved <- submit gp do
+    exerciseCmd subCidFunded2 AddSubscriptionObserver with
+      newObserver = regulator
+
+  subCidClosed <- submit gp do
+    exerciseCmd subCidObserved CloseSubscription
+
+  Some subClosed <- queryContractId gp subCidClosed
+  assertMsg "Status must be Closed" (subClosed.status == SubscriptionClosed)
+  pure ()
+
+-- | Test subscription rejection and cancellation flows
+testSubscriptionRejectionAndCancellation : Script ()
+testSubscriptionRejectionAndCancellation = script do
+  (gp, lp, custodian, _) <- setupParties
+
+  -- Rejection test
+  subCid1 <- submitMulti [gp, lp] [] do
+    createCmd FundSubscription with
+      subscriptionId = "SUB-REJECT-01"
+      fundManager = gp
+      investor = lp
+      custodian = custodian
+      fundId = "FUND-PC-01"
+      fundName = "AryaFi Fund"
+      currency = "USD"
+      committedAmount = 5000000.0
+      calledAmount = 0.0
+      fundedAmount = 0.0
+      unitsIssued = 0.0
+      unitPrice = 1000.0
+      status = SubscriptionRequested
+      rejectionReason = None
+      correlationId = CorrelationId "CORR-REJ-01"
+      observers = []
+
+  subCidRejected <- submit gp do
+    exerciseCmd subCid1 RejectSubscription with
+      reason = "Fund commitment cap reached for Q3"
+
+  Some subRej <- queryContractId lp subCidRejected
+  assertMsg "Status must be Rejected" (subRej.status == SubscriptionRejected "Fund commitment cap reached for Q3")
+
+  -- Cancellation test
+  subCid2 <- submitMulti [gp, lp] [] do
+    createCmd FundSubscription with
+      subscriptionId = "SUB-CANCEL-01"
+      fundManager = gp
+      investor = lp
+      custodian = custodian
+      fundId = "FUND-PC-01"
+      fundName = "AryaFi Fund"
+      currency = "USD"
+      committedAmount = 5000000.0
+      calledAmount = 0.0
+      fundedAmount = 0.0
+      unitsIssued = 0.0
+      unitPrice = 1000.0
+      status = SubscriptionRequested
+      rejectionReason = None
+      correlationId = CorrelationId "CORR-CAN-01"
+      observers = []
+
+  subCidCancelled <- submit lp do
+    exerciseCmd subCid2 CancelSubscription with
+      reason = "Investor internal allocation strategy revision"
+
+  Some subCan <- queryContractId gp subCidCancelled
+  assertMsg "Status must be Cancelled" (subCan.status == SubscriptionCancelled "Investor internal allocation strategy revision")
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- Redemption Tests
+-- ---------------------------------------------------------------------------
+
+-- | Test full redemption lifecycle: request -> NAV strike & approval -> custodian payout
+testRedemptionFullLifecycle : Script ()
+testRedemptionFullLifecycle = script do
+  (gp, lp, custodian, regulator) <- setupParties
+
+  redCid <- submitMulti [gp, lp] [] do
+    createCmd AssetRedemption with
+      redemptionId = "RED-2026-001"
+      fundManager = gp
+      investor = lp
+      custodian = custodian
+      fundId = "FUND-PC-01"
+      fundName = "AryaFi Senior Private Credit Fund I"
+      unitsToRedeem = 5000.0
+      currency = "USD"
+      struckNavPerUnit = None
+      settlementPayout = None
+      redemptionFeeRate = 0.01 -- 1% early exit fee
+      requestDate = nowTime
+      settlementDate = None
+      status = RedemptionRequested
+      correlationId = CorrelationId "CORR-RED-001"
+      observers = [regulator]
+
+  -- 1. GP approves at official NAV of 1,050.00 USD/unit
+  -- Gross = 5000 * 1050 = 5,250,000 USD; Fee = 52,500; Net = 5,197,500 USD
+  redCidApproved <- submit gp do
+    exerciseCmd redCid ApproveRedemption with
+      officialNav = 1050.0
+
+  Some redApp <- queryContractId lp redCidApproved
+  assertMsg "Status must be RedemptionApproved" (redApp.status == RedemptionApproved 1050.0)
+  assertMsg "Struck NAV must equal 1050.0" (redApp.struckNavPerUnit == Some 1050.0)
+  assertMsg "Net payout must equal 5,197,500 USD" (redApp.settlementPayout == Some 5197500.0)
+
+  -- 2. Custodian settles cash payout
+  redCidSettled <- submit custodian do
+    exerciseCmd redCidApproved ExecuteRedemptionSettlement with
+      paymentRef = "FEDWIRE-RED-001"
+      actualSettlementTime = settleTime
+
+  Some redSet <- queryContractId lp redCidSettled
+  assertMsg "Status must be RedemptionSettled" (redSet.status == RedemptionSettled "FEDWIRE-RED-001" 5197500.0)
+  assertMsg "Settlement date must be populated" (redSet.settlementDate == Some settleTime)
+
+  -- Check IsRedemptionSettled query
+  isSettled <- submit gp do
+    exerciseCmd redCidSettled IsRedemptionSettled
+  assertMsg "Redemption must be settled" isSettled
+  pure ()
+
+-- | Test liquidity gating and subsequent release
+testRedemptionLiquidityGate : Script ()
+testRedemptionLiquidityGate = script do
+  (gp, lp, custodian, _) <- setupParties
+
+  redCid <- submitMulti [gp, lp] [] do
+    createCmd AssetRedemption with
+      redemptionId = "RED-GATE-001"
+      fundManager = gp
+      investor = lp
+      custodian = custodian
+      fundId = "FUND-PC-01"
+      fundName = "AryaFi Fund"
+      unitsToRedeem = 10000.0
+      currency = "USD"
+      struckNavPerUnit = None
+      settlementPayout = None
+      redemptionFeeRate = 0.0
+      requestDate = nowTime
+      settlementDate = None
+      status = RedemptionRequested
+      correlationId = CorrelationId "CORR-GATE-01"
+      observers = []
+
+  -- GP applies liquidity gate
+  redCidGated <- submit gp do
+    exerciseCmd redCid ApplyLiquidityGate with
+      gateReason = "Quarterly investor redemption limit (5% of NAV) reached"
+
+  Some redGated <- queryContractId lp redCidGated
+  assertMsg "Status must be Gated" (redGated.status == RedemptionGated "Quarterly investor redemption limit (5% of NAV) reached")
+
+  -- Next period: GP releases gate
+  redCidReleased <- submit gp do
+    exerciseCmd redCidGated ReleaseLiquidityGate
+
+  Some redRel <- queryContractId lp redCidReleased
+  assertMsg "Status must revert to Requested" (redRel.status == RedemptionRequested)
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- Negative Tests
+-- ---------------------------------------------------------------------------
+
+-- | Negative: Capital call exceeding commitment must fail
+testCapitalCallExceedingCommitmentFails : Script ()
+testCapitalCallExceedingCommitmentFails = script do
+  (gp, lp, custodian, _) <- setupParties
+
+  subCid <- submitMulti [gp, lp] [] do
+    createCmd FundSubscription with
+      subscriptionId = "SUB-EXCEED-01"
+      fundManager = gp
+      investor = lp
+      custodian = custodian
+      fundId = "FUND-PC-01"
+      fundName = "AryaFi Fund"
+      currency = "USD"
+      committedAmount = 10000000.0
+      calledAmount = 0.0
+      fundedAmount = 0.0
+      unitsIssued = 0.0
+      unitPrice = 1000.0
+      status = SubscriptionApproved
+      rejectionReason = None
+      correlationId = CorrelationId "CORR-EXC-01"
+      observers = []
+
+  submitMustFail gp do
+    exerciseCmd subCid IssueCapitalCall with
+      callAmount = 12000000.0 -- Exceeds 10,000,000
+
+-- | Negative: Cannot settle unapproved redemption
+testSettleUnapprovedRedemptionFails : Script ()
+testSettleUnapprovedRedemptionFails = script do
+  (gp, lp, custodian, _) <- setupParties
+
+  redCid <- submitMulti [gp, lp] [] do
+    createCmd AssetRedemption with
+      redemptionId = "RED-FAIL-01"
+      fundManager = gp
+      investor = lp
+      custodian = custodian
+      fundId = "FUND-PC-01"
+      fundName = "AryaFi Fund"
+      unitsToRedeem = 1000.0
+      currency = "USD"
+      struckNavPerUnit = None
+      settlementPayout = None
+      redemptionFeeRate = 0.0
+      requestDate = nowTime
+      settlementDate = None
+      status = RedemptionRequested
+      correlationId = CorrelationId "CORR-FAIL-01"
+      observers = []
+
+  submitMustFail custodian do
+    exerciseCmd redCid ExecuteRedemptionSettlement with
+      paymentRef = "PAY-FAIL"
+      actualSettlementTime = settleTime
