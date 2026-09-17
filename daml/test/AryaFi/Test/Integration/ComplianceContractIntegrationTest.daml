@@ -1,0 +1,400 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Integration test suite: cross-module workflow verification.
+--
+-- Tests the composition of multiple AryaFi modules working together in
+-- realistic institutional scenarios, verifying that:
+--   1. Compliance modules gate contract creation and execution
+--   2. Finance primitives compose with contract workflows
+--   3. State transitions propagate correctly across module boundaries
+--
+-- These tests bridge the gap between unit tests (single module) and
+-- full end-to-end scenario tests (reference applications) by verifying
+-- specific cross-module integration points.
+module AryaFi.Test.Integration.ComplianceContractIntegrationTest where
+
+import Daml.Script
+import DA.Time (time)
+import DA.Date (date, Month(..))
+import AryaFi.Finance.Cash
+import AryaFi.Finance.Security
+import AryaFi.Finance.Settlement
+import AryaFi.Finance.Obligation
+import AryaFi.Contracts.Transfer
+import AryaFi.Contracts.Loan
+import AryaFi.Contracts.Pledge
+import AryaFi.Compliance.KYC
+import AryaFi.Compliance.Sanctions
+import AryaFi.Compliance.Eligibility
+import AryaFi.Compliance.TransferRestrictions
+import AryaFi.Compliance.OwnershipRestrictions
+import AryaFi.Common.Identifiers
+import AryaFi.Common.Types
+import AryaFi.Common.Policies (PolicyDecision(..), isApproved)
+
+-- ---------------------------------------------------------------------------
+-- 1. KYC + Sanctions + Transfer: gated asset transfer workflow
+-- ---------------------------------------------------------------------------
+
+-- | Verifies that a regulated asset transfer only proceeds when the
+-- counterparty has valid KYC and sanctions clearance.
+kycSanctionsGatedTransfer : Script ()
+kycSanctionsGatedTransfer = script do
+  kycAuthority <- allocateParty "KYCAuthority"
+  sanctionsScreener <- allocateParty "SanctionsScreener"
+  complianceOfficer <- allocateParty "ComplianceOfficer"
+  custodian <- allocateParty "CustodianBNY"
+  sender <- allocateParty "SenderCorp"
+  receiver <- allocateParty "ReceiverCorp"
+
+  let now = time (date 2026 Sep 10) 10 0 0
+  let kycExpiry = time (date 2027 Sep 10) 10 0 0
+
+  -- Step 1: Establish KYC attestation for receiver
+  receiverKycCid <- submit kycAuthority do
+    createCmd KycAttestation with
+      authority = kycAuthority
+      subjectParty = receiver
+      lei = Some "RECV12345678901234"
+      status = KycVerified
+      verificationTimestamp = now
+      expiryTimestamp = kycExpiry
+      jurisdiction = "US"
+      riskTier = "STANDARD"
+      providerRef = None
+      observers = [complianceOfficer]
+
+  -- Step 2: Establish sanctions clearance for receiver
+  receiverSanctionsCid <- submit sanctionsScreener do
+    createCmd SanctionsAttestation with
+      screeningAuthority = sanctionsScreener
+      subjectParty = receiver
+      lei = Some "RECV12345678901234"
+      status = SanctionsClear
+      screeningTimestamp = now
+      expiryTimestamp = kycExpiry
+      screeningProviderRef = "ACME-AML-SCREEN-001"
+      providerRef = None
+      observers = [complianceOfficer]
+
+  -- Step 3: Verify compliance status before approving transfer
+  isKycValid <- submit kycAuthority do
+    exerciseCmd receiverKycCid IsKycValid
+  isSanctionsClear <- submit sanctionsScreener do
+    exerciseCmd receiverSanctionsCid IsSanctionsClear
+
+  -- Step 4: Create transfer request only if compliance checks pass
+  assert isKycValid
+  assert isSanctionsClear
+
+  transferCid <- submitMulti [sender, custodian] [] do
+    createCmd AssetTransferRequest with
+      transferId = "XFR-INT-001"
+      sender = sender
+      receiver = receiver
+      custodian = custodian
+      complianceOfficer = complianceOfficer
+      assetId = "SEC-US912828ZM24"
+      quantity = 1000000.0
+      fromAccount = AccountId "ACC-SENDER-001"
+      toAccount = AccountId "ACC-RECEIVER-001"
+      correlationId = CorrelationId "CORR-INT-XFR-001"
+      requestTimestamp = now
+      status = TransferPendingCompliance
+      complianceNote = None
+      observers = []
+
+  -- Step 5: Compliance officer approves (having verified KYC + sanctions above)
+  approvedCid <- submit complianceOfficer do
+    exerciseCmd transferCid ApproveTransfer with
+      note = "KYC verified, sanctions clear — transfer approved"
+
+  -- Step 6: Custodian completes the approved transfer
+  completedCid <- submit custodian do
+    exerciseCmd approvedCid CompleteTransfer
+
+  -- Verify final state
+  completedTransfer <- queryContractId custodian completedCid
+  case completedTransfer of
+    Some t -> assert (t.status == TransferCompleted)
+    None -> abort "Completed transfer contract not found"
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- 2. Eligibility + Ownership + Transfer Restrictions: multi-policy gating
+-- ---------------------------------------------------------------------------
+
+-- | Verifies that multiple compliance policies are evaluated together
+-- before a transfer proceeds, using policy decision combinators.
+multiPolicyComplianceGating : Script ()
+multiPolicyComplianceGating = script do
+  complianceOfficer <- allocateParty "ComplianceOfficer"
+  regulator <- allocateParty "Regulator"
+
+  -- Create eligibility policy
+  eligibilityCid <- submit complianceOfficer do
+    createCmd EligibilityPolicy with
+      policyManager = complianceOfficer
+      policyName = "Institutional-Bond-Eligible"
+      allowedJurisdictions = ["US", "GB", "DE", "JP"]
+      allowedAssetClasses = ["GovernmentBond", "CorporateBond"]
+      minCreditRating = "A"
+      isActive = True
+
+  -- Create ownership restriction
+  ownershipCid <- submit regulator do
+    createCmd OwnershipRestriction with
+      regulator = regulator
+      isin = "US912828ZM24"
+      maxOwnershipPercentage = 25.0
+      maxHoldingQuantity = 50000000.0
+      disallowedJurisdictions = ["NK", "IR", "SY"]
+      isActive = True
+
+  -- Create transfer restriction rule
+  transferRuleCid <- submit complianceOfficer do
+    createCmd TransferRestrictionRule with
+      complianceOfficer = complianceOfficer
+      isin = "US912828ZM24"
+      regulatoryCategory = Rule144A
+      holdingPeriodDays = 0
+      whitelistRequired = False
+      lockupExpiry = None
+      isActive = True
+
+  -- Evaluate all policies for a US-based institutional buyer
+  eligibilityDecision <- submit complianceOfficer do
+    exerciseCmd eligibilityCid EvaluateEligibility with
+      targetJurisdiction = "US"
+      targetAssetClass = "GovernmentBond"
+
+  ownershipDecision <- submit regulator do
+    exerciseCmd ownershipCid CheckOwnershipLimit with
+      proposedQuantity = 5000000.0
+      proposedPercentage = 10.0
+      holderJurisdiction = "US"
+
+  transferAllowed <- submit complianceOfficer do
+    exerciseCmd transferRuleCid IsTransferAllowed
+
+  -- All policies should approve for a valid US institutional buyer
+  assert (isApproved eligibilityDecision)
+  assert (isApproved ownershipDecision)
+  assert transferAllowed
+
+  -- Now test with a restricted jurisdiction — ownership should reject
+  restrictedDecision <- submit regulator do
+    exerciseCmd ownershipCid CheckOwnershipLimit with
+      proposedQuantity = 5000000.0
+      proposedPercentage = 10.0
+      holderJurisdiction = "IR"  -- Iran — disallowed
+
+  assert (not (isApproved restrictedDecision))
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- 3. Cash + Security + DvP: settlement lifecycle integration
+-- ---------------------------------------------------------------------------
+
+-- | Verifies that cash and security positions can be locked and used
+-- as inputs to a DvP settlement instruction lifecycle.
+cashSecurityDvpIntegration : Script ()
+cashSecurityDvpIntegration = script do
+  settlementAgent <- allocateParty "SettlementAgent"
+  seller <- allocateParty "SellerDealer"
+  buyer <- allocateParty "BuyerFund"
+  custodian <- allocateParty "CustodianBNY"
+
+  let now = time (date 2026 Sep 10) 10 0 0
+  let sellerSecAcc = AccountId "ACC-SELLER-SEC"
+  let buyerSecAcc = AccountId "ACC-BUYER-SEC"
+  let sellerCashAcc = AccountId "ACC-SELLER-CASH"
+  let buyerCashAcc = AccountId "ACC-BUYER-CASH"
+
+  -- Step 1: Create security position for seller
+  secCid <- submitMulti [custodian, seller] [] do
+    createCmd SecurityPosition with
+      custodian = custodian
+      owner = seller
+      accountId = sellerSecAcc
+      isin = "US912828ZM24"
+      cusip = Some "912828ZM2"
+      instrumentName = "US Treasury 4.25% Nov 2026"
+      instrumentType = GovernmentBond
+      quantity = 10000000.0
+      couponRate = Some 0.0425
+      couponType = Some FixedCoupon
+      dayCountConvention = Some Act360
+      maturityDate = Some (time (date 2026 Nov 15) 0 0 0)
+      seniority = Some Senior
+      isLocked = False
+      lockReference = None
+      csdRef = None
+      observers = [settlementAgent]
+
+  -- Step 2: Create cash position for buyer
+  cashCid <- submitMulti [custodian, buyer] [] do
+    createCmd CashPosition with
+      bank = custodian
+      owner = buyer
+      accountId = buyerCashAcc
+      currency = "USD"
+      amount = 10000000.0
+      isLocked = False
+      lockReference = None
+      observers = [settlementAgent]
+
+  -- Step 3: Lock security for DvP
+  lockedSecCid <- submitMulti [seller, custodian] [] do
+    exerciseCmd secCid LockSecurity with lockRef = "DVP-INT-001"
+
+  -- Step 4: Lock cash for DvP
+  lockedCashCid <- submitMulti [buyer, custodian] [] do
+    exerciseCmd cashCid LockCash with lockRef = "DVP-INT-001"
+
+  -- Step 5: Create DvP instruction
+  dvpCid <- submitMulti [settlementAgent, seller, buyer] [] do
+    createCmd DvpInstruction with
+      settlementAgent = settlementAgent
+      seller = seller
+      buyer = buyer
+      tradeId = TradeId "TRADE-DVP-INT-001"
+      isin = "US912828ZM24"
+      securityQuantity = 10000000.0
+      sellerSecurityAccount = sellerSecAcc
+      buyerSecurityAccount = buyerSecAcc
+      currency = "USD"
+      cashAmount = 9975000.0
+      sellerCashAccount = sellerCashAcc
+      buyerCashAccount = buyerCashAcc
+      dvpModel = DvpModel1
+      settlementDate = now
+      correlationId = CorrelationId "CORR-DVP-INT-001"
+      idempotencyKey = IdempotencyKey "IDEMP-DVP-INT-001"
+      sellerSecurityLockRef = "DVP-INT-001"
+      buyerCashLockRef = "DVP-INT-001"
+      status = PendingSettlement
+      failureReason = None
+      observers = []
+
+  -- Step 6: Settlement agent executes DvP
+  settledDvpCid <- submit settlementAgent do
+    exerciseCmd dvpCid ExecuteDvpSettlement
+
+  -- Verify settlement finalized
+  isFinalized <- submit settlementAgent do
+    exerciseCmd settledDvpCid IsFinalized
+  assert isFinalized
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- 4. Loan + Obligation + Pledge: secured lending integration
+-- ---------------------------------------------------------------------------
+
+-- | Verifies that a loan facility integrates with obligation creation
+-- and collateral pledge linking across modules.
+securedLoanObligationIntegration : Script ()
+securedLoanObligationIntegration = script do
+  lender <- allocateParty "LenderBank"
+  borrower <- allocateParty "BorrowerCorp"
+  custodian <- allocateParty "Custodian"
+
+  let now = time (date 2026 Sep 1) 0 0 0
+  let maturity = time (date 2027 Sep 1) 0 0 0
+
+  -- Step 1: Create institutional loan
+  loanCid <- submitMulti [lender, borrower] [] do
+    createCmd InstitutionalLoan with
+      loanId = "LOAN-INT-001"
+      lender = lender
+      borrower = borrower
+      agentBank = None
+      currency = "USD"
+      facilityLimit = 50000000.0
+      drawnPrincipal = 0.0
+      accruedInterest = 0.0
+      interestRate = 0.065
+      dayCountConvention = Act360
+      startDate = now
+      maturityDate = maturity
+      collateralPledgeRef = None
+      status = Active
+      defaultReason = None
+      correlationId = CorrelationId "CORR-LOAN-INT-001"
+      observers = []
+
+  -- Step 2: Create collateral pledge
+  pledgeCid <- submitMulti [borrower, lender, custodian] [] do
+    createCmd AssetPledge with
+      pledgeId = "PLEDGE-INT-001"
+      pledgor = borrower
+      pledgee = lender
+      custodian = custodian
+      accountId = AccountId "ACC-BORROWER-COLL"
+      assetId = "US912828ZM24"
+      quantity = 10000000.0
+      perfectionReference = "UCC-FILING-INT-001"
+      correlationId = CorrelationId "CORR-PLEDGE-INT-001"
+      status = Active
+      enforceTimestamp = None
+      observers = []
+
+  -- Step 3: Link pledge to loan
+  linkedLoanCid <- submit borrower do
+    exerciseCmd loanCid LinkCollateralPledge with
+      pledgeRef = "PLEDGE-INT-001"
+
+  -- Step 4: Borrower draws down on the facility
+  drawnLoanCid <- submit borrower do
+    exerciseCmd linkedLoanCid DrawdownPrincipal with
+      drawdownAmount = 20000000.0
+
+  -- Step 5: Create corresponding payment obligation
+  oblCid <- submitMulti [borrower, lender] [] do
+    createCmd FinancialObligation with
+      obligor = borrower
+      obligee = lender
+      currency = "USD"
+      amount = 20000000.0
+      dueDate = maturity
+      status = Pending
+      obligationRef = "OBL-LOAN-INT-001"
+      correlationId = CorrelationId "CORR-OBL-INT-001"
+      description = "Principal repayment for LOAN-INT-001"
+      agentObserver = None
+      externalRef = None
+
+  -- Step 6: Lender accrues interest
+  accruedLoanCid <- submit lender do
+    exerciseCmd drawnLoanCid AccrueInterest with
+      additionalInterest = 108333.33  -- ~20M * 6.5% * 30/360
+
+  -- Step 7: Borrower pays interest
+  paidInterestCid <- submit borrower do
+    exerciseCmd accruedLoanCid PayAccruedInterest with
+      paymentAmount = 108333.33
+
+  -- Step 8: Borrower repays principal — loan auto-closes if fully paid
+  repaidLoanCid <- submit borrower do
+    exerciseCmd paidInterestCid PayDownPrincipal with
+      paymentAmount = 20000000.0
+
+  -- Verify loan is now closed
+  closedLoan <- queryContractId lender repaidLoanCid
+  case closedLoan of
+    Some l -> assert (l.status == Closed)
+    None -> abort "Closed loan contract not found"
+
+  -- Step 9: Unlink collateral pledge after full repayment
+  unlinkedLoanCid <- submit lender do
+    exerciseCmd repaidLoanCid UnlinkCollateralPledge
+
+  -- Step 10: Discharge the obligation
+  dischargedOblCid <- submit lender do
+    exerciseCmd oblCid DischargeObligation
+
+  pure ()
