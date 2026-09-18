@@ -200,10 +200,10 @@ Final compiler hardening, automated CI packaging, and formal release governance.
 | **Foundations** | Core Primitives, Finance, Contracts, Compliance | `daml/src/AryaFi/*` | [x] Completed |
 | **Foundations** | Comprehensive Test Suites & Scenarios | `daml/test/*`, `daml/src/AryaFi/Test/*` | [x] Completed |
 | **Foundations** | 5 Reference Application Guides | `examples/*/README.md` | [x] Completed |
-| **Epic 1** | ISO 20022 Financial Messaging Mappings | `docs/integration/ISO20022_MAPPINGS.md` | [ ] Pending |
-| **Epic 1** | Canton Ledger API Client Specification | `docs/integration/LEDGER_API_CLIENT.md` | [ ] Pending |
-| **Epic 1** | EOD Ledger & Custody Reconciliation | `docs/integration/RECONCILIATION.md` | [ ] Pending |
-| **Epic 1** | Settlement Rail Adapter Architecture | `docs/integration/ADAPTERS_SPEC.md` | [ ] Pending |
+| **Epic 1** | ISO 20022 Financial Messaging Mappings | `docs/integration/ISO20022_MAPPINGS.md` | [x] Completed |
+| **Epic 1** | Canton Ledger API Client Specification | `docs/integration/LEDGER_API_CLIENT.md` | [x] Completed |
+| **Epic 1** | EOD Ledger & Custody Reconciliation | `docs/integration/RECONCILIATION.md` | [x] Completed |
+| **Epic 1** | Settlement Rail Adapter Architecture | `docs/integration/ADAPTERS_SPEC.md` | [x] Completed |
 | **Epic 2** | Multi-Party Canton Topology Config | `deploy/canton/canton.conf` | [ ] Pending |
 | **Epic 2** | Local Docker Compose Sandbox | `deploy/docker/*` | [ ] Pending |
 | **Epic 2** | Participant Node Operations Guide | `docs/deployment/OPERATIONS_GUIDE.md` | [ ] Pending |
