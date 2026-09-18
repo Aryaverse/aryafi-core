@@ -155,9 +155,12 @@ daml test
 
 ## Roadmap
 
-- **MVP**: Core Finance Primitives, DvP Settlement, Transfer Controls, KYC/Sanctions Status, Tokenized Treasury Reference Application.
-- **Phase 2**: Institutional Repo, Secured Loans, Collateral & Pledge Lifecycle, Margin Management, Securities Lending.
-- **Phase 3**: Private Credit, Subscriptions & Redemptions, Regulatory Adapters, Enterprise SDKs.
+- **MVP (Completed)**: Core Finance Primitives, DvP Settlement, Transfer Controls, KYC/Sanctions Status, Tokenized Treasury Reference Application.
+- **Phase 2 (Completed)**: Institutional Repo, Secured Loans, Collateral & Pledge Lifecycle, Margin Management, Securities Lending.
+- **Phase 3 (Completed)**: Private Credit, Subscriptions & Redemptions, Test Hardening, Reference Application Guides.
+- **Phase 4 (Current)**: External Market Rail Integration (ISO 20022), Canton Deployment Topologies, STRIDE Threat Modeling, and v1.0.0 Production Release.
+
+👉 **For the complete commit-by-commit roadmap to v1.0.0, see [docs/ROADMAP.md](docs/ROADMAP.md).**
 
 ---
 
