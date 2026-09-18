@@ -1,46 +1,183 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Institutional Asset & Fund Redemption Contract for AryaFi core.
+--
+-- Supports open-ended fund, private credit, and tokenized vehicle redemptions:
+--   - Redemption request with LP unit accounting
+--   - Official NAV pricing and net payout calculation with redemption fee deduction
+--   - Liquidity gate mechanisms (e.g. fund-level capacity gates or suspension)
+--   - Custodian execution of cash redemption payout
+--   - Multi-party oversight (GP, LP, Custodian, Administrator, Regulators)
 module AryaFi.Contracts.Redemption where
 
 import AryaFi.Common.Types (Amount, Currency)
-import AryaFi.Common.Identifiers (ReferenceId)
+import AryaFi.Common.Identifiers (ReferenceId, CorrelationId)
+import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
+import DA.Optional (fromSome)
+import qualified DA.List as List
 
 -- | Redemption status states.
 data RedemptionStatus
   = RedemptionRequested
-  | RedemptionApproved
-  | RedemptionProcessed
+    -- ^ Investor submitted redemption request for specified units.
+  | RedemptionApproved Amount
+    -- ^ Fund manager approved request at struck NAV per unit.
+  | RedemptionGated Text
+    -- ^ Liquidity gate applied by fund manager with stated reason.
+  | RedemptionSettled ReferenceId Amount
+    -- ^ Cash redemption payout settled by custodian with payment reference and net amount.
   | RedemptionRejected Text
+    -- ^ Rejected by fund manager with stated reason.
+  | RedemptionCancelled Text
+    -- ^ Cancelled by investor prior to approval.
   deriving (Eq, Show)
 
 -- | Fund or asset redemption request contract.
 template AssetRedemption
   with
     redemptionId : ReferenceId
+    -- ^ Unique identifier for this redemption request.
     fundManager : Party
+    -- ^ Fund manager / General Partner.
     investor : Party
+    -- ^ Redeeming institutional investor / Limited Partner.
+    custodian : Party
+    -- ^ Fund custodian / paying agent bank.
+    fundId : ReferenceId
+    -- ^ Target fund or vehicle identifier.
     fundName : Text
+    -- ^ Name of the investment fund.
     unitsToRedeem : Amount
-    estimatedValue : Amount
+    -- ^ Number of units / shares being redeemed.
     currency : Currency
+    -- ^ Payout settlement currency.
+    struckNavPerUnit : Optional Amount
+    -- ^ Official NAV per unit applied upon approval.
+    settlementPayout : Optional Amount
+    -- ^ Net monetary payout owed after fee deduction.
+    redemptionFeeRate : Amount
+    -- ^ Contractual redemption / early-exit fee rate (e.g. 0.01 for 1%).
+    requestDate : Time
+    -- ^ Inception timestamp of redemption request.
+    settlementDate : Optional Time
+    -- ^ Date when payout was settled.
     status : RedemptionStatus
+    -- ^ Current lifecycle status.
+    correlationId : CorrelationId
+    -- ^ Cross-system correlation identifier.
+    observers : [Party]
+    -- ^ Authorized observers (e.g. fund administrator, transfer agent, regulators).
   where
     signatory fundManager, investor
+    observer (List.dedup (custodian :: observers))
 
+    ensure
+      unitsToRedeem > 0.0 &&
+      redemptionFeeRate >= 0.0 && redemptionFeeRate < 1.0 &&
+      redemptionId /= ""
+
+    -- | Fund Manager approves redemption request and strikes official NAV pricing.
     choice ApproveRedemption : ContractId AssetRedemption
+      with
+        officialNav : Amount
       controller fundManager
       do
-        create this with status = RedemptionApproved
+        require (status == RedemptionRequested) "Only requested redemptions can be approved"
+        requirePositive officialNav "Official NAV must be positive"
 
-    choice ProcessRedemption : ContractId AssetRedemption
+        let grossPayout = unitsToRedeem * officialNav
+        let feeAmount = grossPayout * redemptionFeeRate
+        let netPayout = grossPayout - feeAmount
+
+        create this with
+          struckNavPerUnit = Some officialNav
+          settlementPayout = Some netPayout
+          status = RedemptionApproved officialNav
+
+    -- | Fund Manager applies liquidity gate to redemption request.
+    choice ApplyLiquidityGate : ContractId AssetRedemption
+      with
+        gateReason : Text
       controller fundManager
       do
-        create this with status = RedemptionProcessed
+        require (status == RedemptionRequested) "Only requested redemptions can be gated"
+        requireNonEmpty gateReason "Gate reason must be provided"
+        create this with
+          status = RedemptionGated gateReason
 
+    -- | Fund Manager releases liquidity gate, returning request to active evaluation.
+    choice ReleaseLiquidityGate : ContractId AssetRedemption
+      controller fundManager
+      do
+        require (isGated status) "Redemption must be Gated to release"
+        create this with
+          status = RedemptionRequested
+
+    -- | Fund Manager rejects redemption request.
     choice RejectRedemption : ContractId AssetRedemption
       with
         reason : Text
       controller fundManager
       do
-        create this with status = RedemptionRejected reason
+        require (status == RedemptionRequested || isGated status)
+          "Can only reject requested or gated redemptions"
+        requireNonEmpty reason "Rejection reason must be provided"
+        create this with
+          status = RedemptionRejected reason
+
+    -- | Custodian executes cash payout and finalizes redemption settlement.
+    choice ExecuteRedemptionSettlement : ContractId AssetRedemption
+      with
+        paymentRef : ReferenceId
+        actualSettlementTime : Time
+      controller custodian
+      do
+        require (isApproved status) "Redemption must be Approved to execute settlement"
+        requireNonEmpty paymentRef "Payment reference must not be empty"
+        let payout = fromSome settlementPayout
+
+        create this with
+          settlementDate = Some actualSettlementTime
+          status = RedemptionSettled paymentRef payout
+
+    -- | Investor cancels redemption request prior to manager approval.
+    choice CancelRedemption : ContractId AssetRedemption
+      with
+        reason : Text
+      controller investor
+      do
+        require (status == RedemptionRequested || isGated status)
+          "Can only cancel pending or gated redemption"
+        requireNonEmpty reason "Cancellation reason must be specified"
+        create this with
+          status = RedemptionCancelled reason
+
+    -- | Add authorized observer (e.g. transfer agent).
+    choice AddRedemptionObserver : ContractId AssetRedemption
+      with
+        newObserver : Party
+      controller fundManager
+      do
+        require (not (newObserver `elem` observers)) "Observer already registered"
+        create this with
+          observers = newObserver :: observers
+
+    -- | Nonconsuming query to check if redemption is settled.
+    nonconsuming choice IsRedemptionSettled : Bool
+      controller fundManager
+      do
+        case status of
+          RedemptionSettled _ _ -> return True
+          _ -> return False
+
+-- | Helper to test if status is approved.
+isApproved : RedemptionStatus -> Bool
+isApproved (RedemptionApproved _) = True
+isApproved _ = False
+
+-- | Helper to test if status is gated.
+isGated : RedemptionStatus -> Bool
+isGated (RedemptionGated _) = True
+isGated _ = False
+

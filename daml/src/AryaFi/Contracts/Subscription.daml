@@ -1,40 +1,178 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Institutional Fund Subscription and Capital Commitment Contract for AryaFi core.
+--
+-- Supports Private Credit, Private Equity, and Tokenized Fund capital lifecycles:
+--   - LP Capital commitment tracking and approval
+--   - Incremental capital calls issued by the General Partner (Fund Manager)
+--   - Custodian-verified capital funding settlement and LP unit allocation
+--   - Multi-party oversight (GP, LP, Custodian, Administrator, Regulator)
 module AryaFi.Contracts.Subscription where
 
 import AryaFi.Common.Types (Amount, Currency)
-import AryaFi.Common.Identifiers (ReferenceId)
+import AryaFi.Common.Identifiers (ReferenceId, CorrelationId)
+import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
+import qualified DA.List as List
 
--- | Status of private credit / fund subscription.
+-- | Lifecycle states of a fund / private credit subscription.
 data SubscriptionStatus
   = SubscriptionRequested
+    -- ^ Investor submitted subscription request; awaiting manager review.
   | SubscriptionApproved
-  | SubscriptionFunded
+    -- ^ Fund manager approved commitment; ready for capital calls.
+  | SubscriptionPartiallyFunded
+    -- ^ Partial capital call funded; remaining commitment remains callable.
+  | SubscriptionFullyFunded
+    -- ^ 100% of committed capital called and funded.
+  | SubscriptionCancelled Text
+    -- ^ Cancelled by investor prior to approval or by mutual agreement.
   | SubscriptionRejected Text
+    -- ^ Rejected by fund manager with compliance or capacity reason.
+  | SubscriptionClosed
+    -- ^ Commitment period concluded or position closed.
   deriving (Eq, Show)
 
 -- | Investor Subscription Agreement for institutional funds / private credit.
 template FundSubscription
   with
     subscriptionId : ReferenceId
+    -- ^ Unique identifier for this subscription arrangement.
     fundManager : Party
+    -- ^ Fund manager / General Partner (GP).
     investor : Party
+    -- ^ Institutional limited partner / investor (LP).
+    custodian : Party
+    -- ^ Fund custodian / depositary bank.
+    fundId : ReferenceId
+    -- ^ Unique identifier of the target fund or vehicle.
     fundName : Text
+    -- ^ Name of the investment fund or vehicle.
     currency : Currency
+    -- ^ Commitment denominated currency (e.g. "USD", "EUR").
     committedAmount : Amount
+    -- ^ Total capital committed by investor.
+    calledAmount : Amount
+    -- ^ Cumulative capital called to date.
+    fundedAmount : Amount
+    -- ^ Cumulative capital funded and settled.
+    unitsIssued : Amount
+    -- ^ Fund units / LP shares issued to investor.
+    unitPrice : Amount
+    -- ^ Issue price per unit / NAV per share.
     status : SubscriptionStatus
+    -- ^ Current lifecycle status.
+    rejectionReason : Optional Text
+    -- ^ Reason for rejection if applicable.
+    correlationId : CorrelationId
+    -- ^ Master correlation identifier across booking systems.
+    observers : [Party]
+    -- ^ Authorized observers (e.g. fund administrator, transfer agent, regulators).
   where
     signatory fundManager, investor
+    observer (List.dedup (custodian :: observers))
 
+    ensure
+      committedAmount > 0.0 &&
+      calledAmount >= 0.0 && calledAmount <= committedAmount &&
+      fundedAmount >= 0.0 && fundedAmount <= calledAmount &&
+      unitsIssued >= 0.0 &&
+      unitPrice > 0.0 &&
+      subscriptionId /= ""
+
+    -- | Fund Manager approves investor subscription.
     choice ApproveSubscription : ContractId FundSubscription
       controller fundManager
       do
-        create this with status = SubscriptionApproved
+        require (status == SubscriptionRequested) "Only requested subscriptions can be approved"
+        create this with
+          status = SubscriptionApproved
 
+    -- | Fund Manager rejects subscription with stated reason.
     choice RejectSubscription : ContractId FundSubscription
       with
         reason : Text
       controller fundManager
       do
-        create this with status = SubscriptionRejected reason
+        require (status == SubscriptionRequested) "Only requested subscriptions can be rejected"
+        requireNonEmpty reason "Rejection reason must be provided"
+        create this with
+          status = SubscriptionRejected reason
+          rejectionReason = Some reason
+
+    -- | Fund Manager issues an incremental capital call against uncalled commitment.
+    choice IssueCapitalCall : ContractId FundSubscription
+      with
+        callAmount : Amount
+      controller fundManager
+      do
+        require (status == SubscriptionApproved || status == SubscriptionPartiallyFunded)
+          "Subscription must be Approved or PartiallyFunded to call capital"
+        requirePositive callAmount "Call amount must be positive"
+        require (calledAmount + callAmount <= committedAmount)
+          "Capital call exceeds uncalled commitment"
+        create this with
+          calledAmount = calledAmount + callAmount
+
+    -- | Custodian confirms settlement of called capital and allocates units.
+    choice ConfirmCapitalFunding : ContractId FundSubscription
+      with
+        paymentRef : ReferenceId
+        fundedPaymentAmount : Amount
+        newUnitsAllocated : Amount
+      controller custodian
+      do
+        require (status == SubscriptionApproved || status == SubscriptionPartiallyFunded)
+          "Subscription must be in callable state to confirm funding"
+        requirePositive fundedPaymentAmount "Funded amount must be positive"
+        requireNonEmpty paymentRef "Payment reference must not be empty"
+        require (fundedAmount + fundedPaymentAmount <= calledAmount)
+          "Funded amount cannot exceed called capital"
+
+        let newFunded = fundedAmount + fundedPaymentAmount
+        let newUnits = unitsIssued + newUnitsAllocated
+        let newStatus = if newFunded == committedAmount
+                          then SubscriptionFullyFunded
+                          else SubscriptionPartiallyFunded
+
+        create this with
+          fundedAmount = newFunded
+          unitsIssued = newUnits
+          status = newStatus
+
+    -- | Investor cancels request prior to manager approval.
+    choice CancelSubscription : ContractId FundSubscription
+      with
+        reason : Text
+      controller investor
+      do
+        require (status == SubscriptionRequested) "Can only cancel pending subscription request"
+        requireNonEmpty reason "Cancellation reason must be specified"
+        create this with
+          status = SubscriptionCancelled reason
+
+    -- | Fund Manager formally closes subscription upon end of fund commitment period.
+    choice CloseSubscription : ContractId FundSubscription
+      controller fundManager
+      do
+        require (status == SubscriptionFullyFunded || status == SubscriptionPartiallyFunded)
+          "Can only close funded subscription"
+        create this with
+          status = SubscriptionClosed
+
+    -- | Add authorized observer (e.g. transfer agent).
+    choice AddSubscriptionObserver : ContractId FundSubscription
+      with
+        newObserver : Party
+      controller fundManager
+      do
+        require (not (newObserver `elem` observers)) "Observer already registered"
+        create this with
+          observers = newObserver :: observers
+
+    -- | Nonconsuming query to check if commitment remains active.
+    nonconsuming choice IsSubscriptionActive : Bool
+      controller fundManager
+      do
+        return (status == SubscriptionApproved || status == SubscriptionPartiallyFunded || status == SubscriptionFullyFunded)
+
