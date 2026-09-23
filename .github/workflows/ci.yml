@@ -2,27 +2,45 @@ name: AryaFi Core CI
 
 on:
   push:
-    branches: [ "main", "develop" ]
+    branches: [ "main", "develop", "feat/*" ]
   pull_request:
     branches: [ "main", "develop" ]
 
 jobs:
   build-and-test:
+    name: Build & Verify Daml Package
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Cache Daml SDK
+        uses: actions/cache@v4
+        with:
+          path: ~/.daml
+          key: daml-sdk-2.10.0
+          restore-keys: |
+            daml-sdk-
+
       - name: Install Daml SDK
         run: |
-          curl -sSL https://get.daml.com/ | sh
+          if [ ! -d "$HOME/.daml/bin" ]; then
+            curl -sSL https://get.daml.com/ | sh -s 2.10.0
+          fi
           echo "$HOME/.daml/bin" >> $GITHUB_PATH
 
-      - name: Check Daml Version
+      - name: Verify Daml Toolchain
         run: daml version
 
-      - name: Build Daml Archive (DAR)
-        run: daml build
+      - name: Compile Daml Archive (DAR)
+        run: |
+          daml build
+          ls -la .daml/dist/
 
-      - name: Run Daml Tests
+      - name: Inspect Daml Package Metadata
+        run: |
+          DAR_FILE=$(ls .daml/dist/*.dar | head -n 1)
+          daml damlc inspect-dar "$DAR_FILE"
+
+      - name: Execute Full Test Suite
         run: daml test

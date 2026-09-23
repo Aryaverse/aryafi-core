@@ -37,3 +37,5 @@ build/
 scratch/
 temp/
 tmp/
+*.pdf
+
