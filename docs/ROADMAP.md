@@ -204,9 +204,9 @@ Final compiler hardening, automated CI packaging, and formal release governance.
 | **Epic 1** | Canton Ledger API Client Specification | `docs/integration/LEDGER_API_CLIENT.md` | [x] Completed |
 | **Epic 1** | EOD Ledger & Custody Reconciliation | `docs/integration/RECONCILIATION.md` | [x] Completed |
 | **Epic 1** | Settlement Rail Adapter Architecture | `docs/integration/ADAPTERS_SPEC.md` | [x] Completed |
-| **Epic 2** | Multi-Party Canton Topology Config | `deploy/canton/canton.conf` | [ ] Pending |
-| **Epic 2** | Local Docker Compose Sandbox | `deploy/docker/*` | [ ] Pending |
-| **Epic 2** | Participant Node Operations Guide | `docs/deployment/OPERATIONS_GUIDE.md` | [ ] Pending |
+| **Epic 2** | Multi-Party Canton Topology Config | `deploy/canton/canton.conf` | [x] Completed |
+| **Epic 2** | Local Docker Compose Sandbox | `deploy/docker/*` | [x] Completed |
+| **Epic 2** | Participant Node Operations Guide | `docs/deployment/OPERATIONS_GUIDE.md` | [x] Completed |
 | **Epic 3** | STRIDE Threat Model per Module | `docs/security/THREAT_MODEL.md` | [ ] Pending |
 | **Epic 3** | Contract Authorization Matrix | `docs/security/AUTHORIZATION_MATRIX.md` | [ ] Pending |
 | **Epic 3** | Independent Audit Preparation Dossier | `docs/security/AUDIT_DOSSIER.md` | [ ] Pending |
