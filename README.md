@@ -1,7 +1,8 @@
 # AryaFi Core (`aryafi-core`)
 
 [![Daml](https://img.shields.io/badge/Daml-2.10.0-blue.svg)](https://daml.com)
-[![Canton](https://img.shields.io/badge/Canton-Enabled-green.svg)](https://canton.network)
+[![Canton](https://img.shields.io/badge/Canton-Protocol_v30-green.svg)](https://canton.network)
+[![Release](https://img.shields.io/badge/Release-v1.0.0--rc1-purple.svg)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 **AryaFi Core** is an institutional-grade, privacy-aware smart contract library engineered in **Daml** for **Canton Network** and distributed ledger infrastructure. It turns complex capital markets, banking, and treasury concepts into modular, composable, and legally sound financial contracts.
@@ -153,14 +154,38 @@ daml test
 
 ---
 
+## Documentation Suite
+
+| Category | Guide | Description |
+|:---|:---|:---|
+| **Architecture** | [Architecture Guide](docs/architecture/ARCHITECTURE.md) | High-level component decomposition and Canton transaction flows |
+| | [Privacy Model](docs/architecture/PRIVACY_MODEL.md) | Canton sub-transaction privacy guarantees and observer models |
+| | [Security Assurance](docs/architecture/SECURITY_ASSURANCE.md) | Authorization invariants, error handling, and security guarantees |
+| **Market Integration**| [ISO 20022 Mappings](docs/integration/ISO20022_MAPPINGS.md) | Canonical mapping between Daml contracts and pacs/camt/semt/sese |
+| | [Ledger API Client](docs/integration/LEDGER_API_CLIENT.md) | gRPC / JSON API patterns, submitMulti, and TypeScript/Python SDKs |
+| | [EOD Reconciliation](docs/integration/RECONCILIATION.md) | Three-way on-ledger vs Core Banking / CSD reconciliation protocols |
+| | [Rail Adapters](docs/integration/ADAPTERS_SPEC.md) | Fedwire, SWIFT, DTCC DvP, and AML screening microservices |
+| **Deployment & Ops** | [Canton Topology](deploy/canton/canton.conf) | Multi-participant Canton node configuration (Bank, Custodian, Dealers) |
+| | [Docker Sandbox](deploy/docker/docker-compose.yml) | Local multi-node Canton container environment with auto-bootstrap |
+| | [Operations Guide](docs/deployment/OPERATIONS_GUIDE.md) | HSM/KMS key management, active-passive HA, backup/PITR runbooks |
+| **Security & Audit** | [STRIDE Threat Model](docs/security/THREAT_MODEL.md) | Formal STRIDE security evaluation across all contract modules |
+| | [Authorization Matrix](docs/security/AUTHORIZATION_MATRIX.md) | Exhaustive template choice, controller, and signatory reference |
+| | [Audit Dossier](docs/security/AUDIT_DOSSIER.md) | Invariant proofs, test breakdown, and external auditor runbook |
+| | [Regulatory Alignment](docs/compliance/REGULATORY_ALIGNMENT.md) | US OCC/Fed/FDIC capital neutrality and SEC tokenization guidance |
+| **Governance** | [Versioning Policy](docs/governance/VERSIONING_AND_RELEASE.md) | Semantic versioning policy and module maturity labels |
+| | [Migration Guide](docs/governance/MIGRATION_GUIDE.md) | Contract upgrade strategies, batch migrations, and verification |
+| | [Changelog](CHANGELOG.md) | Comprehensive record of milestones and release notes |
+
+---
+
 ## Roadmap
 
 - **MVP (Completed)**: Core Finance Primitives, DvP Settlement, Transfer Controls, KYC/Sanctions Status, Tokenized Treasury Reference Application.
 - **Phase 2 (Completed)**: Institutional Repo, Secured Loans, Collateral & Pledge Lifecycle, Margin Management, Securities Lending.
 - **Phase 3 (Completed)**: Private Credit, Subscriptions & Redemptions, Test Hardening, Reference Application Guides.
-- **Phase 4 (Current)**: External Market Rail Integration (ISO 20022), Canton Deployment Topologies, STRIDE Threat Modeling, and v1.0.0 Production Release.
+- **Phase 4 (Completed)**: External Market Rail Integration (ISO 20022), Canton Deployment Topologies, STRIDE Threat Modeling, and v1.0.0 Production Release.
 
-👉 **For the complete commit-by-commit roadmap to v1.0.0, see [docs/ROADMAP.md](docs/ROADMAP.md).**
+👉 **For the complete production roadmap tracking matrix, see [docs/ROADMAP.md](docs/ROADMAP.md).**
 
 ---
 

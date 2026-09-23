@@ -1,12 +1,12 @@
 sdk-version: 2.10.0
 name: aryafi-core
 source: daml/src
-# init-script: intentionally removed — will be re-added once DvpTreasuryScenario is implemented in daml/src
-version: 0.1.0
+init-script: AryaFi.Test.Scenarios.TreasuryDvpScenario:testTreasuryDvp
+version: 1.0.0
 dependencies:
   - daml-prim
   - daml-stdlib
   - daml-script
 build-options:
-  - --ghc-option=-Wwarn
-  # TODO: re-enable -Werror once all scaffold modules are fully implemented
+  - --ghc-option=-Wall
+  - --ghc-option=-Werror
