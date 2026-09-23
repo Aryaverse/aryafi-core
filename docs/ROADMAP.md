@@ -211,6 +211,6 @@ Final compiler hardening, automated CI packaging, and formal release governance.
 | **Epic 3** | Contract Authorization Matrix | `docs/security/AUTHORIZATION_MATRIX.md` | [x] Completed |
 | **Epic 3** | Independent Audit Preparation Dossier | `docs/security/AUDIT_DOSSIER.md` | [x] Completed |
 | **Epic 3** | US Capital & SEC Regulatory Whitepaper | `docs/compliance/REGULATORY_ALIGNMENT.md` | [x] Completed |
-| **Epic 4** | Strict `daml.yaml` Build Configuration | `daml.yaml` | [ ] Pending |
-| **Epic 4** | Automated CI/CD & DAR Release Workflow | `.github/workflows/*` | [ ] Pending |
-| **Epic 4** | v1.0.0 Changelog & Migration Guide | `CHANGELOG.md`, `docs/governance/*` | [ ] Pending |
+| **Epic 4** | Strict `daml.yaml` Build Configuration | `daml.yaml` | [x] Completed |
+| **Epic 4** | Automated CI/CD & DAR Release Workflow | `.github/workflows/*` | [x] Completed |
+| **Epic 4** | v1.0.0 Changelog & Migration Guide | `CHANGELOG.md`, `docs/governance/*` | [x] Completed |
