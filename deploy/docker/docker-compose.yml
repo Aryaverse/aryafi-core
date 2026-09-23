@@ -1,0 +1,68 @@
+# Copyright (c) 2026 Aryaverse. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+version: '3.8'
+
+services:
+  # ---------------------------------------------------------------------------
+  # AryaFi Multi-Participant Canton Cluster
+  # ---------------------------------------------------------------------------
+  canton-cluster:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    container_name: aryafi-canton-sandbox
+    hostname: canton-sandbox
+    restart: unless-stopped
+    ports:
+      # Domain Public & Admin APIs
+      - "5018:5018"
+      - "5019:5019"
+      # Participant Ledger APIs
+      - "10012:10012"  # Bank Node (FederalReserveBank)
+      - "10022:10022"  # Custodian Node (GlobalCustodian)
+      - "10032:10032"  # Dealer A Node (DealerBankA)
+      - "10042:10042"  # Dealer B Node (DealerBankB)
+      - "10052:10052"  # Regulator Node (SECRegulator)
+    volumes:
+      - ../../deploy/canton/canton.conf:/canton/config/canton.conf:ro
+      - ../../deploy/docker/bootstrap.sh:/canton/scripts/bootstrap.sh:ro
+      - ../../.daml/dist:/canton/dars:ro
+    environment:
+      - JAVA_OPTS=-Xms1g -Xmx2g -XX:+UseG1GC
+      - CANTON_LOG_LEVEL_STDOUT=INFO
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 10012 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - aryafi-network
+
+  # ---------------------------------------------------------------------------
+  # Optional Ledger Storage Backend (PostgreSQL for Persistence Testing)
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: aryafi-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: canton
+      POSTGRES_PASSWORD: cantonpassword
+      POSTGRES_MULTIPLE_DATABASES: bank_db,custodian_db,dealer_a_db,dealer_b_db,regulator_db,domain_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - aryafi-network
+
+volumes:
+  postgres-data:
+    driver: local
+
+networks:
+  aryafi-network:
+    name: aryafi-network
+    driver: bridge
