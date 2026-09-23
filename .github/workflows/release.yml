@@ -1,0 +1,56 @@
+name: AryaFi Core Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release-dar:
+    name: Build and Publish Daml Release Artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Cache Daml SDK
+        uses: actions/cache@v4
+        with:
+          path: ~/.daml
+          key: daml-sdk-2.10.0
+          restore-keys: |
+            daml-sdk-
+
+      - name: Install Daml SDK
+        run: |
+          if [ ! -d "$HOME/.daml/bin" ]; then
+            curl -sSL https://get.daml.com/ | sh -s 2.10.0
+          fi
+          echo "$HOME/.daml/bin" >> $GITHUB_PATH
+
+      - name: Compile Release DAR
+        run: |
+          daml build
+          mkdir -p release-artifacts
+          cp .daml/dist/*.dar release-artifacts/
+
+      - name: Generate Cryptographic Checksums
+        working-directory: release-artifacts
+        run: |
+          for f in *.dar; do
+            sha256sum "$f" > "${f}.sha256"
+          done
+          ls -la
+
+      - name: Create GitHub Release & Upload Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-artifacts/*.dar
+            release-artifacts/*.sha256
+          generate_release_notes: true
+          draft: false
+          prerelease: false
