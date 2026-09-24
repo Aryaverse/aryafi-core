@@ -3,7 +3,10 @@
 [![Daml](https://img.shields.io/badge/Daml-2.10.0-blue.svg)](https://daml.com)
 [![Canton](https://img.shields.io/badge/Canton-Protocol_v30-green.svg)](https://canton.network)
 [![Release](https://img.shields.io/badge/Release-v1.0.0--rc1-purple.svg)](CHANGELOG.md)
+[![Vercel Deployment](https://img.shields.io/badge/Vercel-Live_Explorer-black.svg?logo=vercel)](https://aryafi-core.vercel.app)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+
+🌐 **Live Institutional Explorer & Simulator**: [https://aryafi-core.vercel.app](https://aryafi-core.vercel.app)
 
 **AryaFi Core** is an institutional-grade, privacy-aware smart contract library engineered in **Daml** for **Canton Network** and distributed ledger infrastructure. It turns complex capital markets, banking, and treasury concepts into modular, composable, and legally sound financial contracts.
 
