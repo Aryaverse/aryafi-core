@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%2306b6d4'/><path d='M30 70 L50 25 L70 70 L50 55 Z' fill='%23ffffff'/></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23000000'/><path d='M30 70 L50 25 L70 70 L50 55 Z' fill='%23ffffff'/></svg>">
 </head>
 <body>
 
@@ -132,67 +132,57 @@
 
           <div class="topology-svg-container">
             <svg class="topology-svg" viewBox="0 0 700 440">
-              <defs>
-                <linearGradient id="domainGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.3"/>
-                  <stop offset="100%" stop-color="#3b82f6" stop-opacity="0.1"/>
-                </linearGradient>
-                <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-                  <feGaussianBlur stdDeviation="8" result="blur" />
-                  <feComposite in="SourceGraphic" in2="blur" operator="over" />
-                </filter>
-              </defs>
-
               <!-- Connection Lines to Domain -->
-              <line x1="350" y1="220" x2="350" y2="70" stroke="rgba(56, 189, 248, 0.25)" stroke-width="2" stroke-dasharray="4 4" />
-              <line x1="350" y1="220" x2="570" y2="140" stroke="rgba(56, 189, 248, 0.25)" stroke-width="2" stroke-dasharray="4 4" />
-              <line x1="350" y1="220" x2="520" y2="340" stroke="rgba(56, 189, 248, 0.25)" stroke-width="2" stroke-dasharray="4 4" />
-              <line x1="350" y1="220" x2="180" y2="340" stroke="rgba(56, 189, 248, 0.25)" stroke-width="2" stroke-dasharray="4 4" />
-              <line x1="350" y1="220" x2="130" y2="140" stroke="rgba(56, 189, 248, 0.25)" stroke-width="2" stroke-dasharray="4 4" />
+              <line x1="350" y1="220" x2="350" y2="70" stroke="#94a3b8" stroke-width="2" stroke-dasharray="4 4" />
+              <line x1="350" y1="220" x2="570" y2="140" stroke="#94a3b8" stroke-width="2" stroke-dasharray="4 4" />
+              <line x1="350" y1="220" x2="520" y2="340" stroke="#94a3b8" stroke-width="2" stroke-dasharray="4 4" />
+              <line x1="350" y1="220" x2="180" y2="340" stroke="#94a3b8" stroke-width="2" stroke-dasharray="4 4" />
+              <line x1="350" y1="220" x2="130" y2="140" stroke="#94a3b8" stroke-width="2" stroke-dasharray="4 4" />
 
               <!-- Central Synchronization Domain -->
-              <circle cx="350" cy="220" r="65" fill="url(#domainGrad)" stroke="#38bdf8" stroke-width="2" />
-              <text x="350" y="215" text-anchor="middle" fill="#ffffff" font-family="'Inter', sans-serif" font-weight="700" font-size="13">Canton Domain</text>
-              <text x="350" y="233" text-anchor="middle" fill="#38bdf8" font-family="'JetBrains Mono', monospace" font-size="10">Sequencer &amp; Med</text>
+              <circle cx="350" cy="220" r="66" fill="#ffffff" stroke="#09090b" stroke-width="2.5" />
+              <circle cx="350" cy="220" r="58" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5" />
+              <text x="350" y="215" text-anchor="middle" fill="#09090b" font-family="'Inter', sans-serif" font-weight="800" font-size="13">Canton Domain</text>
+              <text x="350" y="233" text-anchor="middle" fill="#64748b" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="600">Sequencer &amp; Med</text>
 
               <!-- Node 1: Federal Reserve Bank (Cash) -->
               <g class="node-group selected" data-node="bank" transform="translate(350, 70)">
-                <circle class="node-outer" r="32" fill="#0d1829" stroke="#06b6d4" stroke-width="2" />
-                <circle r="6" fill="#06b6d4" filter="url(#glow)" />
-                <text y="48" text-anchor="middle" fill="#f8fafc" font-size="11" font-weight="600">Federal Reserve (Cash)</text>
-                <text y="62" text-anchor="middle" fill="#06b6d4" font-family="monospace" font-size="9">:10012</text>
+                <circle class="node-outer" r="30" fill="#ffffff" stroke="#09090b" stroke-width="2" />
+                <circle r="6" fill="#09090b" />
+                <text y="46" text-anchor="middle" fill="#09090b" font-family="'Inter', sans-serif" font-size="11" font-weight="700">Federal Reserve (Cash)</text>
+                <text y="60" text-anchor="middle" fill="#64748b" font-family="'JetBrains Mono', monospace" font-size="9" font-weight="600">:10012</text>
               </g>
 
               <!-- Node 2: Global Custodian -->
               <g class="node-group" data-node="custodian" transform="translate(570, 140)">
-                <circle class="node-outer" r="30" fill="#0d1829" stroke="#8b5cf6" stroke-width="2" />
-                <circle r="5" fill="#8b5cf6" />
-                <text y="46" text-anchor="middle" fill="#f8fafc" font-size="11" font-weight="600">Global Custodian</text>
-                <text y="60" text-anchor="middle" fill="#8b5cf6" font-family="monospace" font-size="9">:10022</text>
+                <circle class="node-outer" r="30" fill="#ffffff" stroke="#09090b" stroke-width="2" />
+                <circle r="6" fill="#09090b" />
+                <text y="46" text-anchor="middle" fill="#09090b" font-family="'Inter', sans-serif" font-size="11" font-weight="700">Global Custodian</text>
+                <text y="60" text-anchor="middle" fill="#64748b" font-family="'JetBrains Mono', monospace" font-size="9" font-weight="600">:10022</text>
               </g>
 
               <!-- Node 3: Dealer A -->
               <g class="node-group" data-node="dealerA" transform="translate(520, 340)">
-                <circle class="node-outer" r="30" fill="#0d1829" stroke="#3b82f6" stroke-width="2" />
-                <circle r="5" fill="#3b82f6" />
-                <text y="46" text-anchor="middle" fill="#f8fafc" font-size="11" font-weight="600">Dealer A (Goldman)</text>
-                <text y="60" text-anchor="middle" fill="#3b82f6" font-family="monospace" font-size="9">:10032</text>
+                <circle class="node-outer" r="30" fill="#ffffff" stroke="#09090b" stroke-width="2" />
+                <circle r="6" fill="#09090b" />
+                <text y="46" text-anchor="middle" fill="#09090b" font-family="'Inter', sans-serif" font-size="11" font-weight="700">Dealer A (Goldman)</text>
+                <text y="60" text-anchor="middle" fill="#64748b" font-family="'JetBrains Mono', monospace" font-size="9" font-weight="600">:10032</text>
               </g>
 
               <!-- Node 4: Dealer B -->
               <g class="node-group" data-node="dealerB" transform="translate(180, 340)">
-                <circle class="node-outer" r="30" fill="#0d1829" stroke="#3b82f6" stroke-width="2" />
-                <circle r="5" fill="#3b82f6" />
-                <text y="46" text-anchor="middle" fill="#f8fafc" font-size="11" font-weight="600">Dealer B (Morgan)</text>
-                <text y="60" text-anchor="middle" fill="#3b82f6" font-family="monospace" font-size="9">:10042</text>
+                <circle class="node-outer" r="30" fill="#ffffff" stroke="#09090b" stroke-width="2" />
+                <circle r="6" fill="#09090b" />
+                <text y="46" text-anchor="middle" fill="#09090b" font-family="'Inter', sans-serif" font-size="11" font-weight="700">Dealer B (Morgan)</text>
+                <text y="60" text-anchor="middle" fill="#64748b" font-family="'JetBrains Mono', monospace" font-size="9" font-weight="600">:10042</text>
               </g>
 
               <!-- Node 5: SEC Regulator -->
               <g class="node-group" data-node="regulator" transform="translate(130, 140)">
-                <circle class="node-outer" r="30" fill="#0d1829" stroke="#10b981" stroke-width="2" />
-                <circle r="5" fill="#10b981" />
-                <text y="46" text-anchor="middle" fill="#f8fafc" font-size="11" font-weight="600">SEC Regulator</text>
-                <text y="60" text-anchor="middle" fill="#10b981" font-family="monospace" font-size="9">:10052</text>
+                <circle class="node-outer" r="30" fill="#ffffff" stroke="#09090b" stroke-width="2" />
+                <circle r="6" fill="#09090b" />
+                <text y="46" text-anchor="middle" fill="#09090b" font-family="'Inter', sans-serif" font-size="11" font-weight="700">SEC Regulator</text>
+                <text y="60" text-anchor="middle" fill="#64748b" font-family="'JetBrains Mono', monospace" font-size="9" font-weight="600">:10052</text>
               </g>
             </svg>
           </div>
@@ -319,7 +309,7 @@
         <div class="calculator-card">
           <div>
             <span class="hero-pill">Lemma 1 Verification</span>
-            <h3 style="font-size: 1.25rem; font-weight: 700; color: #ffffff;">CashPosition Split &amp; Merge Mathematical Invariant Proof</h3>
+            <h3 style="font-size: 1.25rem; font-weight: 800; color: #09090b;">CashPosition Split &amp; Merge Mathematical Invariant Proof</h3>
             <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem;">
               In AryaFi, every SplitCash and MergeCash operation strictly obeys the algebraic conservation law: &sum; Outputs &equiv; &sum; Inputs. No token inflation or rounding leakage is permitted.
             </p>
