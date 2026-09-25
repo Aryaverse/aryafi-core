@@ -6,40 +6,120 @@
  */
 
 document.addEventListener('DOMContentLoaded', () => {
+  initTheme();
   initNavigation();
   initTopologyVisualizer();
   initScenarioSimulator();
   initInvariantCalculator();
   initIsoConverter();
+  initDamlViewer();
   initTelemetryCounters();
+  initCopyButtons();
 });
 
 // ============================================================================
-// 1. Navigation & Tab Switching
+// 1. Theme Management (Dark / Light Mode)
+// ============================================================================
+
+function initTheme() {
+  const toggleBtn = document.getElementById('theme-toggle-btn');
+  const toggleLabel = document.getElementById('theme-toggle-label');
+  const toggleIcon = document.getElementById('theme-toggle-icon');
+
+  const savedTheme = localStorage.getItem('aryafi-theme') || 'dark';
+  applyTheme(savedTheme);
+
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', () => {
+      const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
+      const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+      applyTheme(newTheme);
+      localStorage.setItem('aryafi-theme', newTheme);
+    });
+  }
+
+  function applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    if (toggleLabel && toggleIcon) {
+      if (theme === 'dark') {
+        toggleLabel.textContent = 'Light';
+        toggleIcon.textContent = '☼';
+      } else {
+        toggleLabel.textContent = 'Dark';
+        toggleIcon.textContent = '◐';
+      }
+    }
+  }
+}
+
+// ============================================================================
+// 2. Navigation, ARIA Tab Switching & URL Hash Support
 // ============================================================================
 
 function initNavigation() {
   const tabs = document.querySelectorAll('.nav-tab-btn');
   const panes = document.querySelectorAll('.tab-pane');
 
-  tabs.forEach(tab => {
+  function switchTab(targetTabId, updateHash = true) {
+    const targetBtn = document.querySelector(`.nav-tab-btn[data-tab="${targetTabId}"]`);
+    const targetPane = document.getElementById(targetTabId);
+
+    if (!targetBtn || !targetPane) return;
+
+    tabs.forEach(t => {
+      t.classList.remove('active');
+      t.setAttribute('aria-selected', 'false');
+      t.setAttribute('tabindex', '-1');
+    });
+
+    panes.forEach(p => p.classList.remove('active'));
+
+    targetBtn.classList.add('active');
+    targetBtn.setAttribute('aria-selected', 'true');
+    targetBtn.setAttribute('tabindex', '0');
+    targetPane.classList.add('active');
+
+    if (updateHash) {
+      const hash = targetTabId.replace('tab-', '');
+      history.replaceState(null, '', `#${hash}`);
+    }
+  }
+
+  tabs.forEach((tab, index) => {
     tab.addEventListener('click', () => {
-      const targetPaneId = tab.getAttribute('data-tab');
+      const targetTabId = tab.getAttribute('data-tab');
+      switchTab(targetTabId, true);
+    });
 
-      tabs.forEach(t => t.classList.remove('active'));
-      panes.forEach(p => p.classList.remove('active'));
+    // Keyboard accessibility (ArrowLeft, ArrowRight)
+    tab.addEventListener('keydown', (e) => {
+      let nextIndex = null;
+      if (e.key === 'ArrowRight') {
+        nextIndex = (index + 1) % tabs.length;
+      } else if (e.key === 'ArrowLeft') {
+        nextIndex = (index - 1 + tabs.length) % tabs.length;
+      }
 
-      tab.classList.add('active');
-      const targetPane = document.getElementById(targetPaneId);
-      if (targetPane) {
-        targetPane.classList.add('active');
+      if (nextIndex !== null) {
+        tabs[nextIndex].focus();
+        const targetTabId = tabs[nextIndex].getAttribute('data-tab');
+        switchTab(targetTabId, true);
       }
     });
   });
+
+  // Handle Initial Hash
+  if (window.location.hash) {
+    const hash = window.location.hash.replace('#', '');
+    const candidateTabId = `tab-${hash}`;
+    if (document.getElementById(candidateTabId)) {
+      switchTab(candidateTabId, false);
+    }
+  }
 }
 
 // ============================================================================
-// 2. Canton Network Topology Explorer
+// 3. Canton Network Topology Explorer
 // ============================================================================
 
 const PARTICIPANT_NODES = {
@@ -124,7 +204,7 @@ function updateNodeDetailsCard(data) {
 }
 
 // ============================================================================
-// 3. Multi-Party Scenario Simulator
+// 4. Multi-Party Scenario Simulator
 // ============================================================================
 
 const SCENARIOS = {
@@ -225,6 +305,7 @@ const SCENARIOS = {
 
 let currentScenarioKey = 'dvp';
 let currentStepIndex = 0;
+let autoRunTimer = null;
 
 function initScenarioSimulator() {
   const scenarioBtns = document.querySelectorAll('.scenario-select-btn');
@@ -234,6 +315,7 @@ function initScenarioSimulator() {
 
   scenarioBtns.forEach(btn => {
     btn.addEventListener('click', () => {
+      if (autoRunTimer) clearInterval(autoRunTimer);
       scenarioBtns.forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
 
@@ -257,6 +339,7 @@ function initScenarioSimulator() {
 
   if (resetBtn) {
     resetBtn.addEventListener('click', () => {
+      if (autoRunTimer) clearInterval(autoRunTimer);
       currentStepIndex = 0;
       renderScenarioView();
       clearTerminal();
@@ -315,6 +398,8 @@ function executeNextScenarioStep() {
 
 function runAutomatedScenario() {
   const scenario = SCENARIOS[currentScenarioKey];
+  if (autoRunTimer) clearInterval(autoRunTimer);
+
   currentStepIndex = 0;
   renderScenarioView();
   clearTerminal();
@@ -322,12 +407,13 @@ function runAutomatedScenario() {
   appendTerminalLine(`Initiating automated execution: ${scenario.title}`, "yellow");
 
   let step = 0;
-  const interval = setInterval(() => {
+  autoRunTimer = setInterval(() => {
     if (step < scenario.steps.length) {
       executeNextScenarioStep();
       step++;
     } else {
-      clearInterval(interval);
+      clearInterval(autoRunTimer);
+      autoRunTimer = null;
       appendTerminalLine("All phases committed and verified with zero errors.", "green");
     }
   }, 900);
@@ -346,42 +432,70 @@ function appendTerminalLine(text, colorClass = "cyan") {
 
 function clearTerminal() {
   const terminal = document.getElementById('scenario-terminal-output');
-  if (terminal) terminal.innerHTML = '';
+  if (terminal) {
+    terminal.innerHTML = `
+      <div class="terminal-line gray">> Canton Ledger API connected to aryafi_domain...</div>
+      <div class="terminal-line green">> Ready. Select a scenario and click 'Next Phase' or 'Auto-Run' to begin execution.</div>
+    `;
+  }
 }
 
 // ============================================================================
-// 4. Mathematical Invariant Calculator (Cash Split & Merge)
+// 5. Mathematical Invariant Calculator (Cash Split & Merge)
 // ============================================================================
 
 function initInvariantCalculator() {
   const totalInput = document.getElementById('calc-total-amount');
   const splitInput = document.getElementById('calc-split-amount');
   const splitBtn = document.getElementById('btn-execute-split');
+  const presetBtns = document.querySelectorAll('.calc-preset-btn');
+
+  function calculateAndDisplay() {
+    const total = parseFloat(totalInput.value);
+    const split = parseFloat(splitInput.value);
+
+    if (isNaN(total) || isNaN(split) || total <= 0 || split <= 0 || split >= total) {
+      alert("Split amount must be strictly positive and strictly less than total position amount.");
+      return;
+    }
+
+    const remainder = total - split;
+    const sum = split + remainder;
+
+    document.getElementById('calc-pos1-val').textContent = `$${split.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    document.getElementById('calc-pos2-val').textContent = `$${remainder.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    document.getElementById('calc-sum-val').textContent = `$${sum.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    
+    const delta = Math.abs(sum - total);
+    const statusEl = document.getElementById('calc-invariant-status');
+    if (delta < 0.0001) {
+      statusEl.textContent = "VERIFIED (Δ = 0.00)";
+      statusEl.className = "calc-stat-val emerald";
+    } else {
+      statusEl.textContent = `LEAKAGE DETECTED (Δ = ${delta.toFixed(4)})`;
+      statusEl.className = "calc-stat-val rose";
+    }
+  }
 
   if (splitBtn && totalInput && splitInput) {
-    splitBtn.addEventListener('click', () => {
-      const total = parseFloat(totalInput.value);
-      const split = parseFloat(splitInput.value);
-
-      if (isNaN(total) || isNaN(split) || total <= 0 || split <= 0 || split >= total) {
-        alert("Split amount must be strictly positive and strictly less than total position amount.");
-        return;
-      }
-
-      const remainder = total - split;
-      const sum = split + remainder;
-
-      document.getElementById('calc-pos1-val').textContent = `$${split.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
-      document.getElementById('calc-pos2-val').textContent = `$${remainder.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
-      document.getElementById('calc-sum-val').textContent = `$${sum.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
-      document.getElementById('calc-invariant-status').textContent = (sum === total) ? "VERIFIED (Δ = 0.00)" : "ERROR";
-      document.getElementById('calc-invariant-status').className = (sum === total) ? "calc-stat-val emerald" : "calc-stat-val rose";
-    });
+    splitBtn.addEventListener('click', calculateAndDisplay);
   }
+
+  presetBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const t = btn.getAttribute('data-total');
+      const s = btn.getAttribute('data-split');
+      if (t && s) {
+        totalInput.value = t;
+        splitInput.value = s;
+        calculateAndDisplay();
+      }
+    });
+  });
 }
 
 // ============================================================================
-// 5. ISO 20022 Financial Messaging Converter
+// 6. ISO 20022 Financial Messaging Converter
 // ============================================================================
 
 const ISO_TEMPLATES = {
@@ -422,7 +536,7 @@ const ISO_TEMPLATES = {
           "payerAccountId": "ACC-GS-USD-001",
           "payeeAccountId": "ACC-BNY-CUSTODY-USD-001",
           "currency": "USD",
-          "amount": "12500000.0",
+          "amount": "12500000.00",
           "purpose": { "RepoOpeningLeg": {} },
           "obligationRef": "REPO-REF-2026-GS-BNY-001",
           "correlationId": "CORR-REPO-2026-8831",
@@ -463,14 +577,69 @@ const ISO_TEMPLATES = {
           "buyer": "DealerBankB",
           "settlementAgent": "DTCCSettlementAgent",
           "isin": "US912828ZM24",
-          "securityQuantity": "5000000.0",
-          "cashAmount": "5000000.0",
+          "securityQuantity": "5000000.00",
+          "cashAmount": "5000000.00",
           "currency": "USD",
           "status": { "PendingDvp": {} }
         }
       }
     }
   ]
+}`
+  },
+  camt053: {
+    name: "camt.053.001.10 (Bank-to-Customer Statement)",
+    xml: `<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.10">
+  <BkToCstmrStmt>
+    <GrpHdr><MsgId>STMT-2026-09-24-001</MsgId><CreDtTm>2026-09-24T18:00:00Z</CreDtTm></GrpHdr>
+    <Stmt>
+      <Id>STMT-EOD-FED-01</Id>
+      <Acct><Id><Othr><Id>ACC-US-OPS-001</Id></Othr></Id><Ccy>USD</Ccy></Acct>
+      <Bal>
+        <Tp><CdOrPrtry><Cd>CLBD</Cd></CdOrPrtry></Tp>
+        <Amt Ccy="USD">25000000.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <Dt><Dt>2026-09-24</Dt></Dt>
+      </Bal>
+    </Stmt>
+  </BkToCstmrStmt>
+</Document>`,
+    daml: `{
+  "query": {
+    "templateId": "AryaFi.Finance.Cash:CashPosition",
+    "predicate": {
+      "accountId": "ACC-US-OPS-001",
+      "currency": "USD",
+      "expectedClosingBalance": "25000000.00"
+    }
+  }
+}`
+  },
+  semt002: {
+    name: "semt.002.001.10 (Custody Holding Statement)",
+    xml: `<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:semt.002.001.10">
+  <SctiesBalAcctgRpt>
+    <StmtGnlDtls><StmtId>CUST-EOD-2026-09-24</StmtId></StmtGnlDtls>
+    <FinInstrmDtls>
+      <Id><ISIN>US912828ZM24</ISIN></Id>
+      <AggrtBal>
+        <Qty><Unit>10000000.00</Unit></Qty>
+        <HldgSts><Cd>AVLB</Cd></HldgSts>
+      </AggrtBal>
+    </FinInstrmDtls>
+  </SctiesBalAcctgRpt>
+</Document>`,
+    daml: `{
+  "query": {
+    "templateId": "AryaFi.Finance.Security:SecurityPosition",
+    "predicate": {
+      "isin": "US912828ZM24",
+      "isLocked": false,
+      "expectedSafekeepingUnits": "10000000.00"
+    }
+  }
 }`
   }
 };
@@ -482,25 +651,332 @@ function initIsoConverter() {
 
   if (!select || !xmlDisplay || !damlDisplay) return;
 
-  select.addEventListener('change', () => {
-    const key = select.value;
+  function render(key) {
     const template = ISO_TEMPLATES[key];
     if (template) {
       xmlDisplay.textContent = template.xml;
       damlDisplay.textContent = template.daml;
     }
+  }
+
+  select.addEventListener('change', () => {
+    render(select.value);
   });
 
-  // Initial render
-  const initialKey = select.value;
-  if (ISO_TEMPLATES[initialKey]) {
-    xmlDisplay.textContent = ISO_TEMPLATES[initialKey].xml;
-    damlDisplay.textContent = ISO_TEMPLATES[initialKey].daml;
-  }
+  render(select.value);
 }
 
 // ============================================================================
-// 6. Live Telemetry Tickers
+// 7. Daml Code Dossier Interactive Viewer
+// ============================================================================
+
+const DAML_MODULES = {
+  cash: {
+    title: "AryaFi/Finance/Cash.daml (Tokenized Cash Primitive)",
+    code: `module AryaFi.Finance.Cash where
+
+import AryaFi.Common.Identifiers (AccountId, CorrelationId)
+import AryaFi.Common.Types (Amount, Currency)
+import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
+
+template CashPosition
+  with
+    bank          : Party
+    owner         : Party
+    accountId     : AccountId
+    currency      : Currency
+    amount        : Amount
+    isLocked      : Bool
+    lockReference : Optional Text
+    observers     : [Party]
+  where
+    signatory bank, owner
+    observer observers
+
+    ensure amount > 0.0
+
+    key (bank, accountId, currency) : (Party, AccountId, Currency)
+    maintainer key._1
+
+    choice SplitCash : (ContractId CashPosition, ContractId CashPosition)
+      with
+        splitAmount : Amount
+      controller owner
+      do
+        require (not isLocked) "Cannot split a locked cash position"
+        requirePositive splitAmount "splitAmount"
+        require (splitAmount < amount) ("Split amount must be strictly less than total " <> show amount)
+        c1 <- create this with amount = splitAmount
+        c2 <- create this with amount = amount - splitAmount
+        pure (c1, c2)
+
+    choice MergeCash : ContractId CashPosition
+      with
+        otherCid : ContractId CashPosition
+      controller owner
+      do
+        require (not isLocked) "Cannot merge: this position is locked"
+        other <- fetch otherCid
+        require (other.bank == bank) "Bank mismatch"
+        require (other.owner == owner) "Owner mismatch"
+        require (other.currency == currency) "Currency mismatch"
+        archive otherCid
+        create this with amount = amount + other.amount`
+  },
+  security: {
+    title: "AryaFi/Finance/Security.daml (Safekeeping & Encumbrance)",
+    code: `module AryaFi.Finance.Security where
+
+import AryaFi.Common.Identifiers (AccountId, ISIN, CUSIP)
+import AryaFi.Common.Types (Amount, Rate)
+import AryaFi.Common.Errors (require, requirePositive)
+
+template SecurityPosition
+  with
+    custodian         : Party
+    issuer            : Party
+    owner             : Party
+    accountId         : AccountId
+    isin              : ISIN
+    cusip             : Optional CUSIP
+    instrumentName    : Text
+    quantity          : Amount
+    couponRate        : Optional Rate
+    maturityTimestamp : Optional Time
+    isLocked          : Bool
+    lockReference     : Optional Text
+    observers         : [Party]
+  where
+    signatory custodian, owner
+    observer observers
+
+    ensure quantity > 0.0
+
+    key (custodian, accountId, isin) : (Party, AccountId, ISIN)
+    maintainer key._1
+
+    choice LockSecurity : ContractId SecurityPosition
+      with
+        lockRef       : Text
+        lockingParty  : Party
+      controller owner, custodian
+      do
+        require (not isLocked) "Security is already locked"
+        create this with isLocked = True, lockReference = Some lockRef`
+  },
+  collateral: {
+    title: "AryaFi/Finance/Collateral.daml (Haircut & Margin Revaluation)",
+    code: `module AryaFi.Finance.Collateral where
+
+import AryaFi.Common.Types (Amount, Rate, Currency, AssetClass)
+import AryaFi.Common.Identifiers (AccountId, ISIN, ExternalRef)
+import AryaFi.Common.Errors (require, requirePositive, requireNonNegative)
+
+data CollateralStatus
+  = Allocated | Active | Substituted | Released | Liquidated | InDispute
+  deriving (Eq, Ord, Show)
+
+template CollateralPosition
+  with
+    collateralProvider : Party
+    collateralReceiver : Party
+    custodian          : Party
+    accountId          : AccountId
+    assetClass         : AssetClass
+    isin               : ISIN
+    quantity           : Amount
+    marketValue        : Amount
+    haircut            : Rate
+    settlementCurrency : Currency
+    obligationRef      : Text
+    lockReference      : Text
+    status             : CollateralStatus
+    externalRef        : Optional ExternalRef
+    observers          : [Party]
+  where
+    signatory collateralProvider, collateralReceiver, custodian
+    observer observers
+
+    ensure quantity > 0.0 && marketValue > 0.0 && haircut >= 0.0 && haircut < 1.0
+
+    nonconsuming choice GetCollateralValue : Amount
+      controller custodian
+      do pure (marketValue * (1.0 - haircut))
+
+    choice RevalueCollateral : ContractId CollateralPosition
+      with
+        newMarketValue : Amount
+        newQuantity    : Amount
+      controller custodian
+      do
+        requirePositive newMarketValue "newMarketValue"
+        create this with marketValue = newMarketValue, quantity = newQuantity`
+  },
+  loan: {
+    title: "AryaFi/Contracts/Loan.daml (Institutional Credit Facility)",
+    code: `module AryaFi.Contracts.Loan where
+
+import AryaFi.Common.Types (Amount, Rate, Currency, DayCountConvention(..))
+import AryaFi.Common.Time (calcYearFraction)
+import AryaFi.Common.Errors (require, requirePositive)
+
+data LoanStatus = LoanActive | LoanDefaulted | LoanClosed
+  deriving (Eq, Show)
+
+template InstitutionalLoan
+  with
+    facilityId         : Text
+    lender             : Party
+    borrower           : Party
+    creditLimit        : Amount
+    outstandingBalance : Amount
+    accruedInterest    : Amount
+    interestRate       : Rate
+    dayCountConvention : DayCountConvention
+    lastAccrualTime    : Time
+    currency           : Currency
+    status             : LoanStatus
+    collateralPledgeId : Optional Text
+    observers          : [Party]
+  where
+    signatory lender, borrower
+    observer observers
+
+    choice Drawdown : ContractId InstitutionalLoan
+      with
+        drawAmount : Amount
+      controller borrower
+      do
+        require (status == LoanActive) "Loan is not active"
+        require (outstandingBalance + drawAmount <= creditLimit) "Facility limit exceeded"
+        create this with outstandingBalance = outstandingBalance + drawAmount`
+  },
+  repo: {
+    title: "AryaFi/Contracts/Repo.daml (Repurchase Agreement)",
+    code: `module AryaFi.Contracts.Repo where
+
+import AryaFi.Common.Types (Amount, Rate, Currency)
+import AryaFi.Common.Identifiers (ISIN)
+import AryaFi.Common.Errors (require, requirePositive)
+
+data RepoStatus = RepoInitiated | RepoActive | RepoSettled | RepoDefaulted
+  deriving (Eq, Show)
+
+template RepoAgreement
+  with
+    repoId             : Text
+    seller             : Party
+    buyer              : Party
+    tripartyAgent      : Optional Party
+    isin               : ISIN
+    collateralQuantity : Amount
+    currency           : Currency
+    purchasePrice      : Amount
+    repurchasePrice    : Amount
+    repoRate           : Rate
+    startDate          : Time
+    endDate            : Time
+    status             : RepoStatus
+  where
+    signatory seller, buyer
+
+    choice CloseoutRepo : ()
+      controller seller, buyer
+      do pure ()`
+  },
+  transfer: {
+    title: "AryaFi/Compliance/TransferRestrictions.daml (Reg D, Reg S, Rule 144A)",
+    code: `module AryaFi.Compliance.TransferRestrictions where
+
+import AryaFi.Common.Identifiers (ISIN)
+import AryaFi.Common.Errors (require)
+
+data RegulatoryCategory
+  = RegD_506c | RegS | Rule144A | QualifiedPurchaserOnly | RetailUnrestricted
+  deriving (Eq, Show)
+
+template TransferRestrictionRule
+  with
+    complianceOfficer  : Party
+    isin               : ISIN
+    regulatoryCategory : RegulatoryCategory
+    holdingPeriodDays  : Int
+    whitelistRequired  : Bool
+    lockupExpiry       : Optional Time
+    isActive           : Bool
+  where
+    signatory complianceOfficer
+
+    key (complianceOfficer, isin) : (Party, ISIN)
+    maintainer key._1
+
+    nonconsuming choice IsTransferAllowed : Bool
+      controller complianceOfficer
+      do
+        if not isActive then pure False
+        else case lockupExpiry of
+          None   -> pure True
+          Some t -> do
+            now <- getTime
+            pure (now >= t)`
+  }
+};
+
+function initDamlViewer() {
+  const select = document.getElementById('daml-file-select');
+  const title = document.getElementById('daml-viewer-title');
+  const content = document.getElementById('daml-viewer-content');
+
+  if (!select || !title || !content) return;
+
+  function render(key) {
+    const mod = DAML_MODULES[key];
+    if (mod) {
+      title.textContent = mod.title;
+      content.textContent = mod.code;
+    }
+  }
+
+  select.addEventListener('change', () => {
+    render(select.value);
+  });
+
+  render(select.value);
+}
+
+// ============================================================================
+// 8. Clipboard Copy Buttons
+// ============================================================================
+
+function initCopyButtons() {
+  function handleCopy(btnId, targetElId) {
+    const btn = document.getElementById(btnId);
+    const target = document.getElementById(targetElId);
+    if (!btn || !target) return;
+
+    btn.addEventListener('click', async () => {
+      try {
+        const text = target.textContent;
+        await navigator.clipboard.writeText(text);
+        const origText = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(() => {
+          btn.textContent = origText;
+        }, 1500);
+      } catch (err) {
+        console.error('Failed to copy to clipboard', err);
+      }
+    });
+  }
+
+  handleCopy('btn-copy-xml', 'iso-xml-display');
+  handleCopy('btn-copy-daml', 'iso-daml-display');
+  handleCopy('btn-copy-source', 'daml-viewer-content');
+  handleCopy('btn-copy-log', 'scenario-terminal-output');
+}
+
+// ============================================================================
+// 9. Live Telemetry Tickers
 // ============================================================================
 
 function initTelemetryCounters() {
@@ -508,7 +984,6 @@ function initTelemetryCounters() {
   const volEl = document.getElementById('ticker-volume');
 
   setInterval(() => {
-    // Subtle realistic volume updates
     volume += Math.floor(Math.random() * 25000);
     if (volEl) {
       volEl.textContent = `$${(volume / 1000000).toFixed(2)}M`;

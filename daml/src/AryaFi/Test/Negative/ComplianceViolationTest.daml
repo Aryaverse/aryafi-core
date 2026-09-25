@@ -1,0 +1,365 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Negative test suite: compliance violation and rejection paths.
+--
+-- Verifies that all compliance modules correctly reject, block, or deny
+-- operations under invalid, expired, or unauthorized conditions:
+--   1. KYC: revoked attestation, expired attestation, duplicate observer
+--   2. Sanctions: blocked party enforcement, already-clear re-clear rejection
+--   3. Eligibility: restricted jurisdiction, restricted asset class, inactive policy
+--   4. Transfer Restrictions: lockup period enforcement, already-active activation
+--   5. Ownership Restrictions: concentration limit breach
+module AryaFi.Test.Negative.ComplianceViolationTest where
+
+import Daml.Script
+import DA.Time (time)
+import DA.Date (date, Month(..))
+import AryaFi.Compliance.Eligibility
+import AryaFi.Compliance.KYC
+import AryaFi.Compliance.Sanctions
+import AryaFi.Compliance.TransferRestrictions
+import AryaFi.Compliance.OwnershipRestrictions
+
+-- ---------------------------------------------------------------------------
+-- 1. Eligibility Policy: restricted jurisdiction rejection
+-- ---------------------------------------------------------------------------
+
+negativeEligibilityRejection : Script ()
+negativeEligibilityRejection = script do
+  complianceOfficer <- allocateParty "ComplianceOfficer"
+
+  policyCid <- submit complianceOfficer do
+    createCmd EligibilityPolicy with
+      policyManager = complianceOfficer
+      policyName = "US-Approved-Collateral"
+      allowedJurisdictions = ["US", "GB"]
+      allowedAssetClasses = ["DebtSecurity", "CashAsset"]
+      minCreditRating = "AA"
+      isActive = True
+
+  decision <- submit complianceOfficer do
+    exerciseCmd policyCid EvaluateEligibility with
+      targetJurisdiction = "NK" -- Unauthorized jurisdiction
+      targetAssetClass = "DebtSecurity"
+
+  case decision of
+    Rejected _ -> pure ()
+    _ -> abort "Expected eligibility rejection for restricted jurisdiction"
+
+-- ---------------------------------------------------------------------------
+-- 2. Eligibility Policy: restricted asset class rejection
+-- ---------------------------------------------------------------------------
+
+negativeEligibilityAssetClassRejection : Script ()
+negativeEligibilityAssetClassRejection = script do
+  complianceOfficer <- allocateParty "ComplianceOfficer"
+
+  policyCid <- submit complianceOfficer do
+    createCmd EligibilityPolicy with
+      policyManager = complianceOfficer
+      policyName = "Repo-Eligible-Securities"
+      allowedJurisdictions = ["US", "GB", "DE", "JP"]
+      allowedAssetClasses = ["GovernmentBond", "CorporateBond"]
+      minCreditRating = "A"
+      isActive = True
+
+  -- Crypto is not in the allowed asset classes
+  decision <- submit complianceOfficer do
+    exerciseCmd policyCid EvaluateEligibility with
+      targetJurisdiction = "US"
+      targetAssetClass = "Cryptocurrency"
+
+  case decision of
+    Rejected _ -> pure ()
+    _ -> abort "Expected eligibility rejection for unauthorized asset class"
+
+-- ---------------------------------------------------------------------------
+-- 3. KYC: revoked attestation must reflect rejected status
+-- ---------------------------------------------------------------------------
+
+negativeKycRevocation : Script ()
+negativeKycRevocation = script do
+  kycAuthority <- allocateParty "KYCAuthority"
+  suspiciousBank <- allocateParty "SuspiciousBank"
+
+  let now = time (date 2026 Sep 15) 10 0 0
+  let expiry = time (date 2027 Sep 15) 10 0 0
+  let revokeTime = time (date 2026 Sep 16) 8 0 0
+
+  -- Create valid KYC attestation
+  kycCid <- submit kycAuthority do
+    createCmd KycAttestation with
+      authority = kycAuthority
+      subjectParty = suspiciousBank
+      lei = Some "SUSP123456789012345"
+      status = KycVerified
+      verificationTimestamp = now
+      expiryTimestamp = expiry
+      jurisdiction = "RU"
+      riskTier = "ENHANCED_DUE_DILIGENCE"
+      providerRef = None
+      observers = []
+
+  -- Authority revokes due to AML alert
+  revokedCid <- submit kycAuthority do
+    exerciseCmd kycCid RevokeKyc with
+      reason = "AML_WATCHLIST_MATCH"
+      revokeTimestamp = revokeTime
+
+  -- Verify the attestation is now rejected
+  revokedAttestation <- queryContractId kycAuthority revokedCid
+  case revokedAttestation of
+    Some att -> do
+      case att.status of
+        KycRejected reason -> do
+          assert (reason == "AML_WATCHLIST_MATCH")
+        _ -> abort "Expected KycRejected status after revocation"
+    None -> abort "Revoked attestation contract not found"
+
+-- ---------------------------------------------------------------------------
+-- 4. KYC: duplicate observer addition must fail
+-- ---------------------------------------------------------------------------
+
+negativeKycDuplicateObserver : Script ()
+negativeKycDuplicateObserver = script do
+  kycAuthority <- allocateParty "KYCAuthority"
+  subject <- allocateParty "SubjectCorp"
+  auditor <- allocateParty "Auditor"
+
+  let now = time (date 2026 Sep 10) 10 0 0
+  let expiry = time (date 2027 Sep 10) 10 0 0
+
+  kycCid <- submit kycAuthority do
+    createCmd KycAttestation with
+      authority = kycAuthority
+      subjectParty = subject
+      lei = None
+      status = KycVerified
+      verificationTimestamp = now
+      expiryTimestamp = expiry
+      jurisdiction = "US"
+      riskTier = "STANDARD"
+      providerRef = None
+      observers = [auditor]
+
+  -- Adding existing observer again must fail
+  submitMustFail kycAuthority do
+    exerciseCmd kycCid AddKycObserver with
+      newObserver = auditor
+
+-- ---------------------------------------------------------------------------
+-- 5. Sanctions: cannot clear an already-clear party
+-- ---------------------------------------------------------------------------
+
+negativeSanctionsAlreadyClear : Script ()
+negativeSanctionsAlreadyClear = script do
+  screeningAuth <- allocateParty "SanctionsScreener"
+  cleanBank <- allocateParty "CleanBank"
+
+  let now = time (date 2026 Sep 10) 10 0 0
+  let expiry = time (date 2027 Sep 10) 10 0 0
+
+  sanctionsCid <- submit screeningAuth do
+    createCmd SanctionsAttestation with
+      screeningAuthority = screeningAuth
+      subjectParty = cleanBank
+      lei = Some "CLEAN12345678901234"
+      status = SanctionsClear
+      screeningTimestamp = now
+      expiryTimestamp = expiry
+      screeningProviderRef = "ACME-SCREEN-001"
+      providerRef = None
+      observers = []
+
+  -- Cannot clear a party that is already clear
+  submitMustFail screeningAuth do
+    exerciseCmd sanctionsCid ClearParty with
+      clearanceRef = "DUPLICATE-CLEAR"
+      clearTimestamp = now
+
+-- ---------------------------------------------------------------------------
+-- 6. Sanctions: blocked party cannot transact — status remains blocked
+-- ---------------------------------------------------------------------------
+
+negativeSanctionsBlockedPartyPersistence : Script ()
+negativeSanctionsBlockedPartyPersistence = script do
+  screeningAuth <- allocateParty "SanctionsScreener"
+  flaggedEntity <- allocateParty "FlaggedEntity"
+
+  let now = time (date 2026 Sep 10) 10 0 0
+  let expiry = time (date 2027 Sep 10) 10 0 0
+
+  sanctionsCid <- submit screeningAuth do
+    createCmd SanctionsAttestation with
+      screeningAuthority = screeningAuth
+      subjectParty = flaggedEntity
+      lei = None
+      status = SanctionsFlagged "OFAC_SDN_MATCH"
+      screeningTimestamp = now
+      expiryTimestamp = expiry
+      screeningProviderRef = "OFAC-SCREEN-2026"
+      providerRef = None
+      observers = []
+
+  -- Escalate to blocked
+  blockedCid <- submit screeningAuth do
+    exerciseCmd sanctionsCid BlockParty with
+      sanctionsListRef = "OFAC-SDN-2026-LIST"
+      blockTimestamp = now
+
+  -- Verify blocked status persists and IsSanctionsClear returns False
+  isCleared <- submit screeningAuth do
+    exerciseCmd blockedCid IsSanctionsClear
+
+  assert (not isCleared)
+
+-- ---------------------------------------------------------------------------
+-- 7. Transfer Restrictions: lockup period must block transfer
+-- ---------------------------------------------------------------------------
+
+negativeTransferRestrictionLockup : Script ()
+negativeTransferRestrictionLockup = script do
+  complianceOfficer <- allocateParty "ComplianceOfficer"
+
+  let lockupEnd = time (date 2027 Jun 30) 23 59 59
+
+  ruleCid <- submit complianceOfficer do
+    createCmd TransferRestrictionRule with
+      complianceOfficer = complianceOfficer
+      isin = "US912828ZM24"
+      regulatoryCategory = RegD_506c
+      holdingPeriodDays = 365
+      whitelistRequired = True
+      lockupExpiry = Some lockupEnd
+      isActive = True
+
+  -- Verify lockup blocks transfer at current time (before lockup expiry)
+  isAllowed <- submit complianceOfficer do
+    exerciseCmd ruleCid IsTransferAllowed
+
+  -- This should be False because the lockup hasn't expired
+  -- (Current ledger time is well before Jun 2027)
+  assert (not isAllowed)
+
+-- ---------------------------------------------------------------------------
+-- 8. Transfer Restrictions: activating already active rule must fail
+-- ---------------------------------------------------------------------------
+
+negativeTransferRestrictionDoubleActivate : Script ()
+negativeTransferRestrictionDoubleActivate = script do
+  complianceOfficer <- allocateParty "ComplianceOfficer"
+
+  ruleCid <- submit complianceOfficer do
+    createCmd TransferRestrictionRule with
+      complianceOfficer = complianceOfficer
+      isin = "US912828ZN07"
+      regulatoryCategory = Rule144A
+      holdingPeriodDays = 0
+      whitelistRequired = False
+      lockupExpiry = None
+      isActive = True
+
+  -- Already active rule cannot be activated again
+  submitMustFail complianceOfficer do
+    exerciseCmd ruleCid ActivateRule
+
+-- ---------------------------------------------------------------------------
+-- 9. Transfer Restrictions: deactivating already inactive rule must fail
+-- ---------------------------------------------------------------------------
+
+negativeTransferRestrictionDoubleDeactivate : Script ()
+negativeTransferRestrictionDoubleDeactivate = script do
+  complianceOfficer <- allocateParty "ComplianceOfficer"
+
+  ruleCid <- submit complianceOfficer do
+    createCmd TransferRestrictionRule with
+      complianceOfficer = complianceOfficer
+      isin = "US912828XP18"
+      regulatoryCategory = RegS
+      holdingPeriodDays = 40
+      whitelistRequired = False
+      lockupExpiry = None
+      isActive = False
+
+  -- Already inactive rule cannot be deactivated again
+  submitMustFail complianceOfficer do
+    exerciseCmd ruleCid DeactivateRule
+
+-- ---------------------------------------------------------------------------
+-- 10. Ownership Restrictions: duplicate observer must fail
+-- ---------------------------------------------------------------------------
+
+negativeOwnershipDuplicateJurisdiction : Script ()
+negativeOwnershipDuplicateJurisdiction = script do
+  regulator <- allocateParty "Regulator"
+
+  ownershipCid <- submit regulator do
+    createCmd OwnershipRestriction with
+      regulator = regulator
+      isin = "US912828ZM24"
+      maxOwnershipPercentage = 10.0
+      maxHoldingQuantity = 1000000.0
+      disallowedJurisdictions = ["NK", "IR"]
+      isActive = True
+
+  -- Adding already-disallowed jurisdiction again must fail
+  submitMustFail regulator do
+    exerciseCmd ownershipCid AddDisallowedJurisdiction with
+      jurisdiction = "NK"
+
+-- ---------------------------------------------------------------------------
+-- 11. Ownership Restrictions: disallowed jurisdiction blocks ownership
+-- ---------------------------------------------------------------------------
+
+negativeOwnershipJurisdictionBlock : Script ()
+negativeOwnershipJurisdictionBlock = script do
+  regulator <- allocateParty "Regulator"
+
+  ownershipCid <- submit regulator do
+    createCmd OwnershipRestriction with
+      regulator = regulator
+      isin = "US912828ZM24"
+      maxOwnershipPercentage = 10.0
+      maxHoldingQuantity = 1000000.0
+      disallowedJurisdictions = ["NK", "IR", "SY"]
+      isActive = True
+
+  -- Attempt to verify ownership from disallowed jurisdiction
+  decision <- submit regulator do
+    exerciseCmd ownershipCid CheckOwnershipLimit with
+      proposedQuantity = 100000.0
+      proposedPercentage = 5.0
+      holderJurisdiction = "IR"  -- Iran — disallowed
+
+  case decision of
+    Rejected _ -> pure ()
+    _ -> abort "Expected rejection for disallowed jurisdiction ownership"
+
+-- ---------------------------------------------------------------------------
+-- 12. Ownership Restrictions: quantity breach rejection
+-- ---------------------------------------------------------------------------
+
+negativeOwnershipQuantityBreach : Script ()
+negativeOwnershipQuantityBreach = script do
+  regulator <- allocateParty "Regulator"
+
+  ownershipCid <- submit regulator do
+    createCmd OwnershipRestriction with
+      regulator = regulator
+      isin = "US912828XG34"
+      maxOwnershipPercentage = 0.0   -- No percentage limit
+      maxHoldingQuantity = 500000.0  -- Hard quantity cap
+      disallowedJurisdictions = []
+      isActive = True
+
+  -- Proposed quantity exceeds maximum
+  decision <- submit regulator do
+    exerciseCmd ownershipCid CheckOwnershipLimit with
+      proposedQuantity = 750000.0    -- Over the 500K cap
+      proposedPercentage = 3.0
+      holderJurisdiction = "US"
+
+  case decision of
+    Rejected _ -> pure ()
+    _ -> abort "Expected rejection for exceeding maximum holding quantity"

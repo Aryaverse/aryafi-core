@@ -1,37 +1,260 @@
 -- Copyright (c) 2026 Aryaverse. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
 
+-- | Institutional Repurchase Agreement (Repo) and Margin Reference Application.
+--
+-- Demonstrates the end-to-end tri-party repo trade lifecycle:
+--
+-- Participants:
+--   - Seller:        Primary Dealer Bank (GoldmanSachs)
+--   - Buyer:         Institutional Liquidity Fund (BlackRockLiquidity)
+--   - Custodian:     Tri-Party Custody Bank (BNYMellon)
+--   - TripartyAgent: Collateral Allocation Agent (Euroclear)
+--   - KycAuthority:  Institutional KYC Registry
+--   - SanctionsAuth: Sanctions Screening Provider
+--   - Regulator:     Securities and Exchange Commission (SEC)
+--
+-- Lifecycle Workflow:
+--   Phase 1 — Institutional Compliance Verification
+--     1. KYC and Sanctions attestations issued for Seller and Buyer
+--   Phase 2 — Trade Agreement & Opening Leg DvP Settlement
+--     2. Tri-party RepoAgreement initiated (10M Treasuries, 2% haircut, 9.8M cash)
+--     3. Buyer books corresponding ReverseRepoPosition
+--     4. Custodian executes opening leg settlement -> RepoActive
+--   Phase 3 — Mark-to-Market Revaluation & Variation Margin Call
+--     5. Market decline triggers collateral revaluation
+--     6. Buyer detects margin deficit and issues Variation MarginCall
+--     7. Seller satisfies margin call with cash transfer reference
+--     8. Buyer confirms margin satisfaction
+--   Phase 4 — Collateral Substitution
+--     9. Seller exercises collateral substitution with equivalent Treasury paper
+--   Phase 5 — Maturity Repurchase Settlement & Closeout
+--     10. Seller initiates closing leg at maturity
+--     11. Custodian executes closing repurchase DvP settlement -> RepoSettled
+--     12. Buyer closes ReverseRepoPosition
 module AryaFi.Test.Scenarios.RepoScenario where
 
 import Daml.Script
+import AryaFi.Compliance.KYC
+import AryaFi.Compliance.Sanctions
 import AryaFi.Contracts.Repo
-import AryaFi.Common.Identifiers
+import AryaFi.Contracts.ReverseRepo
+import AryaFi.Contracts.Margin
 import AryaFi.Common.Types
+import AryaFi.Common.Identifiers
+import DA.Date (date, Month(..))
+import DA.Time (time)
 
-repoLifecycleScenario : Script ()
-repoLifecycleScenario = script do
-  dealer <- allocateParty "DealerSeller"
-  cashLender <- allocateParty "CashLender"
+testInstitutionalRepoAndMarginWorkflow : Script ()
+testInstitutionalRepoAndMarginWorkflow = script do
 
-  let isin = ISIN "GB00BN65R313" -- UK Gilt
+  -- =========================================================================
+  -- Party Allocation
+  -- =========================================================================
+  seller <- allocateParty "GoldmanSachsDealer"
+  buyer <- allocateParty "BlackRockLiquidityDesk"
+  custodian <- allocateParty "BNYMellonCustody"
+  triparty <- allocateParty "EuroclearTriParty"
+  kycAuth <- allocateParty "GlobalKycRegistry"
+  sanctionsAuth <- allocateParty "GlobalSanctionsAgency"
+  regulator <- allocateParty "SEC"
 
-  repoCid <- submitMulti [dealer, cashLender] [] do
+  let now = time (date 2026 Sep 1) 9 0 0
+  let expiryDate = time (date 2027 Sep 1) 9 0 0
+  let repoEndDate = time (date 2026 Sep 15) 15 0 0 -- 14-day repo
+  let marginDeadline = time (date 2026 Sep 8) 17 0 0
+
+  -- =========================================================================
+  -- Phase 1: Institutional Compliance Verification
+  -- =========================================================================
+  sellerKycCid <- submit kycAuth do
+    createCmd KYCAttestation with
+      attestationId = "KYC-SELLER-001"
+      party = seller
+      authority = kycAuth
+      kycLevel = Tier3Institutional
+      riskScore = 10
+      validFrom = now
+      validTo = expiryDate
+      lei = Some "7845000ABCD1234EF56"
+      jurisdiction = "US"
+      observers = [regulator]
+
+  buyerKycCid <- submit kycAuth do
+    createCmd KYCAttestation with
+      attestationId = "KYC-BUYER-001"
+      party = buyer
+      authority = kycAuth
+      kycLevel = Tier3Institutional
+      riskScore = 8
+      validFrom = now
+      validTo = expiryDate
+      lei = Some "5493000G7M5A0Z5F6S89"
+      jurisdiction = "US"
+      observers = [regulator]
+
+  sellerSanctionsCid <- submit sanctionsAuth do
+    createCmd SanctionsScreeningAttestation with
+      screeningId = "SANC-SELLER-001"
+      party = seller
+      screener = sanctionsAuth
+      status = SanctionsClear
+      listsChecked = ["OFAC_SDN", "EU_CONSOLIDATED"]
+      screenedAt = now
+      validUntil = expiryDate
+      screeningReference = "SANC-REF-GS-01"
+      observers = [regulator]
+
+  buyerSanctionsCid <- submit sanctionsAuth do
+    createCmd SanctionsScreeningAttestation with
+      screeningId = "SANC-BUYER-001"
+      party = buyer
+      screener = sanctionsAuth
+      status = SanctionsClear
+      listsChecked = ["OFAC_SDN", "EU_CONSOLIDATED"]
+      screenedAt = now
+      validUntil = expiryDate
+      screeningReference = "SANC-REF-BLK-01"
+      observers = [regulator]
+
+  isSellerClear <- submit seller do exerciseCmd sellerSanctionsCid IsSanctionsClear with asOf = now
+  isBuyerClear <- submit buyer do exerciseCmd buyerSanctionsCid IsSanctionsClear with asOf = now
+  assertMsg "Both counterparties must be sanctions-clear" (isSellerClear && isBuyerClear)
+
+  -- =========================================================================
+  -- Phase 2: Trade Agreement & Opening Leg DvP Settlement
+  -- =========================================================================
+  repoCid <- submitMulti [seller, buyer, custodian] [] do
     createCmd RepoAgreement with
-      repoId = "REPO-2026-UKGILT-01"
-      seller = dealer
-      buyer = cashLender
-      tripartyAgent = None
-      isin = isin
-      collateralQuantity = 5000000.0
-      currency = "GBP"
-      purchasePrice = 4900000.0
-      repurchasePrice = 4910000.0
-      repoRate = 0.0510
-      startDate = time (date 2026 Feb 24) 10 0 0
-      endDate = time (date 2026 Feb 25) 10 0 0
+      repoId = "REPO-2026-GS-BLK-001"
+      seller = seller
+      buyer = buyer
+      tripartyAgent = Some triparty
+      custodian = custodian
+      isin = "US912828ZM24"
+      collateralQuantity = 10000000.0 -- 10M US Treasuries
+      collateralAccountId = AccountId "ACC-TRI-PARTY-BNY-01"
+      haircut = 0.02 -- 2% haircut
+      currency = "USD"
+      purchasePrice = 9800000.0 -- 9.8M USD cash lent
+      repurchasePrice = 9820008.33 -- 9.8M + 14-day interest at 5.25%
+      repoRate = 0.0525
+      dayCountConvention = Act360
+      startDate = now
+      endDate = repoEndDate
+      status = RepoPendingOpening
+      openingSettlementRef = None
+      closingSettlementRef = None
+      correlationId = CorrelationId "CORR-REPO-TRADESTORE-001"
+      observers = [regulator]
+
+  -- Buyer books corresponding ReverseRepoPosition
+  revPosCid <- submit buyer do
+    createCmd ReverseRepoPosition with
+      positionId = "REV-POS-BLK-001"
+      buyer = buyer
+      seller = seller
+      custodian = custodian
+      repoId = "REPO-2026-GS-BLK-001"
+      isin = "US912828ZM24"
+      collateralQuantity = 10000000.0
+      currency = "USD"
+      purchasePrice = 9800000.0
+      repurchasePrice = 9820008.33
+      repoRate = 0.0525
+      startDate = now
+      endDate = repoEndDate
+      currentMarketValue = 10000000.0
       status = Active
+      correlationId = CorrelationId "CORR-REPO-TRADESTORE-001"
+      observers = [regulator]
 
-  closedRepoCid <- submitMulti [dealer, cashLender] [] do
-    exerciseCmd repoCid CloseoutRepo
+  -- Custodian executes opening leg settlement
+  repoCidActive <- submit custodian do
+    exerciseCmd repoCid ExecuteOpeningLeg with
+      settlementRef = "SETTLE-OPEN-DVP-BNY-001"
 
+  Some repoActive <- queryContractId buyer repoCidActive
+  assertMsg "Repo must be Active" (repoActive.status == RepoActive)
+
+  -- =========================================================================
+  -- Phase 3: Mark-to-Market Revaluation & Variation Margin Call
+  -- =========================================================================
+
+  -- Collateral value drops to 9,600,000 USD
+  revPosCidUpdated <- submit buyer do
+    exerciseCmd revPosCid UpdateMarkToMarket with
+      newMarketValue = 9600000.0
+
+  -- Buyer calculates deficit with 2% margin (Required = 9.8M * 1.02 = 9.996M; Deficit = 9.996M - 9.6M = 396,000 USD)
+  deficit <- submit buyer do
+    exerciseCmd revPosCidUpdated CalculateMarginDeficit with
+      requiredMarginRatio = 0.02
+
+  assertMsg "Deficit must be 396,000 USD" (deficit == 396000.0)
+
+  -- Buyer serves Variation Margin Call
+  marginCallCid <- submitMulti [buyer, seller] [] do
+    createCmd MarginCall with
+      marginCallId = "MC-VAR-2026-001"
+      caller = buyer
+      payer = seller
+      custodian = custodian
+      marginType = VariationMargin
+      relatedAgreementRef = "REPO-2026-GS-BLK-001"
+      currency = "USD"
+      requiredAmount = 396000.0
+      deadline = marginDeadline
+      status = MarginCallIssued
+      correlationId = CorrelationId "CORR-MARGIN-001"
+      observers = [regulator]
+
+  -- Seller satisfies variation margin with Fedwire cash transfer
+  marginCallSatisfiedCid <- submit seller do
+    exerciseCmd marginCallCid SatisfyWithCash with
+      paymentRef = "FEDWIRE-IMAD-20260908-001234"
+
+  isMarginMet <- submit buyer do
+    exerciseCmd marginCallSatisfiedCid IsMarginSatisfied
+  assertMsg "Margin call must be satisfied" isMarginMet
+
+  -- =========================================================================
+  -- Phase 4: Collateral Substitution
+  -- =========================================================================
+
+  -- Seller substitutes collateral with alternative Treasury paper (US912828XG34)
+  repoCidSubstituted <- submitMulti [seller, buyer] [] do
+    exerciseCmd repoCidActive SubstituteCollateral with
+      newIsin = "US912828XG34"
+      newQuantity = 10100000.0
+      newHaircut = 0.02
+
+  Some repoSub <- queryContractId seller repoCidSubstituted
+  assertMsg "ISIN must be updated" (repoSub.isin == "US912828XG34")
+
+  -- =========================================================================
+  -- Phase 5: Maturity Repurchase Settlement & Closeout
+  -- =========================================================================
+
+  -- Seller initiates closing leg at maturity
+  repoCidPendingClose <- submit seller do
+    exerciseCmd repoCidSubstituted InitiateClosingLeg
+
+  Some repoPendingClose <- queryContractId seller repoCidPendingClose
+  assertMsg "Status must be RepoPendingClosing" (repoPendingClose.status == RepoPendingClosing)
+
+  -- Custodian executes closing repurchase settlement
+  repoCidSettled <- submit custodian do
+    exerciseCmd repoPendingClose ExecuteClosingLeg with
+      settlementRef = "SETTLE-CLOSE-DVP-BNY-001"
+
+  Some repoFinal <- queryContractId buyer repoCidSettled
+  assertMsg "Repo status must be RepoSettled" (repoFinal.status == RepoSettled)
+
+  -- Buyer closes ReverseRepoPosition
+  revPosCidClosed <- submit buyer do
+    exerciseCmd revPosCidUpdated CloseReverseRepo
+
+  Some revClosed <- queryContractId buyer revPosCidClosed
+  assertMsg "Reverse repo position must be Closed" (revClosed.status == Closed)
   pure ()

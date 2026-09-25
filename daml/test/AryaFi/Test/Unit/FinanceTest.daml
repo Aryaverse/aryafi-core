@@ -22,6 +22,7 @@ unitTestCashSplitMerge = script do
       amount = 1000000.0
       isLocked = False
       lockReference = None
+      observers = []
 
   (c1, c2) <- submit alice do
     exerciseCmd cashCid SplitCash with splitAmount = 400000.0
