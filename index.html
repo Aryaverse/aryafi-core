@@ -420,6 +420,60 @@
           </div>
         </div>
 
+        <!-- Collateral Valuation & Haircut Matrix -->
+        <div class="calculator-card">
+          <div>
+            <span class="hero-pill">OCC / Fed Rule 15c3-3</span>
+            <h3 style="font-size: 1.25rem; font-weight: 800;">Collateral Valuation, Haircut &amp; Margin Call Matrix</h3>
+            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem;">
+              Real-time calculation of risk-weighted collateral requirements, haircuts, and automated smart-contract margin call thresholds according to AryaFi.Finance.Collateral rules.
+            </p>
+          </div>
+
+          <div class="calc-inputs-row">
+            <div class="form-group">
+              <label class="form-label" for="calc-collateral-asset">Collateral Asset Class</label>
+              <select id="calc-collateral-asset" class="form-input" style="min-width: 240px; font-weight: 600;">
+                <option value="ust" data-haircut="0.02" data-hqla="Level 1 HQLA">US Treasuries (0-5Y) - 2.0% Haircut</option>
+                <option value="agency" data-haircut="0.03" data-hqla="Level 1 HQLA">US Agency / GSE - 3.0% Haircut</option>
+                <option value="g10" data-haircut="0.025" data-hqla="Level 1 HQLA">G10 Sovereign Bonds - 2.5% Haircut</option>
+                <option value="corp-ig" data-haircut="0.05" data-hqla="Level 2A HQLA">Investment Grade Corporate - 5.0% Haircut</option>
+                <option value="corp-hy" data-haircut="0.15" data-hqla="Non-HQLA">High Yield Corporate - 15.0% Haircut</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="calc-loan-exposure">Loan Exposure / Notional ($)</label>
+              <input type="number" id="calc-loan-exposure" class="form-input" value="10000000.00" step="100000" min="1000">
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="calc-margin-req">Maintenance Margin (%)</label>
+              <input type="number" id="calc-margin-req" class="form-input" value="102.0" step="0.5" min="100" max="150" style="min-width: 140px;">
+            </div>
+            <button class="btn-primary" id="btn-calculate-margin" style="height: 42px;">
+              Evaluate Risk &amp; Margin
+            </button>
+          </div>
+
+          <div class="calc-result-box">
+            <div class="calc-stat">
+              <span class="calc-stat-val" id="calc-required-collateral">$10,408,163.27</span>
+              <span class="calc-stat-lbl">Required Collateral Value</span>
+            </div>
+            <div class="calc-stat">
+              <span class="calc-stat-val" id="calc-effective-haircut">$208,163.27 (2.0%)</span>
+              <span class="calc-stat-lbl">Risk Haircut Deduction</span>
+            </div>
+            <div class="calc-stat">
+              <span class="calc-stat-val" id="calc-margin-call-threshold">$10,200,000.00</span>
+              <span class="calc-stat-lbl">Automated Margin Call Trigger</span>
+            </div>
+            <div class="calc-stat">
+              <span class="calc-stat-val emerald" id="calc-lcr-status">Level 1 HQLA (Compliant)</span>
+              <span class="calc-stat-lbl">Basel III Capital Eligibility</span>
+            </div>
+          </div>
+        </div>
+
         <!-- Contract 1: CashPosition -->
         <div class="contract-card">
           <div class="contract-card-header">
