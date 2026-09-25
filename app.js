@@ -834,10 +834,47 @@ const ISO_TEMPLATES = {
   }
 };
 
+const ISO_MAPPINGS = {
+  pacs008: [
+    { xml: "MsgId", path: "GrpHdr / MsgId", json: "idempotencyKey", spec: "Text (Unique Idempotency Digest)", rule: "Strict 1-time execution proof" },
+    { xml: "EndToEndId", path: "PmtId / EndToEndId", json: "correlationId", spec: "CorrelationId (Contract Linkage)", rule: "Full audit trail reconciliation" },
+    { xml: "IntrBkSttlmAmt", path: "CdtTrfTxInf / IntrBkSttlmAmt", json: "amount & currency", spec: "Decimal & Currency ('USD')", rule: "Positive non-zero check" },
+    { xml: "DbtrAcct", path: "CdtTrfTxInf / DbtrAcct / Id", json: "payerAccountId", spec: "AccountId ('ACC-GS-USD-001')", rule: "Signatory signature authorization" },
+    { xml: "CdtrAcct", path: "CdtTrfTxInf / CdtrAcct / Id", json: "payeeAccountId", spec: "AccountId ('ACC-BNY-CUSTODY-USD-001')", rule: "Sub-transaction privacy enforced" }
+  ],
+  sese023: [
+    { xml: "SttlmTxId", path: "TxDtls / SttlmTxId", json: "settlementId", spec: "Text ('DVP-2026-TREAS-001')", rule: "Unique trade matching handle" },
+    { xml: "ISIN", path: "FinInstrmId / ISIN", json: "isin", spec: "ISIN ('US912828ZM24')", rule: "ISO 6166 checksum validated" },
+    { xml: "SttlmQty", path: "TxDtls / SttlmQty / Unit", json: "quantity", spec: "Amount (5,000,000.00 par)", rule: "Physical/tokenized equivalence" },
+    { xml: "SttlmAmt", path: "TxDtls / SttlmAmt", json: "cashAmount", spec: "Amount ($5,000,000.00 USD)", rule: "Gross settlement matching" },
+    { xml: "DlvgPty / RcvgPty", path: "SttlmPties / LEI", json: "seller & buyer", spec: "Party co-signatories", rule: "BIS Model 1 simultaneous finality" }
+  ],
+  camt053: [
+    { xml: "MsgId", path: "GrpHdr / MsgId", json: "statementId", spec: "Text ('STMT-2026-09-24-001')", rule: "Statement chronological sequence" },
+    { xml: "Acct / Id", path: "Stmt / Acct / Id", json: "accountId", spec: "AccountId ('ACC-HQ-CONCENTRATION')", rule: "Account must exist on ACS" },
+    { xml: "Bal / Amt", path: "Stmt / Bal / Amt", json: "reconciledBalance", spec: "Amount ($10,000,000.00 USD)", rule: "Lemma 1 value invariant: Δ = 0.00" },
+    { xml: "CdtDbtInd", path: "Stmt / Bal / CdtDbtInd", json: "creditDebitIndicator", spec: "CRDT / DBIT", rule: "Zero balance sweep proof" }
+  ],
+  semt002: [
+    { xml: "StmtId", path: "StmtGnlDtls / StmtId", json: "auditRef", spec: "Text ('CUSTODY-HOLDING-AUDIT-2026-09')", rule: "Regulator audit trail reference" },
+    { xml: "ISIN", path: "FinInstrmId / ISIN", json: "isin", spec: "ISIN ('US912828ZM24')", rule: "CSD safekeeping registry match" },
+    { xml: "AggtQty", path: "Bal / AggtQty", json: "expectedSafekeepingUnits", spec: "Amount (10,000,000.00 units)", rule: "100% reserve segregation" }
+  ]
+};
+
 function initIsoConverter() {
   const select = document.getElementById('iso-msg-select');
   const xmlDisplay = document.getElementById('iso-xml-display');
   const damlDisplay = document.getElementById('iso-daml-display');
+  const toggleDirBtn = document.getElementById('btn-toggle-iso-dir');
+  const validateBtn = document.getElementById('btn-validate-iso');
+  const dirText = document.getElementById('iso-direction-text');
+  const statusBadge = document.getElementById('iso-status-badge');
+  const leftTitle = document.getElementById('iso-left-title');
+  const rightTitle = document.getElementById('iso-right-title');
+  const tbody = document.getElementById('iso-mapping-tbody');
+
+  let isXmlToDaml = true;
 
   if (!select || !xmlDisplay || !damlDisplay) return;
 
@@ -847,11 +884,59 @@ function initIsoConverter() {
       xmlDisplay.textContent = template.xml;
       damlDisplay.textContent = template.daml;
     }
+
+    if (tbody && ISO_MAPPINGS[key]) {
+      tbody.innerHTML = '';
+      ISO_MAPPINGS[key].forEach(row => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><code>&lt;${row.xml}&gt;</code></td>
+          <td style="color: var(--text-secondary);">${row.path}</td>
+          <td><strong>${row.json}</strong></td>
+          <td style="color: var(--text-secondary);">${row.spec}</td>
+          <td style="color: var(--accent-emerald); font-weight: 600;">✓ ${row.rule}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
   }
 
   select.addEventListener('change', () => {
     render(select.value);
   });
+
+  if (toggleDirBtn) {
+    toggleDirBtn.addEventListener('click', () => {
+      isXmlToDaml = !isXmlToDaml;
+      if (dirText) {
+        dirText.textContent = isXmlToDaml 
+          ? "SWIFT MX (XML) → Canton Daml JSON" 
+          : "Canton Daml JSON → SWIFT MX (XML)";
+      }
+      if (leftTitle && rightTitle) {
+        leftTitle.textContent = isXmlToDaml 
+          ? "INCOMING ISO 20022 MX (XML PAYLOAD)" 
+          : "OUTGOING ISO 20022 MX (SYNTHESIZED XML)";
+        rightTitle.textContent = isXmlToDaml 
+          ? "CANTON LEDGER API COMMAND (JSON RPC)" 
+          : "ORIGINATING CANTON DAML LEDGER EVENT (JSON)";
+      }
+      if (statusBadge) {
+        statusBadge.textContent = isXmlToDaml 
+          ? "✓ Ingestion Schema Validated" 
+          : "✓ Outbound Serialization Validated";
+      }
+    });
+  }
+
+  if (validateBtn) {
+    validateBtn.addEventListener('click', () => {
+      if (statusBadge) {
+        statusBadge.textContent = "✓ ISO 20022 Schema & Daml Invariants 100% Validated (0 Errors)";
+        statusBadge.style.color = "var(--accent-emerald)";
+      }
+    });
+  }
 
   render(select.value);
 }

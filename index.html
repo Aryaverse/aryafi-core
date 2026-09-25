@@ -610,11 +610,27 @@
         </div>
       </div>
 
+      <!-- ISO Translation Control Bar -->
+      <div class="iso-toolbar">
+        <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+          <span class="iso-direction-badge" id="iso-direction-display">
+            <span>⇄</span> <span id="iso-direction-text">SWIFT MX (XML) &rarr; Canton Daml JSON</span>
+          </span>
+          <span class="badge-tag" id="iso-status-badge" style="color: var(--accent-emerald); border-color: rgba(16, 185, 129, 0.4);">
+            ✓ ISO 20022 Schema Validated
+          </span>
+        </div>
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+          <button class="btn-secondary" id="btn-toggle-iso-dir">⇄ Invert Direction</button>
+          <button class="btn-secondary" id="btn-validate-iso">✓ Validate Syntax &amp; Invariants</button>
+        </div>
+      </div>
+
       <div class="iso-grid">
         <!-- ISO XML Card -->
         <div class="editor-card">
           <div class="editor-header">
-            <span class="editor-title">INCOMING ISO 20022 MX (XML PAYLOAD)</span>
+            <span class="editor-title" id="iso-left-title">INCOMING ISO 20022 MX (XML PAYLOAD)</span>
             <div class="editor-actions">
               <span class="badge-tag">SWIFT MX</span>
               <button class="btn-copy" id="btn-copy-xml">Copy XML</button>
@@ -626,13 +642,40 @@
         <!-- Daml Ledger API Payload Card -->
         <div class="editor-card">
           <div class="editor-header">
-            <span class="editor-title">CANTON LEDGER API COMMAND (JSON RPC)</span>
+            <span class="editor-title" id="iso-right-title">CANTON LEDGER API COMMAND (JSON RPC)</span>
             <div class="editor-actions">
-              <span class="badge-tag" style="color: var(--accent-cyan); border-color: rgba(6, 182, 212, 0.3);">Daml v2.10</span>
+              <span class="badge-tag">Daml v2.10</span>
               <button class="btn-copy" id="btn-copy-daml">Copy Daml</button>
             </div>
           </div>
           <pre class="editor-content" id="iso-daml-display"></pre>
+        </div>
+      </div>
+
+      <!-- Canonical Field Mapping Inspector -->
+      <div class="calculator-card" style="margin-top: 1.5rem;">
+        <div>
+          <span class="hero-pill">Bi-Directional Lexicon</span>
+          <h3 style="font-size: 1.15rem; font-weight: 800;">Canonical ISO 20022 &harr; Daml Schema Field Mapping</h3>
+          <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.2rem;">
+            Real-time ontological alignment between SWIFT MX business conceptual elements and Daml smart contract template choices.
+          </p>
+        </div>
+        <div style="overflow-x: auto;">
+          <table class="iso-mapping-table">
+            <thead>
+              <tr>
+                <th>SWIFT MX (XML Element)</th>
+                <th>ISO 20022 Tag Path</th>
+                <th>Daml Ledger API (JSON Key)</th>
+                <th>Contract Field Specification</th>
+                <th>Validation Invariant</th>
+              </tr>
+            </thead>
+            <tbody id="iso-mapping-tbody">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
         </div>
       </div>
     </div>

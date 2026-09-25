@@ -1236,6 +1236,57 @@ svg.topology-svg {
    Tab 4: ISO 20022 Hub & Tab 6: Daml Code Dossier
    ========================================================================== */
 
+.iso-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.iso-direction-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-medium);
+  padding: 0.35rem 0.85rem;
+  border-radius: var(--radius-full);
+}
+
+.iso-mapping-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  font-family: var(--font-mono);
+  margin-top: 0.75rem;
+}
+
+.iso-mapping-table th,
+.iso-mapping-table td {
+  padding: 0.75rem 1rem;
+  text-align: left;
+  border: 1px solid var(--border-subtle);
+}
+
+.iso-mapping-table th {
+  background: var(--bg-tertiary);
+  color: var(--text-tertiary);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.iso-mapping-table td {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
 .iso-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
