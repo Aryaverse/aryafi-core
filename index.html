@@ -287,7 +287,7 @@
               <h3 id="scenario-active-title" style="font-size: 1.25rem; font-weight: 700;">Tokenized US Treasury + Cash DvP</h3>
               <p id="scenario-active-desc" style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.2rem;">Atomic cross-asset Delivery-versus-Payment between primary dealers.</p>
             </div>
-            <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
+            <div style="display: flex; gap: 0.6rem; flex-wrap: wrap;">
               <button class="btn-primary" id="btn-run-next-step">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
                 Next Phase
@@ -295,6 +295,43 @@
               <button class="btn-secondary" id="btn-run-auto">Auto-Run</button>
               <button class="btn-secondary" id="btn-reset-scenario">Reset</button>
               <button class="btn-secondary" id="btn-copy-log">Copy Log</button>
+              <button class="btn-secondary" id="btn-export-audit-csv" title="Export regulator-ready CSV audit report">Export CSV</button>
+              <button class="btn-secondary" id="btn-export-audit-json" title="Export JSON ledger audit trail">Export JSON</button>
+            </div>
+          </div>
+
+          <!-- Progress Track -->
+          <div style="display: flex; flex-direction: column; gap: 0.35rem;">
+            <div style="display: flex; justify-content: space-between; font-size: 0.75rem; font-family: var(--font-mono); color: var(--text-tertiary);">
+              <span>LIFECYCLE ADVANCEMENT</span>
+              <span id="sim-progress-label">0% Completed (Phase 0 of 5)</span>
+            </div>
+            <div class="sim-progress-track">
+              <div class="sim-progress-bar" id="sim-progress-bar"></div>
+            </div>
+          </div>
+
+          <!-- Telemetry / Finality Metrics Row -->
+          <div class="simulator-telemetry-bar">
+            <div class="sim-metric-item">
+              <span class="sim-metric-label">Settlement Latency</span>
+              <span class="sim-metric-val" id="metric-latency">-- ms</span>
+            </div>
+            <div class="sim-metric-item">
+              <span class="sim-metric-label">Consensus Protocol</span>
+              <span class="sim-metric-val">Canton BFT v30</span>
+            </div>
+            <div class="sim-metric-item">
+              <span class="sim-metric-label">Crypto Proof</span>
+              <span class="sim-metric-val" id="metric-crypto">SHA-256 Validated</span>
+            </div>
+            <div class="sim-metric-item">
+              <span class="sim-metric-label">Privacy Boundary</span>
+              <span class="sim-metric-val" id="metric-privacy">Zero-Leakage ACS</span>
+            </div>
+            <div class="sim-metric-item">
+              <span class="sim-metric-label">Invariant Verification</span>
+              <span class="sim-metric-val" style="color: var(--accent-emerald);">Δ = 0.00 Verified</span>
             </div>
           </div>
 

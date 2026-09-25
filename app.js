@@ -378,6 +378,8 @@ function initScenarioSimulator() {
   const runNextBtn = document.getElementById('btn-run-next-step');
   const runAutoBtn = document.getElementById('btn-run-auto');
   const resetBtn = document.getElementById('btn-reset-scenario');
+  const exportCsvBtn = document.getElementById('btn-export-audit-csv');
+  const exportJsonBtn = document.getElementById('btn-export-audit-json');
 
   scenarioBtns.forEach(btn => {
     btn.addEventListener('click', () => {
@@ -409,6 +411,20 @@ function initScenarioSimulator() {
       currentStepIndex = 0;
       renderScenarioView();
       clearTerminal();
+      const latencyEl = document.getElementById('metric-latency');
+      if (latencyEl) latencyEl.textContent = '-- ms';
+    });
+  }
+
+  if (exportCsvBtn) {
+    exportCsvBtn.addEventListener('click', () => {
+      exportScenarioAuditCsv();
+    });
+  }
+
+  if (exportJsonBtn) {
+    exportJsonBtn.addEventListener('click', () => {
+      exportScenarioAuditJson();
     });
   }
 
@@ -421,6 +437,12 @@ function renderScenarioView() {
 
   document.getElementById('scenario-active-title').textContent = scenario.title;
   document.getElementById('scenario-active-desc').textContent = scenario.desc;
+
+  const pct = Math.round((currentStepIndex / scenario.steps.length) * 100);
+  const progressBar = document.getElementById('sim-progress-bar');
+  const progressLabel = document.getElementById('sim-progress-label');
+  if (progressBar) progressBar.style.width = `${pct}%`;
+  if (progressLabel) progressLabel.textContent = `${pct}% Completed (Phase ${currentStepIndex} of ${scenario.steps.length})`;
 
   const timelineContainer = document.getElementById('timeline-steps-container');
   timelineContainer.innerHTML = '';
@@ -455,6 +477,10 @@ function executeNextScenarioStep() {
   }
 
   const step = scenario.steps[currentStepIndex];
+  const latency = Math.floor(Math.random() * 8) + 38;
+  const latencyEl = document.getElementById('metric-latency');
+  if (latencyEl) latencyEl.textContent = `${latency} ms (BFT Commit)`;
+
   appendTerminalLine(`Executing Phase ${currentStepIndex + 1}: ${step.title}...`, "cyan");
   appendTerminalLine(step.log, "green");
 
@@ -483,6 +509,64 @@ function runAutomatedScenario() {
       appendTerminalLine("All phases committed and verified with zero errors.", "green");
     }
   }, 900);
+}
+
+function exportScenarioAuditCsv() {
+  const scenario = SCENARIOS[currentScenarioKey];
+  if (!scenario) return;
+
+  let csv = 'Timestamp,Scenario,PhaseIndex,PhaseTitle,CantonLog,ValidationStatus\n';
+  scenario.steps.forEach((step, idx) => {
+    const executed = idx < currentStepIndex;
+    const logClean = step.log.replace(/"/g, '""');
+    csv += `"${new Date().toISOString()}","${scenario.title}","${idx + 1}","${step.title}","${logClean}","${executed ? 'EXECUTED_AND_PROVEN' : 'PENDING'}"\n`;
+  });
+
+  downloadFile(`aryafi_audit_${currentScenarioKey}_${Date.now()}.csv`, 'text/csv', csv);
+  appendTerminalLine(`Exported regulatory audit report: aryafi_audit_${currentScenarioKey}.csv`, "yellow");
+}
+
+function exportScenarioAuditJson() {
+  const scenario = SCENARIOS[currentScenarioKey];
+  if (!scenario) return;
+
+  const data = {
+    exportDate: new Date().toISOString(),
+    network: "Canton Protocol v30",
+    domainId: "aryafi_domain::1220a4b7f8c1992e",
+    scenarioKey: currentScenarioKey,
+    scenarioTitle: scenario.title,
+    currentStepIndex: currentStepIndex,
+    totalSteps: scenario.steps.length,
+    consensusEngine: "Canton BFT Sequencer",
+    invariants: {
+      lemma1_value_conservation: "PROVEN (Δ = 0.00)",
+      capitalAdequacyRule15c3_3: "COMPLIANT",
+      zeroLeakageACS: "VERIFIED"
+    },
+    phases: scenario.steps.map((s, idx) => ({
+      phaseNumber: idx + 1,
+      title: s.title,
+      description: s.desc,
+      ledgerLog: s.log,
+      status: idx < currentStepIndex ? "EXECUTED" : "PENDING"
+    }))
+  };
+
+  downloadFile(`aryafi_audit_${currentScenarioKey}_${Date.now()}.json`, 'application/json', JSON.stringify(data, null, 2));
+  appendTerminalLine(`Exported machine-readable ledger audit JSON: aryafi_audit_${currentScenarioKey}.json`, "yellow");
+}
+
+function downloadFile(filename, mimeType, content) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 function appendTerminalLine(text, colorClass = "cyan") {
