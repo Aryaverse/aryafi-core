@@ -1,0 +1,479 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Negative test suite: unauthorized access to financial contracts.
+--
+-- Verifies that Daml's authorization model correctly rejects operations
+-- from parties who lack the required signatory or controller rights:
+--   1. Cash: unauthorized split, transfer, lock/unlock
+--   2. Security: unauthorized split, transfer, lock/unlock
+--   3. Loan: unauthorized drawdown, interest accrual, default declaration
+--   4. Repo: unauthorized opening leg, collateral substitution, default
+--   5. Transfer: unauthorized approval, completion, cancellation
+--   6. Margin: unauthorized satisfaction, dispute, default declaration
+module AryaFi.Test.Negative.UnauthorizedAccessTest where
+
+import Daml.Script
+import DA.Time (time)
+import DA.Date (date, Month(..))
+import AryaFi.Finance.Cash
+import AryaFi.Finance.Security
+import AryaFi.Contracts.Loan
+import AryaFi.Contracts.Repo
+import AryaFi.Contracts.Transfer
+import AryaFi.Contracts.Margin
+import AryaFi.Common.Identifiers
+import AryaFi.Common.Types
+
+-- ---------------------------------------------------------------------------
+-- Cash Position: unauthorized operations
+-- ---------------------------------------------------------------------------
+
+-- | Eve cannot split Alice's cash position.
+negativeUnauthorizedCashSplit : Script ()
+negativeUnauthorizedCashSplit = script do
+  bank <- allocateParty "Bank"
+  alice <- allocateParty "Alice"
+  eve <- allocateParty "Eve"
+  let acc = AccountId "ACC-ALICE-USD"
+
+  cashCid <- submitMulti [bank, alice] [] do
+    createCmd CashPosition with
+      bank = bank
+      owner = alice
+      accountId = acc
+      currency = "USD"
+      amount = 500000.0
+      isLocked = False
+      lockReference = None
+      observers = []
+
+  -- Eve tries to split Alice's cash position -> Must Fail
+  submitMustFail eve do
+    exerciseCmd cashCid SplitCash with splitAmount = 100000.0
+
+  pure ()
+
+-- | Eve cannot transfer Alice's cash position.
+negativeUnauthorizedCashTransfer : Script ()
+negativeUnauthorizedCashTransfer = script do
+  bank <- allocateParty "Bank"
+  alice <- allocateParty "Alice"
+  eve <- allocateParty "Eve"
+  let acc = AccountId "ACC-ALICE-USD"
+
+  cashCid <- submitMulti [bank, alice] [] do
+    createCmd CashPosition with
+      bank = bank
+      owner = alice
+      accountId = acc
+      currency = "USD"
+      amount = 250000.0
+      isLocked = False
+      lockReference = None
+      observers = []
+
+  -- Eve tries to transfer Alice's cash -> Must Fail (requires owner + bank)
+  submitMustFail eve do
+    exerciseCmd cashCid TransferCash with
+      newOwner = eve
+      newAccountId = AccountId "ACC-EVE-USD"
+      correlationId = CorrelationId "CORR-THEFT"
+
+  pure ()
+
+-- | Owner alone cannot lock cash — requires bank co-authorization.
+negativeUnauthorizedCashLock : Script ()
+negativeUnauthorizedCashLock = script do
+  bank <- allocateParty "Bank"
+  alice <- allocateParty "Alice"
+  let acc = AccountId "ACC-ALICE-USD"
+
+  cashCid <- submitMulti [bank, alice] [] do
+    createCmd CashPosition with
+      bank = bank
+      owner = alice
+      accountId = acc
+      currency = "USD"
+      amount = 100000.0
+      isLocked = False
+      lockReference = None
+      observers = []
+
+  -- Owner alone tries to lock without bank co-authorization
+  submitMustFail alice do
+    exerciseCmd cashCid LockCash with
+      lockRef = "UNAUTHORIZED-LOCK"
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- Security Position: unauthorized operations
+-- ---------------------------------------------------------------------------
+
+-- | Eve cannot split Alice's security position.
+negativeUnauthorizedSecuritySplit : Script ()
+negativeUnauthorizedSecuritySplit = script do
+  custodian <- allocateParty "Custodian"
+  alice <- allocateParty "Alice"
+  eve <- allocateParty "Eve"
+  let acc = AccountId "ACC-ALICE-SEC"
+
+  secCid <- submitMulti [custodian, alice] [] do
+    createCmd SecurityPosition with
+      custodian = custodian
+      owner = alice
+      accountId = acc
+      isin = "US912828ZM24"
+      cusip = None
+      instrumentName = "US Treasury 4.25% Nov 2026"
+      instrumentType = GovernmentBond
+      quantity = 1000000.0
+      couponRate = Some 0.0425
+      couponType = Some FixedCoupon
+      dayCountConvention = Some Act360
+      maturityDate = Some (time (date 2026 Nov 15) 0 0 0)
+      seniority = Some Senior
+      isLocked = False
+      lockReference = None
+      csdRef = None
+      observers = []
+
+  -- Eve tries to split Alice's security -> Must Fail
+  submitMustFail eve do
+    exerciseCmd secCid SplitSecurity with splitQuantity = 500000.0
+
+  pure ()
+
+-- | Owner alone cannot lock security — requires custodian co-authorization.
+negativeUnauthorizedSecurityLock : Script ()
+negativeUnauthorizedSecurityLock = script do
+  custodian <- allocateParty "Custodian"
+  alice <- allocateParty "Alice"
+  let acc = AccountId "ACC-ALICE-SEC"
+
+  secCid <- submitMulti [custodian, alice] [] do
+    createCmd SecurityPosition with
+      custodian = custodian
+      owner = alice
+      accountId = acc
+      isin = "US912828ZM24"
+      cusip = None
+      instrumentName = "US Treasury 4.25% Nov 2026"
+      instrumentType = GovernmentBond
+      quantity = 500000.0
+      couponRate = Some 0.0425
+      couponType = Some FixedCoupon
+      dayCountConvention = Some Act360
+      maturityDate = Some (time (date 2026 Nov 15) 0 0 0)
+      seniority = Some Senior
+      isLocked = False
+      lockReference = None
+      csdRef = None
+      observers = []
+
+  -- Owner alone tries to lock without custodian co-auth
+  submitMustFail alice do
+    exerciseCmd secCid LockSecurity with lockRef = "UNAUTHORIZED-PLEDGE"
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- Institutional Loan: unauthorized operations
+-- ---------------------------------------------------------------------------
+
+-- | Lender cannot execute borrower-controlled drawdown.
+negativeUnauthorizedLoanDrawdown : Script ()
+negativeUnauthorizedLoanDrawdown = script do
+  lender <- allocateParty "LenderBank"
+  borrower <- allocateParty "BorrowerCorp"
+
+  let now = time (date 2026 Sep 1) 0 0 0
+  let maturity = time (date 2027 Sep 1) 0 0 0
+
+  loanCid <- submitMulti [lender, borrower] [] do
+    createCmd InstitutionalLoan with
+      loanId = "LOAN-NEG-001"
+      lender = lender
+      borrower = borrower
+      agentBank = None
+      currency = "USD"
+      facilityLimit = 50000000.0
+      drawnPrincipal = 0.0
+      accruedInterest = 0.0
+      interestRate = 0.065
+      dayCountConvention = Act360
+      startDate = now
+      maturityDate = maturity
+      collateralPledgeRef = None
+      status = Active
+      defaultReason = None
+      correlationId = CorrelationId "CORR-LOAN-001"
+      observers = []
+
+  -- Lender tries to draw down (borrower-only choice) -> Must Fail
+  submitMustFail lender do
+    exerciseCmd loanCid DrawdownPrincipal with drawdownAmount = 10000000.0
+
+  pure ()
+
+-- | Borrower cannot declare default (lender-only choice).
+negativeUnauthorizedLoanDefault : Script ()
+negativeUnauthorizedLoanDefault = script do
+  lender <- allocateParty "LenderBank"
+  borrower <- allocateParty "BorrowerCorp"
+
+  let now = time (date 2026 Sep 1) 0 0 0
+  let maturity = time (date 2027 Sep 1) 0 0 0
+
+  loanCid <- submitMulti [lender, borrower] [] do
+    createCmd InstitutionalLoan with
+      loanId = "LOAN-NEG-002"
+      lender = lender
+      borrower = borrower
+      agentBank = None
+      currency = "USD"
+      facilityLimit = 25000000.0
+      drawnPrincipal = 10000000.0
+      accruedInterest = 50000.0
+      interestRate = 0.055
+      dayCountConvention = Act360
+      startDate = now
+      maturityDate = maturity
+      collateralPledgeRef = None
+      status = Active
+      defaultReason = None
+      correlationId = CorrelationId "CORR-LOAN-002"
+      observers = []
+
+  -- Borrower tries to declare default (lender-only choice) -> Must Fail
+  submitMustFail borrower do
+    exerciseCmd loanCid DeclareLoanDefault with reason = "SELF-DEFAULT-ATTEMPT"
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- Repo Agreement: unauthorized operations
+-- ---------------------------------------------------------------------------
+
+-- | Non-custodian cannot execute opening leg.
+negativeUnauthorizedRepoOpening : Script ()
+negativeUnauthorizedRepoOpening = script do
+  seller <- allocateParty "Seller"
+  buyer <- allocateParty "Buyer"
+  custodian <- allocateParty "Custodian"
+  eve <- allocateParty "Eve"
+
+  let now = time (date 2026 Sep 1) 0 0 0
+  let maturity = time (date 2026 Sep 15) 0 0 0
+
+  repoCid <- submitMulti [seller, buyer, custodian] [] do
+    createCmd RepoAgreement with
+      repoId = "REPO-NEG-001"
+      seller = seller
+      buyer = buyer
+      tripartyAgent = None
+      custodian = custodian
+      isin = "US912828ZM24"
+      collateralQuantity = 5000000.0
+      collateralAccountId = AccountId "ACC-TRI-001"
+      haircut = 0.02
+      currency = "USD"
+      purchasePrice = 4900000.0
+      repurchasePrice = 4910000.0
+      repoRate = 0.053
+      dayCountConvention = Act360
+      startDate = now
+      endDate = maturity
+      status = RepoPendingOpening
+      openingSettlementRef = None
+      closingSettlementRef = None
+      correlationId = CorrelationId "CORR-REPO-001"
+      observers = []
+
+  -- Eve (non-custodian) tries to execute opening leg -> Must Fail
+  submitMustFail eve do
+    exerciseCmd repoCid ExecuteOpeningLeg with settlementRef = "SETTLE-EVE"
+
+  pure ()
+
+-- | Non-counterparty cannot declare repo default.
+negativeUnauthorizedRepoDefault : Script ()
+negativeUnauthorizedRepoDefault = script do
+  seller <- allocateParty "Seller"
+  buyer <- allocateParty "Buyer"
+  custodian <- allocateParty "Custodian"
+  eve <- allocateParty "Eve"
+
+  let now = time (date 2026 Sep 1) 0 0 0
+  let maturity = time (date 2026 Sep 15) 0 0 0
+
+  repoCid <- submitMulti [seller, buyer, custodian] [] do
+    createCmd RepoAgreement with
+      repoId = "REPO-NEG-002"
+      seller = seller
+      buyer = buyer
+      tripartyAgent = None
+      custodian = custodian
+      isin = "US912828XG34"
+      collateralQuantity = 10000000.0
+      collateralAccountId = AccountId "ACC-TRI-002"
+      haircut = 0.02
+      currency = "USD"
+      purchasePrice = 9800000.0
+      repurchasePrice = 9820000.0
+      repoRate = 0.052
+      dayCountConvention = Act360
+      startDate = now
+      endDate = maturity
+      status = RepoActive
+      openingSettlementRef = Some "SETTLE-OPEN-001"
+      closingSettlementRef = None
+      correlationId = CorrelationId "CORR-REPO-002"
+      observers = []
+
+  -- Eve (non-counterparty) tries to declare default -> Must Fail
+  submitMustFail eve do
+    exerciseCmd repoCid DeclareRepoDefault with
+      declaringParty = eve
+      reason = "UNAUTHORIZED-DEFAULT"
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- Transfer: unauthorized operations
+-- ---------------------------------------------------------------------------
+
+-- | Non-compliance officer cannot approve a transfer.
+negativeUnauthorizedTransferApproval : Script ()
+negativeUnauthorizedTransferApproval = script do
+  sender <- allocateParty "Sender"
+  receiver <- allocateParty "Receiver"
+  custodian <- allocateParty "Custodian"
+  complianceOfficer <- allocateParty "ComplianceOfficer"
+  eve <- allocateParty "Eve"
+
+  let now = time (date 2026 Sep 10) 10 0 0
+
+  transferCid <- submitMulti [sender, custodian] [] do
+    createCmd AssetTransferRequest with
+      transferId = "XFR-NEG-001"
+      sender = sender
+      receiver = receiver
+      custodian = custodian
+      complianceOfficer = complianceOfficer
+      assetId = "SEC-US912828ZM24"
+      quantity = 500000.0
+      fromAccount = AccountId "ACC-SENDER-001"
+      toAccount = AccountId "ACC-RECEIVER-001"
+      correlationId = CorrelationId "CORR-XFR-001"
+      requestTimestamp = now
+      status = TransferPendingCompliance
+      complianceNote = None
+      observers = []
+
+  -- Eve (non-compliance officer) tries to approve -> Must Fail
+  submitMustFail eve do
+    exerciseCmd transferCid ApproveTransfer with note = "UNAUTHORIZED-APPROVAL"
+
+  pure ()
+
+-- | Non-sender cannot cancel a pending transfer.
+negativeUnauthorizedTransferCancel : Script ()
+negativeUnauthorizedTransferCancel = script do
+  sender <- allocateParty "Sender"
+  receiver <- allocateParty "Receiver"
+  custodian <- allocateParty "Custodian"
+  complianceOfficer <- allocateParty "ComplianceOfficer"
+  eve <- allocateParty "Eve"
+
+  let now = time (date 2026 Sep 10) 10 0 0
+
+  transferCid <- submitMulti [sender, custodian] [] do
+    createCmd AssetTransferRequest with
+      transferId = "XFR-NEG-002"
+      sender = sender
+      receiver = receiver
+      custodian = custodian
+      complianceOfficer = complianceOfficer
+      assetId = "SEC-US912828ZM24"
+      quantity = 250000.0
+      fromAccount = AccountId "ACC-SENDER-002"
+      toAccount = AccountId "ACC-RECEIVER-002"
+      correlationId = CorrelationId "CORR-XFR-002"
+      requestTimestamp = now
+      status = TransferPendingCompliance
+      complianceNote = None
+      observers = []
+
+  -- Eve (non-sender) tries to cancel -> Must Fail
+  submitMustFail eve do
+    exerciseCmd transferCid CancelTransfer with reason = "UNAUTHORIZED-CANCEL"
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- Margin Call: unauthorized operations
+-- ---------------------------------------------------------------------------
+
+-- | Non-payer cannot satisfy a margin call.
+negativeUnauthorizedMarginSatisfaction : Script ()
+negativeUnauthorizedMarginSatisfaction = script do
+  caller <- allocateParty "Buyer"
+  payer <- allocateParty "Seller"
+  custodian <- allocateParty "Custodian"
+  eve <- allocateParty "Eve"
+
+  let deadline = time (date 2026 Sep 15) 16 0 0
+
+  marginCid <- submitMulti [caller, payer] [] do
+    createCmd MarginCall with
+      marginCallId = "MC-NEG-001"
+      caller = caller
+      payer = payer
+      custodian = custodian
+      marginType = VariationMargin
+      relatedAgreementRef = "REPO-NEG-001"
+      currency = "USD"
+      requiredAmount = 500000.0
+      deadline = deadline
+      status = MarginCallIssued
+      correlationId = CorrelationId "CORR-MC-001"
+      observers = []
+
+  -- Eve (non-payer) tries to satisfy margin call -> Must Fail
+  submitMustFail eve do
+    exerciseCmd marginCid SatisfyWithCash with paymentRef = "UNAUTHORIZED-PAY"
+
+  pure ()
+
+-- | Non-caller cannot declare margin default.
+negativeUnauthorizedMarginDefault : Script ()
+negativeUnauthorizedMarginDefault = script do
+  caller <- allocateParty "Buyer"
+  payer <- allocateParty "Seller"
+  custodian <- allocateParty "Custodian"
+  eve <- allocateParty "Eve"
+
+  let deadline = time (date 2026 Sep 15) 16 0 0
+
+  marginCid <- submitMulti [caller, payer] [] do
+    createCmd MarginCall with
+      marginCallId = "MC-NEG-002"
+      caller = caller
+      payer = payer
+      custodian = custodian
+      marginType = InitialMargin
+      relatedAgreementRef = "REPO-NEG-002"
+      currency = "USD"
+      requiredAmount = 1000000.0
+      deadline = deadline
+      status = MarginCallIssued
+      correlationId = CorrelationId "CORR-MC-002"
+      observers = []
+
+  -- Eve (non-caller) tries to declare margin default -> Must Fail
+  submitMustFail eve do
+    exerciseCmd marginCid DeclareMarginDefault with reason = "UNAUTHORIZED-DEFAULT"
+
+  pure ()
