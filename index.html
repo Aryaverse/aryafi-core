@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23080c14'/><path d='M30 70 L50 25 L70 70 L50 55 Z' fill='%2338bdf8'/></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%2309090b'/><path d='M30 70 L50 25 L70 70 L50 55 Z' fill='%23ffffff'/></svg>">
 </head>
 <body>
 
@@ -61,7 +61,10 @@
       <!-- Actions -->
       <div class="header-actions">
         <button class="btn-theme-toggle" id="theme-toggle-btn" aria-label="Toggle Dark and Light theme">
-          <span id="theme-toggle-icon">◐</span> <span id="theme-toggle-label">Theme</span>
+          <span id="theme-toggle-icon">◐</span> <span id="theme-toggle-label">Dark</span>
+        </button>
+        <button class="btn-shortcuts-toggle" id="shortcuts-toggle-btn" aria-label="Terminal Keyboard Shortcuts" title="Press ? for keyboard shortcuts">
+          <span>⌨</span> <span>Hotkeys</span>
         </button>
         <span class="badge-tag">v1.0.0-rc1 Production Candidate</span>
         <a href="https://github.com/Aryaverse/aryafi-core" target="_blank" rel="noopener noreferrer" class="btn-github">
@@ -138,39 +141,39 @@
             <svg class="topology-svg" viewBox="0 0 800 500" xmlns="http://www.w3.org/2000/svg">
               <defs>
                 <radialGradient id="nodeGlow" cx="50%" cy="50%" r="50%">
-                  <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.3"/>
-                  <stop offset="100%" stop-color="#38bdf8" stop-opacity="0"/>
+                  <stop offset="0%" stop-color="var(--border-accent)" stop-opacity="0.12"/>
+                  <stop offset="100%" stop-color="var(--border-accent)" stop-opacity="0"/>
                 </radialGradient>
                 <radialGradient id="centerGlow" cx="50%" cy="50%" r="50%">
-                  <stop offset="0%" stop-color="#10b981" stop-opacity="0.25"/>
+                  <stop offset="0%" stop-color="#10b981" stop-opacity="0.2"/>
                   <stop offset="100%" stop-color="#10b981" stop-opacity="0"/>
                 </radialGradient>
                 <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#38bdf8" opacity="0.6"/>
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--border-accent)" opacity="0.8"/>
                 </marker>
               </defs>
 
               <!-- Sequencer Domain Hub in Center -->
               <circle cx="400" cy="250" r="85" fill="url(#centerGlow)"/>
-              <circle cx="400" cy="250" r="50" fill="#0f172a" stroke="#10b981" stroke-width="2"/>
-              <text x="400" y="246" text-anchor="middle" fill="#ffffff" font-family="JetBrains Mono" font-size="12" font-weight="700">CANTON DOMAIN</text>
-              <text x="400" y="262" text-anchor="middle" fill="#10b981" font-family="JetBrains Mono" font-size="9">BFT Sequencer</text>
+              <circle cx="400" cy="250" r="50" class="topology-hub-circle" stroke="#10b981" stroke-width="2"/>
+              <text x="400" y="246" text-anchor="middle" class="topology-hub-title">CANTON DOMAIN</text>
+              <text x="400" y="262" text-anchor="middle" fill="#059669" font-family="JetBrains Mono" font-size="9" font-weight="700">BFT Sequencer</text>
 
               <!-- Connection Mesh Lines -->
-              <line x1="400" y1="250" x2="200" y2="120" stroke="#334155" stroke-width="1.5" stroke-dasharray="4 4"/>
-              <line x1="400" y1="250" x2="600" y2="120" stroke="#334155" stroke-width="1.5" stroke-dasharray="4 4"/>
-              <line x1="400" y1="250" x2="160" y2="360" stroke="#334155" stroke-width="1.5" stroke-dasharray="4 4"/>
-              <line x1="400" y1="250" x2="640" y2="360" stroke="#334155" stroke-width="1.5" stroke-dasharray="4 4"/>
-              <line x1="400" y1="250" x2="400" y2="430" stroke="#334155" stroke-width="1.5" stroke-dasharray="4 4"/>
+              <line x1="400" y1="250" x2="200" y2="120" stroke="var(--border-medium)" stroke-width="1.5" stroke-dasharray="4 4"/>
+              <line x1="400" y1="250" x2="600" y2="120" stroke="var(--border-medium)" stroke-width="1.5" stroke-dasharray="4 4"/>
+              <line x1="400" y1="250" x2="160" y2="360" stroke="var(--border-medium)" stroke-width="1.5" stroke-dasharray="4 4"/>
+              <line x1="400" y1="250" x2="640" y2="360" stroke="var(--border-medium)" stroke-width="1.5" stroke-dasharray="4 4"/>
+              <line x1="400" y1="250" x2="400" y2="430" stroke="var(--border-medium)" stroke-width="1.5" stroke-dasharray="4 4"/>
 
               <!-- Bilateral Trading Line (Dealer A <-> Dealer B) -->
-              <path d="M 160 360 Q 400 480 640 360" fill="none" stroke="#38bdf8" stroke-width="2" stroke-dasharray="6 3"/>
-              <text x="400" y="470" text-anchor="middle" fill="#38bdf8" font-family="JetBrains Mono" font-size="10">Atomic DvP Cross-Trading Channel (Sub-Transaction Privacy)</text>
+              <path d="M 160 360 Q 400 480 640 360" fill="none" stroke="var(--border-accent)" stroke-width="2" stroke-dasharray="6 3"/>
+              <text x="400" y="470" text-anchor="middle" fill="var(--text-secondary)" font-family="JetBrains Mono" font-size="10" font-weight="600">Atomic DvP Cross-Trading Channel (Sub-Transaction Privacy)</text>
 
               <!-- Node 1: Bank (Cash Authority) -->
               <g class="node-group selected" data-node="bank" transform="translate(200, 120)">
                 <circle cx="0" cy="0" r="42" fill="url(#nodeGlow)"/>
-                <circle cx="0" cy="0" r="34" fill="#0c1220" stroke="#38bdf8" stroke-width="2" class="node-ring"/>
+                <circle cx="0" cy="0" r="34" class="node-ring" stroke="var(--border-accent)" stroke-width="2"/>
                 <text x="0" y="-3" class="node-label">BANK NODE</text>
                 <text x="0" y="12" class="node-sublabel">USD Cash Custodian</text>
               </g>
@@ -178,7 +181,7 @@
               <!-- Node 2: Global Custodian (Safekeeping) -->
               <g class="node-group" data-node="custodian" transform="translate(600, 120)">
                 <circle cx="0" cy="0" r="42" fill="url(#nodeGlow)"/>
-                <circle cx="0" cy="0" r="34" fill="#0c1220" stroke="#a855f7" stroke-width="2" class="node-ring"/>
+                <circle cx="0" cy="0" r="34" class="node-ring" stroke="var(--border-accent)" stroke-width="2"/>
                 <text x="0" y="-3" class="node-label">CUSTODIAN</text>
                 <text x="0" y="12" class="node-sublabel">Securities CSD</text>
               </g>
@@ -186,7 +189,7 @@
               <!-- Node 3: Primary Dealer A -->
               <g class="node-group" data-node="dealerA" transform="translate(160, 360)">
                 <circle cx="0" cy="0" r="42" fill="url(#nodeGlow)"/>
-                <circle cx="0" cy="0" r="34" fill="#0c1220" stroke="#3b82f6" stroke-width="2" class="node-ring"/>
+                <circle cx="0" cy="0" r="34" class="node-ring" stroke="var(--border-accent)" stroke-width="2"/>
                 <text x="0" y="-3" class="node-label">DEALER A</text>
                 <text x="0" y="12" class="node-sublabel">Goldman Sachs Desk</text>
               </g>
@@ -194,7 +197,7 @@
               <!-- Node 4: Primary Dealer B -->
               <g class="node-group" data-node="dealerB" transform="translate(640, 360)">
                 <circle cx="0" cy="0" r="42" fill="url(#nodeGlow)"/>
-                <circle cx="0" cy="0" r="34" fill="#0c1220" stroke="#f59e0b" stroke-width="2" class="node-ring"/>
+                <circle cx="0" cy="0" r="34" class="node-ring" stroke="var(--border-accent)" stroke-width="2"/>
                 <text x="0" y="-3" class="node-label">DEALER B</text>
                 <text x="0" y="12" class="node-sublabel">Morgan Stanley Desk</text>
               </g>
@@ -202,7 +205,7 @@
               <!-- Node 5: Regulator / Observer -->
               <g class="node-group" data-node="regulator" transform="translate(400, 420)">
                 <circle cx="0" cy="0" r="38" fill="url(#nodeGlow)"/>
-                <circle cx="0" cy="0" r="30" fill="#0c1220" stroke="#10b981" stroke-width="2" class="node-ring"/>
+                <circle cx="0" cy="0" r="30" class="node-ring" stroke="#10b981" stroke-width="2"/>
                 <text x="0" y="-3" class="node-label">SEC / CAT</text>
                 <text x="0" y="11" class="node-sublabel">Supervisory Node</text>
               </g>
@@ -687,6 +690,23 @@
       </div>
     </div>
   </footer>
+
+  <!-- Keyboard Shortcuts Modal -->
+  <dialog class="shortcuts-dialog" id="shortcuts-modal" aria-labelledby="shortcuts-title">
+    <div class="shortcuts-modal-content">
+      <div class="shortcuts-header">
+        <h3 id="shortcuts-title" class="shortcuts-title">⌨ Institutional Terminal Hotkeys</h3>
+        <button class="btn-close-modal" id="btn-close-shortcuts" aria-label="Close modal">&times;</button>
+      </div>
+      <div class="shortcuts-grid">
+        <div class="shortcut-item"><kbd>1</kbd> - <kbd>6</kbd> <span>Switch Active Tab (Topology, Simulator, Contracts, ISO, Rules, Daml)</span></div>
+        <div class="shortcut-item"><kbd>T</kbd> <span>Toggle Light / Dark Mode</span></div>
+        <div class="shortcut-item"><kbd>R</kbd> <span>Run / Advance Multi-Party Scenario</span></div>
+        <div class="shortcut-item"><kbd>?</kbd> <span>Toggle Hotkey Cheatsheet</span></div>
+        <div class="shortcut-item"><kbd>Esc</kbd> <span>Dismiss Dialog</span></div>
+      </div>
+    </div>
+  </dialog>
 
   <script src="app.js"></script>
 </body>

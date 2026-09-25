@@ -13,7 +13,7 @@ The live institutional terminal is hosted in production on Vercel at:
 ### System Requirements
 * Any modern web browser (Chrome, Chromium, Edge, Safari, Firefox) with JavaScript enabled.
 * Screen resolution: Optimized for desktop (1440px+ institutional widescreen) and responsive across laptops, tablets, and mobile devices.
-* Theme Toggle: Instant switching between **Institutional Dark Theme** (default Wall Street / Bloomberg-style cyber-finance aesthetic) and **Crisp Light Theme** via the `[ ◐ Theme ]` button in the top navigation header. Preferences are saved automatically to `localStorage`.
+* Theme Toggle: Instant switching between **Crisp Light Theme** (default institutional black-on-white) and **Institutional Dark Theme** (high-contrast white-on-black) via the `[ ◐ Theme ]` button in the top navigation header. Preferences are saved automatically to `localStorage`.
 
 ---
 

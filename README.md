@@ -29,7 +29,7 @@ The live web terminal at **[https://aryafi-core.vercel.app](https://aryafi-core.
 |  • ISO 20022 Hub: Bidirectional SWIFT MX XML ↔ Daml Ledger API JSON payload translation  |
 |  • Security & Rules: STRIDE threat model mitigations, OCC/Fed/FDIC capital neutrality   |
 |  • Daml Code Dossier: Live interactive smart contract source code viewer                |
-|  • Institutional Themes: High-contrast Dark Mode (default) & Crisp Light Mode toggle    |
+|  • Institutional Themes: Crisp Light Mode (default) & White-on-Black Dark Mode toggle   |
 +-----------------------------------------------------------------------------------------+
 ```
 
