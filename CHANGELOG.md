@@ -5,6 +5,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [1.0.1] - 2026-09-25
+
+### Added
+- **Institutional Design System & Themes**:
+  - Default crisp Light Mode (pure institutional black-on-white) and High-Contrast Dark Mode (pure white-on-black) without electric blue/navy tints.
+  - Native Terminal Hotkey Navigation (`1`-`6` for tabs, `T` for theme toggle, `R` for scenario run, `?` for interactive cheatsheet modal, `Esc` to dismiss).
+- **Simulator & Analytics Enhancements**:
+  - Real-time BFT consensus commit latency meters and sub-transaction zero-leakage verification.
+  - Lifecycle advancement progress bar with live phase completion percentage.
+  - Regulatory-grade audit trail export in CSV and JSON formats for SEC CAT and FINRA compliance.
+- **Collateral & Risk Valuation Matrix**:
+  - Interactive collateral haircut calculator supporting US Treasuries (2%), GSE Agency (3%), G10 Sovereigns (2.5%), and Corporate debt (5%-15%).
+  - Real-time maintenance margin threshold and Basel III Level 1/2A HQLA eligibility evaluation.
+- **ISO 20022 Hub Upgrades**:
+  - Bi-directional translation toggle between inbound SWIFT MX XML and outbound synthesized MX messages.
+  - Interactive schema field mapping lexicon aligning SWIFT MX XML elements with Canton Daml ledger commands.
+  - Real-time XML/JSON validation engine with status toast feedback.
+
+---
+
 ## [1.0.0-rc1] - 2026-09-23
 
 ### Added
