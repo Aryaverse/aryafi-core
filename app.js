@@ -11,6 +11,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initTopologyVisualizer();
   initScenarioSimulator();
   initInvariantCalculator();
+  initCollateralCalculator();
   initIsoConverter();
   initDamlViewer();
   initTelemetryCounters();
@@ -642,6 +643,45 @@ function initInvariantCalculator() {
       }
     });
   });
+}
+
+function initCollateralCalculator() {
+  const assetSelect = document.getElementById('calc-collateral-asset');
+  const loanInput = document.getElementById('calc-loan-exposure');
+  const marginInput = document.getElementById('calc-margin-req');
+  const calcBtn = document.getElementById('btn-calculate-margin');
+
+  function updateMarginMatrix() {
+    if (!assetSelect || !loanInput || !marginInput) return;
+
+    const loan = parseFloat(loanInput.value) || 0;
+    const marginPct = (parseFloat(marginInput.value) || 102) / 100;
+    const selectedOption = assetSelect.options[assetSelect.selectedIndex];
+    const haircut = parseFloat(selectedOption.getAttribute('data-haircut')) || 0.02;
+    const hqla = selectedOption.getAttribute('data-hqla') || 'Level 1 HQLA';
+
+    // Required Collateral = (Loan * MarginRatio) / (1 - Haircut)
+    const requiredCollateral = (loan * marginPct) / (1 - haircut);
+    const haircutDeduction = requiredCollateral * haircut;
+    const marginCallThreshold = loan * marginPct;
+
+    const reqColEl = document.getElementById('calc-required-collateral');
+    const effHaircutEl = document.getElementById('calc-effective-haircut');
+    const thresholdEl = document.getElementById('calc-margin-call-threshold');
+    const lcrStatusEl = document.getElementById('calc-lcr-status');
+
+    if (reqColEl) reqColEl.textContent = `$${requiredCollateral.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    if (effHaircutEl) effHaircutEl.textContent = `$${haircutDeduction.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${(haircut * 100).toFixed(1)}%)`;
+    if (thresholdEl) thresholdEl.textContent = `$${marginCallThreshold.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    if (lcrStatusEl) lcrStatusEl.textContent = `${hqla} (Compliant)`;
+  }
+
+  if (calcBtn) calcBtn.addEventListener('click', updateMarginMatrix);
+  if (assetSelect) assetSelect.addEventListener('change', updateMarginMatrix);
+  if (loanInput) loanInput.addEventListener('input', updateMarginMatrix);
+  if (marginInput) marginInput.addEventListener('input', updateMarginMatrix);
+
+  updateMarginMatrix();
 }
 
 // ============================================================================
