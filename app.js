@@ -15,6 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initDamlViewer();
   initTelemetryCounters();
   initCopyButtons();
+  initKeyboardShortcuts();
 });
 
 // ============================================================================
@@ -26,13 +27,13 @@ function initTheme() {
   const toggleLabel = document.getElementById('theme-toggle-label');
   const toggleIcon = document.getElementById('theme-toggle-icon');
 
-  const savedTheme = localStorage.getItem('aryafi-theme') || 'dark';
+  const savedTheme = localStorage.getItem('aryafi-theme') || 'light';
   applyTheme(savedTheme);
 
   if (toggleBtn) {
     toggleBtn.addEventListener('click', () => {
-      const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
-      const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+      const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
+      const newTheme = currentTheme === 'light' ? 'dark' : 'light';
       applyTheme(newTheme);
       localStorage.setItem('aryafi-theme', newTheme);
     });
@@ -116,6 +117,71 @@ function initNavigation() {
       switchTab(candidateTabId, false);
     }
   }
+}
+
+function initKeyboardShortcuts() {
+  const modal = document.getElementById('shortcuts-modal');
+  const openBtn = document.getElementById('shortcuts-toggle-btn');
+  const closeBtn = document.getElementById('btn-close-shortcuts');
+  const themeToggle = document.getElementById('theme-toggle-btn');
+  const tabIds = ['tab-topology', 'tab-simulator', 'tab-contracts', 'tab-iso', 'tab-security', 'tab-docs'];
+
+  if (openBtn && modal) {
+    openBtn.addEventListener('click', () => modal.showModal());
+  }
+
+  if (closeBtn && modal) {
+    closeBtn.addEventListener('click', () => modal.close());
+  }
+
+  if (modal) {
+    modal.addEventListener('click', (e) => {
+      const rect = modal.getBoundingClientRect();
+      if (
+        e.clientX < rect.left ||
+        e.clientX > rect.right ||
+        e.clientY < rect.top ||
+        e.clientY > rect.bottom
+      ) {
+        modal.close();
+      }
+    });
+  }
+
+  document.addEventListener('keydown', (e) => {
+    // Ignore keystrokes when typing inside inputs, textareas, selects
+    const tag = e.target.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+      return;
+    }
+
+    if (e.key === '?' || (e.shiftKey && e.key === '/')) {
+      e.preventDefault();
+      if (modal) {
+        if (modal.open) {
+          modal.close();
+        } else {
+          modal.showModal();
+        }
+      }
+    } else if (e.key >= '1' && e.key <= '6') {
+      const idx = parseInt(e.key, 10) - 1;
+      const targetTabId = tabIds[idx];
+      const targetBtn = document.querySelector(`.nav-tab-btn[data-tab="${targetTabId}"]`);
+      if (targetBtn) {
+        targetBtn.click();
+      }
+    } else if (e.key === 't' || e.key === 'T') {
+      if (themeToggle) {
+        themeToggle.click();
+      }
+    } else if (e.key === 'r' || e.key === 'R') {
+      const runBtn = document.getElementById('btn-run-scenario');
+      if (runBtn && !runBtn.disabled) {
+        runBtn.click();
+      }
+    }
+  });
 }
 
 // ============================================================================
