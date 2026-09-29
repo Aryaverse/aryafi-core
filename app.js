@@ -945,256 +945,19 @@ function initIsoConverter() {
 // 7. Daml Code Dossier Interactive Viewer
 // ============================================================================
 
+// The viewer loads the real module source from the repository (served as
+// static files on the deployed site), so it can never drift from the code.
+const DAML_SOURCE_BASE = "daml/src/AryaFi/";
+const DAML_REPO_URL = "https://github.com/Aryaverse/aryafi-core/blob/main/";
+
 const DAML_MODULES = {
-  cash: {
-    title: "AryaFi/Finance/Cash.daml (Tokenized Cash Primitive)",
-    code: `module AryaFi.Finance.Cash where
-
-import AryaFi.Common.Identifiers (AccountId, CorrelationId)
-import AryaFi.Common.Types (Amount, Currency)
-import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
-
-template CashPosition
-  with
-    bank          : Party
-    owner         : Party
-    accountId     : AccountId
-    currency      : Currency
-    amount        : Amount
-    isLocked      : Bool
-    lockReference : Optional Text
-    observers     : [Party]
-  where
-    signatory bank, owner
-    observer observers
-
-    ensure amount > 0.0
-
-    key (bank, accountId, currency) : (Party, AccountId, Currency)
-    maintainer key._1
-
-    choice SplitCash : (ContractId CashPosition, ContractId CashPosition)
-      with
-        splitAmount : Amount
-      controller owner
-      do
-        require (not isLocked) "Cannot split a locked cash position"
-        requirePositive splitAmount "splitAmount"
-        require (splitAmount < amount) ("Split amount must be strictly less than total " <> show amount)
-        c1 <- create this with amount = splitAmount
-        c2 <- create this with amount = amount - splitAmount
-        pure (c1, c2)
-
-    choice MergeCash : ContractId CashPosition
-      with
-        otherCid : ContractId CashPosition
-      controller owner
-      do
-        require (not isLocked) "Cannot merge: this position is locked"
-        other <- fetch otherCid
-        require (other.bank == bank) "Bank mismatch"
-        require (other.owner == owner) "Owner mismatch"
-        require (other.currency == currency) "Currency mismatch"
-        archive otherCid
-        create this with amount = amount + other.amount`
-  },
-  security: {
-    title: "AryaFi/Finance/Security.daml (Safekeeping & Encumbrance)",
-    code: `module AryaFi.Finance.Security where
-
-import AryaFi.Common.Identifiers (AccountId, ISIN, CUSIP)
-import AryaFi.Common.Types (Amount, Rate)
-import AryaFi.Common.Errors (require, requirePositive)
-
-template SecurityPosition
-  with
-    custodian         : Party
-    issuer            : Party
-    owner             : Party
-    accountId         : AccountId
-    isin              : ISIN
-    cusip             : Optional CUSIP
-    instrumentName    : Text
-    quantity          : Amount
-    couponRate        : Optional Rate
-    maturityTimestamp : Optional Time
-    isLocked          : Bool
-    lockReference     : Optional Text
-    observers         : [Party]
-  where
-    signatory custodian, owner
-    observer observers
-
-    ensure quantity > 0.0
-
-    key (custodian, accountId, isin) : (Party, AccountId, ISIN)
-    maintainer key._1
-
-    choice LockSecurity : ContractId SecurityPosition
-      with
-        lockRef       : Text
-        lockingParty  : Party
-      controller owner, custodian
-      do
-        require (not isLocked) "Security is already locked"
-        create this with isLocked = True, lockReference = Some lockRef`
-  },
-  collateral: {
-    title: "AryaFi/Finance/Collateral.daml (Haircut & Margin Revaluation)",
-    code: `module AryaFi.Finance.Collateral where
-
-import AryaFi.Common.Types (Amount, Rate, Currency, AssetClass)
-import AryaFi.Common.Identifiers (AccountId, ISIN, ExternalRef)
-import AryaFi.Common.Errors (require, requirePositive, requireNonNegative)
-
-data CollateralStatus
-  = Allocated | Active | Substituted | Released | Liquidated | InDispute
-  deriving (Eq, Ord, Show)
-
-template CollateralPosition
-  with
-    collateralProvider : Party
-    collateralReceiver : Party
-    custodian          : Party
-    accountId          : AccountId
-    assetClass         : AssetClass
-    isin               : ISIN
-    quantity           : Amount
-    marketValue        : Amount
-    haircut            : Rate
-    settlementCurrency : Currency
-    obligationRef      : Text
-    lockReference      : Text
-    status             : CollateralStatus
-    externalRef        : Optional ExternalRef
-    observers          : [Party]
-  where
-    signatory collateralProvider, collateralReceiver, custodian
-    observer observers
-
-    ensure quantity > 0.0 && marketValue > 0.0 && haircut >= 0.0 && haircut < 1.0
-
-    nonconsuming choice GetCollateralValue : Amount
-      controller custodian
-      do pure (marketValue * (1.0 - haircut))
-
-    choice RevalueCollateral : ContractId CollateralPosition
-      with
-        newMarketValue : Amount
-        newQuantity    : Amount
-      controller custodian
-      do
-        requirePositive newMarketValue "newMarketValue"
-        create this with marketValue = newMarketValue, quantity = newQuantity`
-  },
-  loan: {
-    title: "AryaFi/Contracts/Loan.daml (Institutional Credit Facility)",
-    code: `module AryaFi.Contracts.Loan where
-
-import AryaFi.Common.Types (Amount, Rate, Currency, DayCountConvention(..))
-import AryaFi.Common.Time (calcYearFraction)
-import AryaFi.Common.Errors (require, requirePositive)
-
-data LoanStatus = LoanActive | LoanDefaulted | LoanClosed
-  deriving (Eq, Show)
-
-template InstitutionalLoan
-  with
-    facilityId         : Text
-    lender             : Party
-    borrower           : Party
-    creditLimit        : Amount
-    outstandingBalance : Amount
-    accruedInterest    : Amount
-    interestRate       : Rate
-    dayCountConvention : DayCountConvention
-    lastAccrualTime    : Time
-    currency           : Currency
-    status             : LoanStatus
-    collateralPledgeId : Optional Text
-    observers          : [Party]
-  where
-    signatory lender, borrower
-    observer observers
-
-    choice Drawdown : ContractId InstitutionalLoan
-      with
-        drawAmount : Amount
-      controller borrower
-      do
-        require (status == LoanActive) "Loan is not active"
-        require (outstandingBalance + drawAmount <= creditLimit) "Facility limit exceeded"
-        create this with outstandingBalance = outstandingBalance + drawAmount`
-  },
-  repo: {
-    title: "AryaFi/Contracts/Repo.daml (Repurchase Agreement)",
-    code: `module AryaFi.Contracts.Repo where
-
-import AryaFi.Common.Types (Amount, Rate, Currency)
-import AryaFi.Common.Identifiers (ISIN)
-import AryaFi.Common.Errors (require, requirePositive)
-
-data RepoStatus = RepoInitiated | RepoActive | RepoSettled | RepoDefaulted
-  deriving (Eq, Show)
-
-template RepoAgreement
-  with
-    repoId             : Text
-    seller             : Party
-    buyer              : Party
-    tripartyAgent      : Optional Party
-    isin               : ISIN
-    collateralQuantity : Amount
-    currency           : Currency
-    purchasePrice      : Amount
-    repurchasePrice    : Amount
-    repoRate           : Rate
-    startDate          : Time
-    endDate            : Time
-    status             : RepoStatus
-  where
-    signatory seller, buyer
-
-    choice CloseoutRepo : ()
-      controller seller, buyer
-      do pure ()`
-  },
-  transfer: {
-    title: "AryaFi/Compliance/TransferRestrictions.daml (Reg D, Reg S, Rule 144A)",
-    code: `module AryaFi.Compliance.TransferRestrictions where
-
-import AryaFi.Common.Identifiers (ISIN)
-import AryaFi.Common.Errors (require)
-
-data RegulatoryCategory
-  = RegD_506c | RegS | Rule144A | QualifiedPurchaserOnly | RetailUnrestricted
-  deriving (Eq, Show)
-
-template TransferRestrictionRule
-  with
-    complianceOfficer  : Party
-    isin               : ISIN
-    regulatoryCategory : RegulatoryCategory
-    holdingPeriodDays  : Int
-    whitelistRequired  : Bool
-    lockupExpiry       : Optional Time
-    isActive           : Bool
-  where
-    signatory complianceOfficer
-
-    key (complianceOfficer, isin) : (Party, ISIN)
-    maintainer key._1
-
-    nonconsuming choice IsTransferAllowed : Bool
-      controller complianceOfficer
-      do
-        if not isActive then pure False
-        else case lockupExpiry of
-          None   -> pure True
-          Some t -> do
-            now <- getTime
-            pure (now >= t)`
-  }
+  cash: { title: "AryaFi/Finance/Cash.daml (Tokenized Cash Primitive)", path: "Finance/Cash.daml" },
+  security: { title: "AryaFi/Finance/Security.daml (Securities Safekeeping)", path: "Finance/Security.daml" },
+  settlement: { title: "AryaFi/Finance/Settlement.daml (Atomic DvP)", path: "Finance/Settlement.daml" },
+  collateral: { title: "AryaFi/Finance/Collateral.daml (Haircut & Valuation)", path: "Finance/Collateral.daml" },
+  loan: { title: "AryaFi/Contracts/Loan.daml (Credit Facility)", path: "Contracts/Loan.daml" },
+  repo: { title: "AryaFi/Contracts/Repo.daml (Repurchase Agreement)", path: "Contracts/Repo.daml" },
+  transfer: { title: "AryaFi/Compliance/TransferRestrictions.daml (Reg D / Reg S / 144A)", path: "Compliance/TransferRestrictions.daml" }
 };
 
 function initDamlViewer() {
@@ -1204,11 +967,23 @@ function initDamlViewer() {
 
   if (!select || !title || !content) return;
 
-  function render(key) {
+  async function render(key) {
     const mod = DAML_MODULES[key];
-    if (mod) {
-      title.textContent = mod.title;
-      content.textContent = mod.code;
+    if (!mod) return;
+    const path = DAML_SOURCE_BASE + mod.path;
+    title.textContent = mod.title;
+    content.textContent = `Loading ${path} ...`;
+    try {
+      const res = await fetch(path, { cache: 'no-cache' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      if (select.value === key) content.textContent = text;
+    } catch (err) {
+      if (select.value === key) {
+        content.textContent = `Could not load ${path} (${err.message}).\n\n` +
+          `Open the page through a web server (e.g. the deployed site or "python3 -m http.server"),\n` +
+          `or read the source on GitHub:\n${DAML_REPO_URL}${path}`;
+      }
     }
   }
 
