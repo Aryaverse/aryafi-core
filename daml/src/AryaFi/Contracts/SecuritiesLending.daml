@@ -4,13 +4,15 @@
 -- | Institutional Securities Lending Contract Interface.
 --
 -- Implements institutional stock loan and bond borrowing workflows:
---   - Borrow fee accrual and rebate rate calculation
+--   - Borrow fee accrual agreed by both counterparties, payment confirmed by lender
 --   - Collateralization with Cash or AssetPledge linkage
 --   - Full or partial recall options with contractual deadline
---   - Return of securities with pro-rata collateral release
+--   - Return of securities; collateral released at most pro rata
 --   - Mark-to-market collateral revaluation
 --
 -- Signatory model: lender + borrower + custodian tri-party agreement.
+-- Authorization principle: the borrower can never reduce its own obligations
+-- (fees are confirmed paid by the lender; collateral release is capped pro rata).
 module AryaFi.Contracts.SecuritiesLending where
 
 import AryaFi.Common.Types (Amount, Currency, Rate)
@@ -22,7 +24,11 @@ import qualified DA.List as List
 data SecLendingStatus
   = LendingActive
     -- ^ Loan active and operational; securities delivered to borrower.
-  | LendingRecallIssued Amount Time
+  | LendingRecallIssued with
+      recallQuantity : Amount
+      -- ^ Quantity still to be returned under the recall.
+      recallDeadline : Time
+      -- ^ Contractual deadline for returning the recalled quantity.
     -- ^ Lender has issued a recall for specified quantity with cutoff deadline.
   | LendingClosed
     -- ^ All borrowed securities returned and collateral released.
@@ -44,7 +50,7 @@ template SecuritiesLendingAgreement
     isin : ISIN
     -- ^ ISIN of the lent security.
     borrowedQuantity : Amount
-    -- ^ Quantity of securities currently on loan.
+    -- ^ Quantity of securities currently on loan (zero once fully returned).
     borrowAccountId : AccountId
     -- ^ Account where securities are delivered.
     lendingFeeRate : Rate
@@ -71,36 +77,44 @@ template SecuritiesLendingAgreement
     signatory lender, borrower, custodian
     observer (List.dedup observers)
 
+    -- An open agreement always has securities on loan or fees outstanding;
+    -- quantities are never padded to satisfy the invariant.
     ensure
-      borrowedQuantity > 0.0 &&
-      collateralAmount > 0.0 &&
+      borrowedQuantity >= 0.0 &&
+      collateralAmount >= 0.0 &&
       lendingFeeRate >= 0.0 &&
       rebateRate >= 0.0 &&
       accruedLendingFee >= 0.0 &&
+      (not (isOpen status) || borrowedQuantity > 0.0 || accruedLendingFee > 0.0) &&
       lendingId /= ""
 
-    -- | Lender accrues borrow fees for an elapsed period.
+    -- | Record borrow fees for an elapsed period. Both counterparties must agree
+    -- the amount, so neither can unilaterally change what the borrower owes.
     choice AccrueLendingFee : ContractId SecuritiesLendingAgreement
       with
         additionalFee : Amount
-      controller lender
+      controller lender, borrower
       do
-        require (status == LendingActive || isRecallIssued status)
+        require (isOpen status)
           "Lending agreement must be Active or under Recall to accrue fees"
-        requirePositive additionalFee "Additional fee must be positive"
+        requirePositive additionalFee "additionalFee"
         create this with
           accruedLendingFee = accruedLendingFee + additionalFee
 
-    -- | Borrower settles accrued lending fees.
+    -- | Lender confirms receipt of a lending fee payment from the borrower.
+    -- Closes the agreement if nothing remains on loan and no fees are owed.
     choice PayLendingFee : ContractId SecuritiesLendingAgreement
       with
         paymentAmount : Amount
-      controller borrower
+      controller lender
       do
-        requirePositive paymentAmount "Payment amount must be positive"
+        require (isOpen status) "Agreement must be Active or under Recall to record fee payments"
+        requirePositive paymentAmount "paymentAmount"
         require (paymentAmount <= accruedLendingFee) "Payment exceeds accrued fee balance"
+        let newFee = accruedLendingFee - paymentAmount
         create this with
-          accruedLendingFee = accruedLendingFee - paymentAmount
+          accruedLendingFee = newFee
+          status = if borrowedQuantity == 0.0 && newFee == 0.0 then LendingClosed else status
 
     -- | Lender issues a formal recall for partial or full lent securities.
     choice RecallSecurities : ContractId SecuritiesLendingAgreement
@@ -110,12 +124,18 @@ template SecuritiesLendingAgreement
       controller lender
       do
         require (status == LendingActive) "Agreement must be Active to issue recall"
-        requirePositive recallQuantity "Recall quantity must be positive"
+        requirePositive recallQuantity "recallQuantity"
         require (recallQuantity <= borrowedQuantity) "Recall quantity exceeds borrowed balance"
+        now <- getTime
+        require (deadline > now) "Recall deadline must be in the future"
         create this with
-          status = LendingRecallIssued recallQuantity deadline
+          status = LendingRecallIssued with recallQuantity; recallDeadline = deadline
 
-    -- | Borrower returns securities, releasing corresponding collateral.
+    -- | Borrower returns securities, releasing collateral.
+    -- Collateral release is capped pro rata: the collateral left must still
+    -- cover the securities left on loan at the current collateral ratio.
+    -- A partial return under recall reduces the outstanding recall quantity;
+    -- the recall stays in force until the recalled quantity is returned.
     -- Auto-transitions to LendingClosed if all borrowed securities and fees are discharged.
     choice ReturnSecurities : ContractId SecuritiesLendingAgreement
       with
@@ -123,21 +143,28 @@ template SecuritiesLendingAgreement
         collateralReleaseAmount : Amount
       controller borrower
       do
-        require (status == LendingActive || isRecallIssued status)
+        require (isOpen status)
           "Agreement must be Active or under Recall to return securities"
-        requirePositive returnedQuantity "Returned quantity must be positive"
+        requirePositive returnedQuantity "returnedQuantity"
         require (returnedQuantity <= borrowedQuantity) "Return quantity exceeds borrowed quantity"
+        require (collateralReleaseAmount >= 0.0) "Collateral release must be non-negative"
         require (collateralReleaseAmount <= collateralAmount) "Collateral release exceeds posted collateral"
 
         let newBorrowed = borrowedQuantity - returnedQuantity
         let newCollateral = collateralAmount - collateralReleaseAmount
-        let newStatus = if newBorrowed == 0.0 && accruedLendingFee == 0.0
-                          then LendingClosed
-                          else LendingActive
+        require (newCollateral * borrowedQuantity >= collateralAmount * newBorrowed)
+          "Collateral release exceeds the pro-rata share of the returned securities"
+
+        let newStatus = case status of
+              _ | newBorrowed == 0.0 && accruedLendingFee == 0.0 -> LendingClosed
+              LendingRecallIssued{recallQuantity, recallDeadline}
+                | recallQuantity > returnedQuantity && newBorrowed > 0.0 ->
+                    LendingRecallIssued with recallQuantity = recallQuantity - returnedQuantity; recallDeadline
+              _ -> LendingActive
 
         create this with
-          borrowedQuantity = if newBorrowed == 0.0 then 0.01 else newBorrowed -- maintain invariant or close
-          collateralAmount = if newCollateral == 0.0 then 0.01 else newCollateral
+          borrowedQuantity = newBorrowed
+          collateralAmount = newCollateral
           status = newStatus
 
     -- | Mark-to-market collateral adjustment agreed between counterparties.
@@ -146,8 +173,8 @@ template SecuritiesLendingAgreement
         newCollateralAmount : Amount
       controller lender, borrower
       do
-        require (status == LendingActive) "Agreement must be Active to revalue collateral"
-        requirePositive newCollateralAmount "New collateral amount must be positive"
+        require (isOpen status) "Agreement must be Active or under Recall to revalue collateral"
+        requirePositive newCollateralAmount "newCollateralAmount"
         create this with
           collateralAmount = newCollateralAmount
 
@@ -157,16 +184,16 @@ template SecuritiesLendingAgreement
         reason : Text
       controller lender
       do
-        require (status /= LendingClosed) "Cannot declare default on closed agreement"
-        requireNonEmpty reason "Default reason must be specified"
+        require (isOpen status) "Can only declare default on an Active or Recalled agreement"
+        requireNonEmpty reason "reason"
         create this with
           status = LendingDefaulted reason
 
-    -- | Add authorized observer.
+    -- | Add authorized observer. Both counterparties must consent to disclosure.
     choice AddSecLendingObserver : ContractId SecuritiesLendingAgreement
       with
         newObserver : Party
-      controller lender
+      controller lender, borrower
       do
         require (not (newObserver `elem` observers)) "Observer already registered"
         create this with
@@ -180,6 +207,10 @@ template SecuritiesLendingAgreement
 
 -- | Helper to check if agreement is in recall status.
 isRecallIssued : SecLendingStatus -> Bool
-isRecallIssued (LendingRecallIssued _ _) = True
+isRecallIssued LendingRecallIssued{} = True
 isRecallIssued _ = False
+
+-- | Whether the agreement is open (Active or under Recall).
+isOpen : SecLendingStatus -> Bool
+isOpen s = s == LendingActive || isRecallIssued s
 
