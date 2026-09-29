@@ -84,13 +84,13 @@ template RegulatoryReportRecord
     choice SubmitAmendment : ContractId RegulatoryReportRecord
       with
         amendedPayload : Text
-        amendmentTimestamp : Time
       controller reportingParty
       do
         requireNonEmpty amendedPayload "amendedPayload"
+        now <- getTime
         create this with
           reportPayload = amendedPayload
-          submissionTimestamp = amendmentTimestamp
+          submissionTimestamp = now
           isAcknowledged = False
           isRejected = False
           rejectionReason = None

@@ -15,6 +15,9 @@ import AryaFi.Compliance.OwnershipRestrictions
 import AryaFi.Compliance.RegulatoryReporting
 import AryaFi.Common.Identifiers
 import AryaFi.Common.Policies (PolicyDecision(..))
+import DA.Date (date, Month(..))
+import DA.Text (isInfixOf)
+import DA.Time (addRelTime, days, time)
 
 -- ---------------------------------------------------------------------------
 -- KYC Tests
@@ -77,7 +80,6 @@ testKycUpdateToVerified = script do
     exerciseCmd kycCid UpdateKycStatus with
       newStatus = KycVerified
       newExpiry = addRelTime now (days 365)
-      newTimestamp = now
 
   verifiedData <- queryContractId authority verifiedCid
   case verifiedData of
@@ -107,7 +109,6 @@ testKycRevokeAttestation = script do
   revokedCid <- submit authority do
     exerciseCmd kycCid RevokeKyc with
       reason = "AML_ALERT_WATCHLIST_MATCH"
-      revokeTimestamp = now
 
   revokedData <- queryContractId authority revokedCid
   case revokedData of
@@ -220,7 +221,6 @@ testKycNonAuthorityCannotRevoke = script do
   submitMustFail outsider do
     exerciseCmd kycCid RevokeKyc with
       reason = "UNAUTHORIZED_ATTEMPT"
-      revokeTimestamp = now
 
 -- ---------------------------------------------------------------------------
 -- Sanctions Tests
@@ -272,7 +272,6 @@ testSanctionsBlockParty = script do
   blockedCid <- submit screening do
     exerciseCmd sanCid BlockParty with
       sanctionsListRef = "OFAC-SDN-MATCH-ENTITY-12345"
-      blockTimestamp = now
 
   blockedData <- queryContractId screening blockedCid
   case blockedData of
@@ -304,7 +303,6 @@ testSanctionsClearParty = script do
   clearedCid <- submit screening do
     exerciseCmd sanCid ClearParty with
       clearanceRef = "ACME-CLEARANCE-2026-003"
-      clearTimestamp = now
 
   clearedData <- queryContractId screening clearedCid
   case clearedData of
@@ -382,7 +380,6 @@ testSanctionsCannotClearAlreadyClear = script do
   submitMustFail screening do
     exerciseCmd sanCid ClearParty with
       clearanceRef = "ACME-CLEARANCE-2026-006"
-      clearTimestamp = now
 
 -- ---------------------------------------------------------------------------
 -- Eligibility Tests
@@ -429,7 +426,7 @@ testEligibilityRejectJurisdiction = script do
 
   case decision of
     Rejected _ -> pure ()
-    Approved   -> abort "Expected Rejected for disallowed jurisdiction"
+    _          -> abort "Expected Rejected for disallowed jurisdiction"
 
 testEligibilityInactivePolicy : Script ()
 testEligibilityInactivePolicy = script do
@@ -451,7 +448,7 @@ testEligibilityInactivePolicy = script do
 
   case decision of
     Rejected r -> assertMsg "Inactive reason" (r == "Policy is inactive")
-    Approved   -> abort "Inactive policy should not approve"
+    _          -> abort "Inactive policy should not approve"
 
 testEligibilityActivateDeactivate : Script ()
 testEligibilityActivateDeactivate = script do
@@ -476,7 +473,7 @@ testEligibilityActivateDeactivate = script do
 
   case decision of
     Rejected _ -> pure ()
-    Approved   -> abort "Deactivated policy should reject"
+    _          -> abort "Deactivated policy should reject"
 
   reactivatedCid <- submit manager do
     exerciseCmd deactivatedCid ActivatePolicy
@@ -499,10 +496,11 @@ testTransferRestrictionCreate = script do
   ruleCid <- submit co do
     createCmd TransferRestrictionRule with
       complianceOfficer = co
-      isin = ISIN "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       regulatoryCategory = Rule144A
       holdingPeriodDays = 0
       whitelistRequired = True
+      whitelist = []
       lockupExpiry = None
       isActive = True
 
@@ -521,36 +519,94 @@ testTransferRestrictionAllowedNoLockup = script do
   ruleCid <- submit co do
     createCmd TransferRestrictionRule with
       complianceOfficer = co
-      isin = ISIN "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       regulatoryCategory = RetailUnrestricted
       holdingPeriodDays = 0
       whitelistRequired = False
+      whitelist = []
       lockupExpiry = None
       isActive = True
 
-  allowed <- submit co do
-    exerciseCmd ruleCid IsTransferAllowed
+  receiver <- allocateParty "RetailInvestor"
+  now <- getTime
+  decision <- submit co do
+    exerciseCmd ruleCid EvaluateTransfer with
+      receiver
+      acquiredAt = now
+      receiverStatus = InvestorStatus with isAccredited = False; isQualifiedInstitutionalBuyer = False; isQualifiedPurchaser = False; isUsPerson = True
 
-  assertMsg "No lockup → transfer allowed" allowed
+  assertMsg "Unrestricted security, no lockup → transfer approved" (decision == Approved)
 
-testTransferRestrictionNotAllowedWhenInactive : Script ()
-testTransferRestrictionNotAllowedWhenInactive = script do
+-- | An inactive rule restricts nothing: it approves regardless of its settings.
+testInactiveRuleDoesNotRestrict : Script ()
+testInactiveRuleDoesNotRestrict = script do
   co <- allocateParty "ComplianceOfficer"
+  receiver <- allocateParty "RetailInvestor"
 
   ruleCid <- submit co do
     createCmd TransferRestrictionRule with
       complianceOfficer = co
-      isin = ISIN "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       regulatoryCategory = RegD_506c
       holdingPeriodDays = 180
       whitelistRequired = True
+      whitelist = []
       lockupExpiry = None
       isActive = False
 
-  allowed <- submit co do
-    exerciseCmd ruleCid IsTransferAllowed
+  now <- getTime
+  decision <- submit co do
+    exerciseCmd ruleCid EvaluateTransfer with
+      receiver
+      acquiredAt = now
+      receiverStatus = InvestorStatus with isAccredited = False; isQualifiedInstitutionalBuyer = False; isQualifiedPurchaser = False; isUsPerson = True
 
-  assertMsg "Inactive rule → transfer not allowed" (not allowed)
+  assertMsg "Inactive rule → not enforced → approved" (decision == Approved)
+
+-- | Every configured restriction is evaluated, and every failure is reported:
+-- holding period, whitelist, and regulatory category.
+testTransferRestrictionEvaluatesAllRules : Script ()
+testTransferRestrictionEvaluatesAllRules = script do
+  co <- allocateParty "ComplianceOfficer"
+  qibBuyer <- allocateParty "QualifiedInstitutionalBuyer"
+  retailBuyer <- allocateParty "RetailInvestor"
+  let acquired = time (date 2026 Jan 5) 0 0 0
+  setTime (time (date 2026 Mar 1) 0 0 0)
+
+  ruleCid <- submit co do
+    createCmd TransferRestrictionRule with
+      complianceOfficer = co
+      isin = ISIN "US912828ZM50"
+      regulatoryCategory = Rule144A
+      holdingPeriodDays = 180
+      whitelistRequired = True
+      whitelist = []
+      lockupExpiry = None
+      isActive = True
+
+  -- Holding period not met, not whitelisted, not a QIB: all three reasons reported
+  d1 <- submit co do
+    exerciseCmd ruleCid EvaluateTransfer with
+      receiver = retailBuyer
+      acquiredAt = acquired
+      receiverStatus = InvestorStatus with isAccredited = False; isQualifiedInstitutionalBuyer = False; isQualifiedPurchaser = False; isUsPerson = True
+  case d1 of
+    Rejected reason -> do
+      assertMsg "Holding period reported" ("HOLDING_PERIOD_NOT_MET" `isInfixOf` reason)
+      assertMsg "Whitelist reported" ("RECEIVER_NOT_WHITELISTED" `isInfixOf` reason)
+      assertMsg "Category reported" ("RECEIVER_NOT_QIB" `isInfixOf` reason)
+    _ -> abort "Expected a rejection listing every failed rule"
+
+  -- Whitelist the QIB and let the holding period elapse: approved
+  whitelistedCid <- submit co do
+    exerciseCmd ruleCid AddToWhitelist with approvedParty = qibBuyer
+  setTime (time (date 2026 Jul 5) 0 0 0)
+  d2 <- submit co do
+    exerciseCmd whitelistedCid EvaluateTransfer with
+      receiver = qibBuyer
+      acquiredAt = acquired
+      receiverStatus = InvestorStatus with isAccredited = True; isQualifiedInstitutionalBuyer = True; isQualifiedPurchaser = False; isUsPerson = True
+  assertMsg "Whitelisted QIB after the holding period → approved" (d2 == Approved)
 
 testTransferRestrictionActivateDeactivate : Script ()
 testTransferRestrictionActivateDeactivate = script do
@@ -559,10 +615,11 @@ testTransferRestrictionActivateDeactivate = script do
   ruleCid <- submit co do
     createCmd TransferRestrictionRule with
       complianceOfficer = co
-      isin = ISIN "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       regulatoryCategory = RegS
       holdingPeriodDays = 40
       whitelistRequired = False
+      whitelist = []
       lockupExpiry = None
       isActive = True
 
@@ -590,10 +647,11 @@ testCannotDeactivateInactiveRule = script do
   ruleCid <- submit co do
     createCmd TransferRestrictionRule with
       complianceOfficer = co
-      isin = ISIN "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       regulatoryCategory = Rule144A
       holdingPeriodDays = 0
       whitelistRequired = False
+      whitelist = []
       lockupExpiry = None
       isActive = False
 
@@ -611,7 +669,7 @@ testOwnershipRestrictionCreate = script do
   restrictionCid <- submit regulator do
     createCmd OwnershipRestriction with
       regulator = regulator
-      isin = ISIN "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       maxOwnershipPercentage = 5.0
       maxHoldingQuantity = 50000000.0
       disallowedJurisdictions = ["IR", "KP"]
@@ -632,7 +690,7 @@ testCheckOwnershipLimitApproved = script do
   restrictionCid <- submit regulator do
     createCmd OwnershipRestriction with
       regulator = regulator
-      isin = ISIN "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       maxOwnershipPercentage = 5.0
       maxHoldingQuantity = 50000000.0
       disallowedJurisdictions = ["IR", "KP"]
@@ -653,7 +711,7 @@ testCheckOwnershipLimitExceedsQuantity = script do
   restrictionCid <- submit regulator do
     createCmd OwnershipRestriction with
       regulator = regulator
-      isin = ISIN "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       maxOwnershipPercentage = 5.0
       maxHoldingQuantity = 50000000.0
       disallowedJurisdictions = []
@@ -667,7 +725,7 @@ testCheckOwnershipLimitExceedsQuantity = script do
 
   case decision of
     Rejected _ -> pure ()
-    Approved   -> abort "Quantity exceeds max → should be Rejected"
+    _          -> abort "Quantity exceeds max → should be Rejected"
 
 testCheckOwnershipLimitDisallowedJurisdiction : Script ()
 testCheckOwnershipLimitDisallowedJurisdiction = script do
@@ -676,7 +734,7 @@ testCheckOwnershipLimitDisallowedJurisdiction = script do
   restrictionCid <- submit regulator do
     createCmd OwnershipRestriction with
       regulator = regulator
-      isin = ISIN "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       maxOwnershipPercentage = 5.0
       maxHoldingQuantity = 50000000.0
       disallowedJurisdictions = ["CN", "RU"]
@@ -690,7 +748,7 @@ testCheckOwnershipLimitDisallowedJurisdiction = script do
 
   case decision of
     Rejected _ -> pure ()
-    Approved   -> abort "Disallowed jurisdiction → should be Rejected"
+    _          -> abort "Disallowed jurisdiction → should be Rejected"
 
 -- ---------------------------------------------------------------------------
 -- RegulatoryReporting Tests
@@ -787,7 +845,6 @@ testRegulatoryReportRejectAndAmend = script do
   amendedCid <- submit reporter do
     exerciseCmd rejectedCid SubmitAmendment with
       amendedPayload = "{\"trade\":\"COMPLETE\",\"lei\":\"5493001KJTIIGC8Y1R12\"}"
-      amendmentTimestamp = now
 
   amendedData <- queryContractId reporter amendedCid
   case amendedData of
@@ -850,7 +907,8 @@ runComplianceTests = script do
   -- TransferRestrictions
   testTransferRestrictionCreate
   testTransferRestrictionAllowedNoLockup
-  testTransferRestrictionNotAllowedWhenInactive
+  testInactiveRuleDoesNotRestrict
+  testTransferRestrictionEvaluatesAllRules
   testTransferRestrictionActivateDeactivate
   testCannotDeactivateInactiveRule
   -- OwnershipRestrictions

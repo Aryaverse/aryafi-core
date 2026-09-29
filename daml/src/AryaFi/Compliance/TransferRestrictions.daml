@@ -4,12 +4,19 @@
 -- | Transfer restriction rule definitions linked to tokenized securities.
 -- TransferRestrictionRule encodes regulatory exemption categories (Reg D, Reg S, Rule 144A)
 -- and enforces holding period lockups, whitelist requirements, and issuance restrictions.
--- The nonconsuming IsTransferAllowed choice enables compliance gating without
--- consuming the rule contract.
+-- The nonconsuming EvaluateTransfer choice enables compliance gating without
+-- consuming the rule contract. It evaluates every configured restriction
+-- (lockup, holding period, whitelist, regulatory category) and returns a
+-- PolicyDecision listing every reason a transfer is rejected.
+--
+-- The category rules below are a configurable policy module, not legal advice:
+-- institutions decide which category applies to each security.
 module AryaFi.Compliance.TransferRestrictions where
 
 import AryaFi.Common.Identifiers (ISIN)
-import AryaFi.Common.Errors (require, requireNonEmpty)
+import AryaFi.Common.Errors (require)
+import AryaFi.Common.Policies (PolicyDecision(..), andDecision)
+import DA.Time (addRelTime, days)
 
 -- ---------------------------------------------------------------------------
 -- Regulatory Category
@@ -31,6 +38,32 @@ data RegulatoryCategory
     -- ^ No transfer restrictions (fully registered securities).
   deriving (Eq, Show)
 
+-- | Investor classification of the proposed transferee, as established by the
+-- compliance officer's KYC / onboarding records.
+data InvestorStatus = InvestorStatus
+  with
+    isAccredited : Bool
+    -- ^ Accredited investor (Regulation D, Rule 501).
+    isQualifiedInstitutionalBuyer : Bool
+    -- ^ Qualified Institutional Buyer (Rule 144A).
+    isQualifiedPurchaser : Bool
+    -- ^ Qualified Purchaser (Investment Company Act §2(a)(51)).
+    isUsPerson : Bool
+    -- ^ U.S. person (Regulation S, Rule 902(k)).
+  deriving (Eq, Show)
+
+-- | Eligibility of an investor for a regulatory category.
+categoryDecision : RegulatoryCategory -> InvestorStatus -> PolicyDecision
+categoryDecision category investor = case category of
+  RegD_506c -> requireFlag investor.isAccredited "RECEIVER_NOT_ACCREDITED"
+  AccreditedInvestorOnly -> requireFlag investor.isAccredited "RECEIVER_NOT_ACCREDITED"
+  Rule144A -> requireFlag investor.isQualifiedInstitutionalBuyer "RECEIVER_NOT_QIB"
+  QualifiedPurchaserOnly -> requireFlag investor.isQualifiedPurchaser "RECEIVER_NOT_QUALIFIED_PURCHASER"
+  RegS -> requireFlag (not investor.isUsPerson) "RECEIVER_IS_US_PERSON"
+  RetailUnrestricted -> Approved
+  where
+    requireFlag ok reason = if ok then Approved else Rejected reason
+
 -- ---------------------------------------------------------------------------
 -- TransferRestrictionRule Template
 -- ---------------------------------------------------------------------------
@@ -47,7 +80,9 @@ template TransferRestrictionRule
     holdingPeriodDays : Int
     -- ^ Mandatory holding period in calendar days (0 = no holding period).
     whitelistRequired : Bool
-    -- ^ If True, transferees must appear on the issuer's approved list.
+    -- ^ If True, transferees must appear in whitelist.
+    whitelist : [Party]
+    -- ^ Approved transferees (used when whitelistRequired is True).
     lockupExpiry : Optional Time
     -- ^ Optional absolute lockup expiry date. Transfers blocked before this time.
     isActive : Bool
@@ -100,15 +135,52 @@ template TransferRestrictionRule
       do
         create this with whitelistRequired = required
 
-    -- | Nonconsuming query: is a transfer allowed given the current ledger time?
-    -- Returns True when the rule is active and any absolute lockup period has expired.
-    nonconsuming choice IsTransferAllowed : Bool
+    -- | Add a party to the approved-transferee whitelist.
+    choice AddToWhitelist : ContractId TransferRestrictionRule
+      with
+        approvedParty : Party
       controller complianceOfficer
       do
-        if not isActive then pure False
-        else case lockupExpiry of
-          None   -> pure True
-          Some t -> do
-            now <- getTime
-            pure (now >= t)
+        require (approvedParty `notElem` whitelist) "Party is already whitelisted"
+        create this with whitelist = approvedParty :: whitelist
+
+    -- | Remove a party from the approved-transferee whitelist.
+    choice RemoveFromWhitelist : ContractId TransferRestrictionRule
+      with
+        removedParty : Party
+      controller complianceOfficer
+      do
+        require (removedParty `elem` whitelist) "Party is not whitelisted"
+        create this with whitelist = filter (/= removedParty) whitelist
+
+    -- | Nonconsuming evaluation of a proposed transfer at the current ledger time.
+    -- An inactive rule restricts nothing and approves. An active rule checks:
+    --   1. the absolute lockup has expired;
+    --   2. the transferor has held the security for holdingPeriodDays;
+    --   3. the receiver is whitelisted, when whitelistRequired;
+    --   4. the receiver's investor status satisfies regulatoryCategory.
+    -- Every failed check contributes its reason to the Rejected decision.
+    nonconsuming choice EvaluateTransfer : PolicyDecision
+      with
+        receiver : Party
+        -- ^ Proposed transferee.
+        acquiredAt : Time
+        -- ^ When the transferor acquired the security (start of holding period).
+        receiverStatus : InvestorStatus
+        -- ^ Investor classification of the receiver.
+      controller complianceOfficer
+      do
+        now <- getTime
+        let lockupCheck = case lockupExpiry of
+              Some t | now < t -> Rejected ("LOCKUP_NOT_EXPIRED until " <> show t)
+              _ -> Approved
+            holdingCheck =
+              if now >= addRelTime acquiredAt (days holdingPeriodDays) then Approved
+              else Rejected ("HOLDING_PERIOD_NOT_MET: " <> show holdingPeriodDays <> " days required")
+            whitelistCheck =
+              if not whitelistRequired || receiver `elem` whitelist then Approved
+              else Rejected "RECEIVER_NOT_WHITELISTED"
+            categoryCheck = categoryDecision regulatoryCategory receiverStatus
+        pure $ if not isActive then Approved
+               else foldl andDecision Approved [lockupCheck, holdingCheck, whitelistCheck, categoryCheck]
 
