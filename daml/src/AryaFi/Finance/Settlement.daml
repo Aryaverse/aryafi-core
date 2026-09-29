@@ -12,19 +12,23 @@
 --   - Buyer: delivers cash from their bank account.
 --   - Settlement Agent: executes the atomic swap on behalf of both parties.
 --
--- The settlement agent archives both the locked CashPosition and the locked
--- SecurityPosition (pre-locked by both parties before creating the DvP instruction)
--- and creates new positions with updated ownership. This is modeled here as
--- a status state machine; in a full production deployment the execution choice
--- would additionally exercise choices on the underlying position contracts.
+-- Before execution, the seller locks the SecurityPosition and the buyer locks
+-- the CashPosition, each naming the settlement agent as lock holder. From then
+-- on neither leg can be withdrawn. ExecuteDvpSettlement validates both locked
+-- positions against the instruction and, in one Daml transaction, delivers the
+-- security to the buyer and the cash to the seller. Either both legs settle or
+-- the whole transaction is rejected.
 --
--- Settlement model: DVP Model 1 (simultaneous, unconditional, irrevocable).
+-- Settlement model: DVP Model 1 (simultaneous, gross, final). Models 2 and 3
+-- (netted legs) are declared for reference data but are not executed here.
 -- Reference: BIS CPSS/IOSCO Principles for Financial Market Infrastructures.
 module AryaFi.Finance.Settlement where
 
 import AryaFi.Common.Types (Amount, Currency, SettlementStatus(..))
 import AryaFi.Common.Identifiers (AccountId, ISIN, CorrelationId, TradeId, IdempotencyKey)
 import AryaFi.Common.Errors (require, requireNonEmpty)
+import AryaFi.Finance.Cash (CashPosition, SettleLockedCash(..))
+import AryaFi.Finance.Security (SecurityPosition, SettleLockedSecurity(..))
 
 -- ---------------------------------------------------------------------------
 -- DvP Settlement Type
@@ -41,26 +45,41 @@ data DvpModel
     -- ^ Both legs settle on a net basis at end of day.
   deriving (Eq, Show)
 
+-- | Result of an executed DvP: the settled instruction and the two new positions.
+data DvpSettlementResult = DvpSettlementResult
+  with
+    instructionCid : ContractId DvpInstruction
+    -- ^ The instruction, now in Settled status.
+    deliveredSecurityCid : ContractId SecurityPosition
+    -- ^ The buyer's new SecurityPosition.
+    paidCashCid : ContractId CashPosition
+    -- ^ The seller's new CashPosition.
+  deriving (Eq, Show)
+
 -- ---------------------------------------------------------------------------
 -- DvpInstruction Template
 -- ---------------------------------------------------------------------------
 
 -- | Atomic Delivery-versus-Payment instruction.
--- Both parties must agree to the instruction parameters before the settlement
--- agent can execute. The settlement agent confirms execution only after
--- verifying the pre-locked security and cash positions exist.
+-- Seller, buyer, and settlement agent all sign the instruction, so the agent
+-- can later execute it without further consent from either counterparty.
 --
--- Pre-conditions (enforced off-chain by the settlement agent):
---   1. Seller must have locked the relevant SecurityPosition with lockRef = show dvpCid.
---   2. Buyer must have locked the relevant CashPosition with lockRef = show dvpCid.
---   3. Settlement agent must verify eligibility of both parties and assets.
+-- Pre-conditions (checked on-ledger by ExecuteDvpSettlement):
+--   1. The seller's SecurityPosition is owned by the seller, held in
+--      sellerSecurityAccount, matches isin and securityQuantity exactly, and is
+--      locked to the settlement agent with lockReference = sellerSecurityLockRef.
+--   2. The buyer's CashPosition is owned by the buyer, held in buyerCashAccount,
+--      matches currency and cashAmount exactly, and is locked to the settlement
+--      agent with lockReference = buyerCashLockRef.
+--   3. Party and asset eligibility (KYC, sanctions, restrictions) is checked by
+--      the settlement agent before execution.
 --
--- Execution (ExecuteDvpSettlement):
---   - Archives the locked SecurityPosition and CashPosition.
---   - Creates new SecurityPosition for the buyer and CashPosition for the seller.
---   - In this model, asset archival and re-creation is handled by the settlement
---     agent exercising choices on the respective position contracts (coordinated
---     off-chain or via a combined choice in a full implementation).
+-- Execution (ExecuteDvpSettlement), in a single transaction:
+--   - Archives the locked SecurityPosition and creates the buyer's position
+--     in buyerSecurityAccount.
+--   - Archives the locked CashPosition and creates the seller's position
+--     in sellerCashAccount.
+--   - Records the instruction as Settled.
 --
 -- Status machine:
 --   PendingSettlement → Settled | Failed Text | Cancelled Text
@@ -114,29 +133,63 @@ template DvpInstruction
 
     ensure securityQuantity > 0.0 && cashAmount > 0.0
 
-    -- | Execute the DvP settlement atomically.
-    -- This choice can only be invoked when both the seller's security position
-    -- and the buyer's cash position are pre-locked with this instruction's reference.
-    -- The settlement agent confirms that both legs are ready before executing.
-    --
-    -- In a production deployment, this choice would also:
-    --   1. Exercise UnlockSecurity + TransferSecurity on the seller's SecurityPosition.
-    --   2. Exercise UnlockCash + TransferCash on the buyer's CashPosition.
-    -- This requires those positions to have been divulged to the settlement agent.
-    choice ExecuteDvpSettlement : ContractId DvpInstruction
+    -- | Execute the DvP settlement atomically: deliver the locked security to
+    -- the buyer and the locked cash to the seller in one transaction.
+    -- Every attribute of both legs is validated against this instruction first;
+    -- any mismatch aborts the whole transaction and nothing moves.
+    choice ExecuteDvpSettlement : DvpSettlementResult
+      with
+        sellerSecurityCid : ContractId SecurityPosition
+        -- ^ The seller's SecurityPosition, locked to the settlement agent.
+        buyerCashCid : ContractId CashPosition
+        -- ^ The buyer's CashPosition, locked to the settlement agent.
       controller settlementAgent
       do
         require (status == PendingSettlement)
           "DvP can only be executed from PendingSettlement status"
+        require (dvpModel == DvpModel1)
+          "Only DvP Model 1 (gross, simultaneous) settlement is executed on-ledger"
         requireNonEmpty sellerSecurityLockRef "sellerSecurityLockRef"
         requireNonEmpty buyerCashLockRef "buyerCashLockRef"
-        create this with
+
+        sec <- fetch sellerSecurityCid
+        require (sec.owner == seller) "Security leg: position is not owned by the seller"
+        require (sec.accountId == sellerSecurityAccount) "Security leg: position is not in the seller's security account"
+        require (sec.isin == isin) "Security leg: ISIN does not match the instruction"
+        require (sec.quantity == securityQuantity)
+          ("Security leg: quantity " <> show sec.quantity <> " does not match instructed " <> show securityQuantity)
+        require (sec.isLocked && sec.lockHolder == Some settlementAgent)
+          "Security leg: position is not locked to the settlement agent"
+        require (sec.lockReference == Some sellerSecurityLockRef)
+          "Security leg: lock reference does not match the instruction"
+
+        cash <- fetch buyerCashCid
+        require (cash.owner == buyer) "Cash leg: position is not owned by the buyer"
+        require (cash.accountId == buyerCashAccount) "Cash leg: position is not in the buyer's cash account"
+        require (cash.currency == currency) "Cash leg: currency does not match the instruction"
+        require (cash.amount == cashAmount)
+          ("Cash leg: amount " <> show cash.amount <> " does not match instructed " <> show cashAmount)
+        require (cash.isLocked && cash.lockHolder == Some settlementAgent)
+          "Cash leg: position is not locked to the settlement agent"
+        require (cash.lockReference == Some buyerCashLockRef)
+          "Cash leg: lock reference does not match the instruction"
+
+        deliveredSecurityCid <- exercise sellerSecurityCid SettleLockedSecurity with
+          newOwner = buyer
+          newAccountId = buyerSecurityAccount
+        paidCashCid <- exercise buyerCashCid SettleLockedCash with
+          newOwner = seller
+          newAccountId = sellerCashAccount
+        instructionCid <- create this with
           status = Settled
           failureReason = None
+        pure DvpSettlementResult with instructionCid; deliveredSecurityCid; paidCashCid
 
     -- | Fail the settlement with a specific reason.
     -- Called when settlement cannot proceed (e.g. failed pre-checks,
-    -- position not found, regulatory hold).
+    -- position not found, regulatory hold). Both legs stay locked to the
+    -- settlement agent, who releases them with UnlockSecurity / UnlockCash
+    -- unless the instruction is retried.
     choice FailDvpSettlement : ContractId DvpInstruction
       with
         reason : Text
