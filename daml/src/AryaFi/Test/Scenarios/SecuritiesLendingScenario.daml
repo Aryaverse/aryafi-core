@@ -72,7 +72,7 @@ testSecuritiesLendingLifecycle = script do
       lender = beneficialOwner
       borrower = borrowerDealer
       custodian = lendingCustodian
-      isin = "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       borrowedQuantity = 5000000.0
       borrowAccountId = AccountId "ACC-GS-BORROW-001"
       lendingFeeRate = 0.0075
@@ -123,7 +123,7 @@ testSecuritiesLendingLifecycle = script do
       lender = beneficialOwner
       borrower = borrowerDealer
       custodian = lendingCustodian
-      isin = "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       borrowedQuantity = 5000000.0
       borrowAccountId = AccountId "ACC-GS-BORROW-001"
       lendingFeeRate = 0.0075
@@ -135,19 +135,20 @@ testSecuritiesLendingLifecycle = script do
       startDate = now
       status = LendingActive
       correlationId = CorrelationId "CORR-SECLEND-2026-001"
-      observers = [agentLender]
+      observers = [agentLender, regulator]
 
-  -- Archive the original unlinked agreement
-  submit beneficialOwner do
-    exerciseCmd lendingCid AddSecLendingObserver with newObserver = regulator
+  -- Retire the original unlinked agreement; the linked one replaces it.
+  -- Archiving requires all three signatories.
+  submitMulti [beneficialOwner, borrowerDealer, lendingCustodian] [] do
+    archiveCmd lendingCid
 
   -- =========================================================================
   -- Phase 2: Fee Accrual & Servicing
   -- =========================================================================
 
-  -- Step 3: Lender accrues 30-day borrow fee
+  -- Step 3: Counterparties agree the 30-day borrow fee
   -- Fee = 5,000,000 * 0.0075 * 30/360 = 3,125 USD
-  accruedCid <- submit beneficialOwner do
+  accruedCid <- submitMulti [beneficialOwner, borrowerDealer] [] do
     exerciseCmd lendingLinkedCid AccrueLendingFee with
       additionalFee = 3125.0
 
@@ -157,8 +158,8 @@ testSecuritiesLendingLifecycle = script do
     None -> abort "Accrued agreement not visible"
     Some l -> assertMsg "Fee accrued correctly" (l.accruedLendingFee == 3125.0)
 
-  -- Step 4: Borrower settles accrued fees
-  feesPaidCid <- submit borrowerDealer do
+  -- Step 4: Lender confirms receipt of the fee payment
+  feesPaidCid <- submit beneficialOwner do
     exerciseCmd accruedCid PayLendingFee with
       paymentAmount = 3125.0
 
@@ -221,12 +222,12 @@ testSecuritiesLendingLifecycle = script do
 
   -- Accrue another 30-day fee on reduced balance
   -- Fee = 3,000,000 * 0.0075 * 30/360 = 1,875 USD
-  accruedCid2 <- submit beneficialOwner do
+  accruedCid2 <- submitMulti [beneficialOwner, borrowerDealer] [] do
     exerciseCmd returnedCid AccrueLendingFee with
       additionalFee = 1875.0
 
-  -- Pay the accrued fee
-  feesPaidCid2 <- submit borrowerDealer do
+  -- Lender confirms receipt of the accrued fee
+  feesPaidCid2 <- submit beneficialOwner do
     exerciseCmd accruedCid2 PayLendingFee with
       paymentAmount = 1875.0
 
@@ -243,7 +244,7 @@ testSecuritiesLendingLifecycle = script do
     Some l -> assertMsg "Agreement auto-closed" (l.status == LendingClosed)
 
   -- Release the collateral pledge
-  releasedPledgeCid <- submit beneficialOwner do
+  _releasedPledgeCid <- submit beneficialOwner do
     exerciseCmd pledgeCid ReleasePledge
 
   pure ()
@@ -268,7 +269,7 @@ testSecuritiesLendingDefault = script do
       lender = beneficialOwner
       borrower = borrowerDealer
       custodian = lendingCustodian
-      isin = "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       borrowedQuantity = 3000000.0
       borrowAccountId = AccountId "ACC-DEF-BORROW-001"
       lendingFeeRate = 0.01
@@ -321,7 +322,7 @@ testSecuritiesLendingNegativeCases = script do
       lender = lender
       borrower = borrower
       custodian = custodian
-      isin = "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       borrowedQuantity = 2000000.0
       borrowAccountId = AccountId "ACC-NEG-001"
       lendingFeeRate = 0.005
@@ -347,8 +348,8 @@ testSecuritiesLendingNegativeCases = script do
       returnedQuantity = 3000000.0
       collateralReleaseAmount = 2040000.0
 
-  -- Cannot pay more than accrued fee
-  submitMustFail borrower do
+  -- Cannot record a payment larger than the accrued fee
+  submitMustFail lender do
     exerciseCmd activeCid PayLendingFee with
       paymentAmount = 1000.0  -- No fee accrued yet
 
@@ -359,7 +360,7 @@ testSecuritiesLendingNegativeCases = script do
       lender = lender
       borrower = borrower
       custodian = custodian
-      isin = "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       borrowedQuantity = 100.0
       borrowAccountId = AccountId "ACC-CLOSED-001"
       lendingFeeRate = 0.005
@@ -411,7 +412,7 @@ testSecuritiesLendingPrivacy = script do
       lender = lender
       borrower = borrower
       custodian = custodian
-      isin = "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       borrowedQuantity = 1000000.0
       borrowAccountId = AccountId "ACC-PRIV-001"
       lendingFeeRate = 0.005
@@ -434,7 +435,7 @@ testSecuritiesLendingPrivacy = script do
   assertMsg "Outsider cannot see agreement" (outsiderView == None)
 
   -- Add regulator as observer
-  updatedCid <- submit lender do
+  updatedCid <- submitMulti [lender, borrower] [] do
     exerciseCmd lendingCid AddSecLendingObserver with newObserver = outsider
 
   -- Now they can see it
