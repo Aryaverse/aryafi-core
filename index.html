@@ -614,15 +614,15 @@
       <div class="iso-toolbar">
         <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
           <span class="iso-direction-badge" id="iso-direction-display">
-            <span>⇄</span> <span id="iso-direction-text">SWIFT MX (XML) &rarr; Canton Daml JSON</span>
+            <span>⇄</span> <span id="iso-direction-text">SWIFT MX (XML) &rarr; Daml JSON API request</span>
           </span>
-          <span class="badge-tag" id="iso-status-badge" style="color: var(--accent-emerald); border-color: rgba(16, 185, 129, 0.4);">
-            ✓ ISO 20022 Schema Validated
+          <span class="badge-tag" id="iso-status-badge" style="color: var(--text-secondary);">
+            Not yet validated
           </span>
         </div>
         <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
           <button class="btn-secondary" id="btn-toggle-iso-dir">⇄ Invert Direction</button>
-          <button class="btn-secondary" id="btn-validate-iso">✓ Validate Syntax &amp; Invariants</button>
+          <button class="btn-secondary" id="btn-validate-iso">Run Validation Checks</button>
         </div>
       </div>
 
@@ -642,7 +642,7 @@
         <!-- Daml Ledger API Payload Card -->
         <div class="editor-card">
           <div class="editor-header">
-            <span class="editor-title" id="iso-right-title">CANTON LEDGER API COMMAND (JSON RPC)</span>
+            <span class="editor-title" id="iso-right-title">DAML JSON API v1 REQUEST BODY</span>
             <div class="editor-actions">
               <span class="badge-tag">Daml v2.10</span>
               <button class="btn-copy" id="btn-copy-daml">Copy Daml</button>
