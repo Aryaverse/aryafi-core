@@ -1,17 +1,17 @@
 # AryaFi Core: Improvement Plan — Taking the Library to the Next Level
 
 **Audience:** engineering and product leads deciding what AryaFi Core builds next.
-**Baseline:** v1.0.2 (2026-09-29). **Companion documents:** [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) (what is true today) and the [Technical & Business Requirements](requirements/TECHNICAL_BUSINESS_REQUIREMENTS.md) (what the product must become).
+**Baseline:** v2.0.0 (2026-09-29). **Companion documents:** [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) (what is true today) and the [Technical & Business Requirements](requirements/TECHNICAL_BUSINESS_REQUIREMENTS.md) (what the product must become).
 
 ---
 
 ## 1. Where We Are
 
-v1.0.2 made the library honest and working. It builds with `-Wall -Werror`, 289 test scripts pass, and atomic DvP moves real positions on a real Canton 2.10 topology. Authorization defects are fixed: receiver-authorized transfers, locks held by a named lock holder, and no party able to reduce its own obligation. The docs and web terminal now describe the code as it is.
+v2.0.0 made the library honest and working. It builds with `-Wall -Werror`, 289 test scripts pass, and atomic DvP moves real positions on a real Canton 2.10 topology. Authorization defects are fixed: receiver-authorized transfers, locks held by a named lock holder, and no party able to reduce its own obligation. The docs and web terminal now describe the code as it is.
 
-What v1.0.2 is **not** yet is what the requirements call for: *"software infrastructure — not a collection of sample contracts."* Today, only DvP composes primitives. Every other workflow (loan, repo, securities lending, margin, pledge, escrow, subscription, redemption, transfer) is a standalone status record that references assets by text. Compliance policies are correct but cannot be called from those workflows. Every multi-party contract depends on co-submission, which does not work across separate participants.
+What v2.0.0 is **not** yet is what the requirements call for: *"software infrastructure — not a collection of sample contracts."* Today, only DvP composes primitives. Every other workflow (loan, repo, securities lending, margin, pledge, escrow, subscription, redemption, transfer) is a standalone status record that references assets by text. Compliance policies are correct but cannot be called from those workflows. Every multi-party contract depends on co-submission, which does not work across separate participants.
 
-| Requirement (TBRD) | v1.0.2 | Gap closed by |
+| Requirement (TBRD) | v2.0.0 | Gap closed by |
 |:---|:---|:---|
 | Composable primitives (§5, §9) | DvP composes Cash + Security; nothing else does | Workstreams 1, 4 |
 | Synchronized DvP (§3, §26) | Done, Model 1, single-participant tested | Workstream 2 (cross-participant) |
@@ -34,7 +34,7 @@ Everything below depends on one choice, and it should be made before Workstream 
 | **A. Stay on Daml 2.x / Canton 2.x** | Keep the current SDK; model holdings on Daml Finance-style interfaces. | Lowest short-term cost. Cannot deploy to the Canton Network Global Synchronizer (Canton 3); a second migration later. |
 | **B. Move to Daml 3 / Canton 3 (recommended)** | Target the platform the Canton Network runs; align holdings and DvP with the Canton Network Token Standard (CIP-56: holdings, transfer instructions, and allocations settled by an executor). | One migration now. Contract keys must be redesigned (seven templates use them). Assets become interoperable with other CIP-56 tokens and wallets, which is where the requirements' market evidence (DTCC, Tradeweb, cross-border repo) points. |
 
-**Recommendation: Option B.** The core design in v1.0.2 (locking to a settlement agent, then atomic delivery) maps directly onto CIP-56 allocations, so the DvP work carries over. Staying on 2.x would make the library's most valuable asset, its settlement and collateral semantics, unusable on the network its customers are adopting.
+**Recommendation: Option B.** The core design in v2.0.0 (locking to a settlement agent, then atomic delivery) maps directly onto CIP-56 allocations, so the DvP work carries over. Staying on 2.x would make the library's most valuable asset, its settlement and collateral semantics, unusable on the network its customers are adopting.
 
 ---
 
@@ -124,7 +124,7 @@ Sizes are planning estimates, not commitments. The critical path is platform dec
 
 These use the success metrics in the requirements (§33), with today's baseline.
 
-| Metric | Baseline (v1.0.2) | Target after Phase 1 |
+| Metric | Baseline (v2.0.0) | Target after Phase 1 |
 |:---|:---|:---|
 | Modules at `Beta` or above | 10 of 32 | All production modules |
 | Workflows that move assets on-ledger | 1 (DvP) | All financing workflows |

@@ -119,11 +119,11 @@ When releasing upgraded contract templates or bug fixes:
 1. Compile and inspect the new DAR:
    ```bash
    daml build
-   daml damlc inspect-dar .daml/dist/aryafi-core-1.0.0.dar
+   daml damlc inspect-dar .daml/dist/aryafi-core-2.0.0.dar
    ```
 2. Upload to the standby/passive node first, followed by the active node:
    ```scala
-   participants.all.dars.upload(".daml/dist/aryafi-core-1.0.0.dar")
+   participants.all.dars.upload(".daml/dist/aryafi-core-2.0.0.dar")
    ```
 3. Verify successful validation in the Canton console:
    ```scala

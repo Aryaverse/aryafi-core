@@ -13,7 +13,7 @@ This dossier is the briefing package for an independent security review of **Ary
   - `daml/src/AryaFi/Compliance/`: `KycAttestation`, `SanctionsAttestation`, `JurisdictionProfile`, `EligibilityPolicy`, `TransferRestrictionRule`, `OwnershipRestriction`, `RegulatoryReportRecord`.
 - **Out of scope**: the test scripts under `daml/src/AryaFi/Test/`, the web terminal, and the deployment configuration.
 - **Authorization reference**: [AUTHORIZATION_MATRIX.md](AUTHORIZATION_MATRIX.md), generated from the source.
-- **Target release**: `v1.0.2`
+- **Target release**: `v2.0.0`
 
 ---
 
@@ -76,7 +76,7 @@ Each invariant below is argued from the code and exercised by a named test. They
 
 ## 3. Automated Test Coverage
 
-`daml test --show-coverage` on v1.0.2:
+`daml test --show-coverage` on v2.0.0:
 
 | Measure | Result |
 |:---|:---|
@@ -117,7 +117,7 @@ daml build
 daml test --show-coverage
 
 # 3. Inspect the DAR
-daml damlc inspect-dar .daml/dist/aryafi-core-1.0.0.dar
+daml damlc inspect-dar .daml/dist/aryafi-core-2.0.0.dar
 
 # 4. Run specific security and privacy suites (--files selects a test module;
 #    --test-pattern would match script names, not file names)
