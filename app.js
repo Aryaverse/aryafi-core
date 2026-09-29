@@ -592,8 +592,29 @@ function clearTerminal() {
 }
 
 // ============================================================================
-// 5. Mathematical Invariant Calculator (Cash Split & Merge)
+// 5. SplitCash Conservation Illustration (exact Daml Decimal arithmetic)
 // ============================================================================
+// Daml's Decimal is a fixed-point number with 10 decimal places, so a split is
+// exact. This mirrors that with BigInt arithmetic scaled by 10^10 (JavaScript
+// floats would not be exact). It illustrates the rule SplitCash enforces on
+// ledger; it does not inspect any ledger state.
+
+const DECIMAL_SCALE = 10;
+const DECIMAL_FACTOR = 10n ** BigInt(DECIMAL_SCALE);
+
+function parseDamlDecimal(text) {
+  const m = /^\s*(\d+)(?:\.(\d*))?\s*$/.exec(text || '');
+  if (!m) return null;
+  const frac = m[2] || '';
+  if (frac.length > DECIMAL_SCALE) return null;
+  return BigInt(m[1]) * DECIMAL_FACTOR + BigInt((frac + '0'.repeat(DECIMAL_SCALE)).slice(0, DECIMAL_SCALE));
+}
+
+function formatDamlDecimal(units) {
+  const whole = units / DECIMAL_FACTOR;
+  const cents = (units % DECIMAL_FACTOR) / (DECIMAL_FACTOR / 100n);
+  return `$${whole.toLocaleString('en-US')}.${cents.toString().padStart(2, '0')}`;
+}
 
 function initInvariantCalculator() {
   const totalInput = document.getElementById('calc-total-amount');
@@ -602,28 +623,33 @@ function initInvariantCalculator() {
   const presetBtns = document.querySelectorAll('.calc-preset-btn');
 
   function calculateAndDisplay() {
-    const total = parseFloat(totalInput.value);
-    const split = parseFloat(splitInput.value);
+    const total = parseDamlDecimal(totalInput.value);
+    const split = parseDamlDecimal(splitInput.value);
+    const statusEl = document.getElementById('calc-invariant-status');
 
-    if (isNaN(total) || isNaN(split) || total <= 0 || split <= 0 || split >= total) {
-      alert("Split amount must be strictly positive and strictly less than total position amount.");
+    if (total === null || split === null) {
+      statusEl.textContent = "REJECTED: amounts must be non-negative decimals with at most 10 decimal places";
+      statusEl.className = "calc-stat-val rose";
+      return;
+    }
+    if (split <= 0n || split >= total) {
+      statusEl.textContent = "REJECTED by SplitCash: split must be > 0 and < position amount";
+      statusEl.className = "calc-stat-val rose";
       return;
     }
 
     const remainder = total - split;
     const sum = split + remainder;
 
-    document.getElementById('calc-pos1-val').textContent = `$${split.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    document.getElementById('calc-pos2-val').textContent = `$${remainder.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    document.getElementById('calc-sum-val').textContent = `$${sum.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    
-    const delta = Math.abs(sum - total);
-    const statusEl = document.getElementById('calc-invariant-status');
-    if (delta < 0.0001) {
-      statusEl.textContent = "VERIFIED (Δ = 0.00)";
+    document.getElementById('calc-pos1-val').textContent = formatDamlDecimal(split);
+    document.getElementById('calc-pos2-val').textContent = formatDamlDecimal(remainder);
+    document.getElementById('calc-sum-val').textContent = formatDamlDecimal(sum);
+
+    if (sum === total) {
+      statusEl.textContent = "CONSERVED (exact, Δ = 0)";
       statusEl.className = "calc-stat-val emerald";
     } else {
-      statusEl.textContent = `LEAKAGE DETECTED (Δ = ${delta.toFixed(4)})`;
+      statusEl.textContent = "NOT CONSERVED";
       statusEl.className = "calc-stat-val rose";
     }
   }
@@ -673,7 +699,7 @@ function initCollateralCalculator() {
     if (reqColEl) reqColEl.textContent = `$${requiredCollateral.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     if (effHaircutEl) effHaircutEl.textContent = `$${haircutDeduction.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${(haircut * 100).toFixed(1)}%)`;
     if (thresholdEl) thresholdEl.textContent = `$${marginCallThreshold.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    if (lcrStatusEl) lcrStatusEl.textContent = `${hqla} (Compliant)`;
+    if (lcrStatusEl) lcrStatusEl.textContent = hqla;
   }
 
   if (calcBtn) calcBtn.addEventListener('click', updateMarginMatrix);
