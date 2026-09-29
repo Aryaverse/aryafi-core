@@ -81,13 +81,13 @@ Beneficial Owner lends 5M face value US Treasuries to Broker-Dealer at 75 bps an
 ```daml
 lendingCid <- submitMulti [beneficialOwner, borrowerDealer, lendingCustodian] [] do
   createCmd SecuritiesLendingAgreement with
-    lendingId = "SECLEND-2026-BNY-GS-001"
+    lendingId = "SECLEND-2026-001"
     lender = beneficialOwner
     borrower = borrowerDealer
     custodian = lendingCustodian
-    isin = "US912828ZM24"
+    isin = "US912828ZM50"
     borrowedQuantity = 5000000.0
-    borrowAccountId = AccountId "ACC-GS-BORROW-001"
+    borrowAccountId = AccountId "ACC-DEALER-BORROW-001"
     lendingFeeRate = 0.0075
     rebateRate = 0.005
     collateralCurrency = "USD"
@@ -105,11 +105,11 @@ Borrower posts cash collateral under tri-party custody arrangement:
 ```daml
 pledgeCid <- submitMulti [borrowerDealer, beneficialOwner, lendingCustodian] [] do
   createCmd AssetPledge with
-    pledgeId = "PLEDGE-SECLEND-GS-001"
+    pledgeId = "PLEDGE-SECLEND-001"
     pledgor = borrowerDealer
     pledgee = beneficialOwner
     custodian = lendingCustodian
-    accountId = AccountId "ACC-COLL-GS-001"
+    accountId = AccountId "ACC-COLL-DEALER-001"
     assetId = "CASH-USD-5100000"
     quantity = 5100000.0
     perfectionReference = "SECLEND-COLL-REF-001"
@@ -119,15 +119,15 @@ pledgeCid <- submitMulti [borrowerDealer, beneficialOwner, lendingCustodian] [] 
 ```
 
 ### 3. Borrow Fee Accrual & Settlement
-Fee calculation follows the standard Act/360 day count convention:
+Both counterparties agree each period's fee (Act/360 convention), and the lender confirms payment, so neither side can change what the borrower owes on its own:
 ```daml
--- Lender accrues 30-day borrow fee: 5M × 0.0075 × 30/360 = 3,125 USD
-accruedCid <- submit beneficialOwner do
+-- Lender and borrower agree the 30-day borrow fee: 5M × 0.0075 × 30/360 = 3,125 USD
+accruedCid <- submitMulti [beneficialOwner, borrowerDealer] [] do
   exerciseCmd lendingCid AccrueLendingFee with
     additionalFee = 3125.0
 
--- Borrower settles accrued fees
-feesPaidCid <- submit borrowerDealer do
+-- Lender confirms receipt of the fee payment
+feesPaidCid <- submit beneficialOwner do
   exerciseCmd accruedCid PayLendingFee with
     paymentAmount = 3125.0
 ```
@@ -150,8 +150,9 @@ recalledCid <- submit beneficialOwner do
     recallQuantity = 2000000.0
     deadline = recallDeadline
 
--- Borrower returns 2M with pro-rata collateral release
--- Pro-rata: 5.2M * (2M / 5M) = 2,080,000 USD released
+-- Borrower returns 2M with pro-rata collateral release.
+-- Pro-rata: 5.2M * (2M / 5M) = 2,080,000 USD. Releasing more than the pro-rata share
+-- is rejected; a partial return under recall keeps the rest of the recall in force.
 returnedCid <- submit borrowerDealer do
   exerciseCmd recalledCid ReturnSecurities with
     returnedQuantity = 2000000.0
@@ -160,7 +161,8 @@ returnedCid <- submit borrowerDealer do
 
 ### 6. Full Close-Out & Default Path
 ```daml
--- Borrower returns remaining 3M → agreement auto-closes
+-- Borrower returns remaining 3M → borrowed quantity is exactly 0 and, with no fees
+-- outstanding, the agreement auto-closes
 closedCid <- submit borrowerDealer do
   exerciseCmd feesPaidCid2 ReturnSecurities with
     returnedQuantity = 3000000.0
@@ -210,6 +212,6 @@ defaultedCid <- submit beneficialOwner do
 ## Scenario Verification
 To execute the complete multi-party test scenario:
 ```bash
-daml test --test-pattern SecuritiesLendingScenario
+daml test --files daml/src/AryaFi/Test/Scenarios/SecuritiesLendingScenario.daml
 ```
-*Implemented in [SecuritiesLendingScenario.daml](file:///Users/pankaj/Desktop/DAML%20Projects/aryafi-core/daml/src/AryaFi/Test/Scenarios/SecuritiesLendingScenario.daml).*
+*Implemented in [SecuritiesLendingScenario.daml](../../daml/src/AryaFi/Test/Scenarios/SecuritiesLendingScenario.daml).*
