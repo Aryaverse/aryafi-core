@@ -214,11 +214,11 @@ testRedemptionFullLifecycle = script do
   assertMsg "Struck NAV must equal 1050.0" (redApp.struckNavPerUnit == Some 1050.0)
   assertMsg "Net payout must equal 5,197,500 USD" (redApp.settlementPayout == Some 5197500.0)
 
-  -- 2. Custodian settles cash payout
+  -- 2. Custodian settles cash payout; the settlement date is the ledger time
+  setTime settleTime
   redCidSettled <- submit custodian do
     exerciseCmd redCidApproved ExecuteRedemptionSettlement with
       paymentRef = "FEDWIRE-RED-001"
-      actualSettlementTime = settleTime
 
   Some redSet <- queryContractId lp redCidSettled
   assertMsg "Status must be RedemptionSettled" (redSet.status == RedemptionSettled "FEDWIRE-RED-001" 5197500.0)
@@ -329,4 +329,3 @@ testSettleUnapprovedRedemptionFails = script do
   submitMustFail custodian do
     exerciseCmd redCid ExecuteRedemptionSettlement with
       paymentRef = "PAY-FAIL"
-      actualSettlementTime = settleTime
