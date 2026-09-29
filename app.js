@@ -14,7 +14,6 @@ document.addEventListener('DOMContentLoaded', () => {
   initCollateralCalculator();
   initIsoConverter();
   initDamlViewer();
-  initTelemetryCounters();
   initCopyButtons();
   initKeyboardShortcuts();
 });
@@ -189,56 +188,59 @@ function initKeyboardShortcuts() {
 // 3. Canton Network Topology Explorer
 // ============================================================================
 
+// Mirrors deploy/canton/canton.conf and deploy/docker/bootstrap.sh: one
+// organization per participant node. Party namespaces are generated when the
+// topology is bootstrapped, so none are shown here.
 const PARTICIPANT_NODES = {
   bank: {
     id: "bank_node",
-    name: "Federal Reserve Bank (Cash Custodian)",
-    role: "Central Cash Authority & Settlement Agent",
+    name: "Cash Settlement Bank",
+    role: "Tokenized Deposit Issuer (CashPosition bank)",
     port: "10012",
-    hostedParties: ["FederalReserveBank", "USDCashAuthority"],
-    fingerprint: "1220a4b7f8c1992e401b972e3650aa1b01c38e",
-    activeContracts: 48,
-    privacyBoundary: "Maintains full read visibility over tokenized USD CashPosition contracts and inter-bank clearing legs. Blind to corporate equity and fund commitments."
+    hostedParties: ["CashSettlementBank"],
+    fingerprint: "Assigned at bootstrap",
+    stores: "CashPosition contracts it issued; PaymentInstructions where it is settlement agent",
+    privacyBoundary: "Stores only contracts where the bank is a stakeholder: the cash positions it issued. It does not see securities positions, loans, or repo agreements it is not party to."
   },
   custodian: {
     id: "custodian_node",
-    name: "Global Custodian (Safekeeping / CSD)",
-    role: "Securities Intermediary & Asset Safekeeping",
+    name: "Global Custodian / Settlement Agent",
+    role: "Securities Safekeeping & DvP Settlement Agent",
     port: "10022",
-    hostedParties: ["GlobalCustodian", "DTCDepository"],
-    fingerprint: "12207b39a12c8491ef2300b9831a29f847d01e",
-    activeContracts: 36,
-    privacyBoundary: "Custody safekeeping visibility over US Treasury security positions (CUSIP/ISIN) and AssetPledge encumbrances. Blind to non-pledged fiat deposit pools."
+    hostedParties: ["GlobalCustodian"],
+    fingerprint: "Assigned at bootstrap",
+    stores: "SecurityPositions in custody; DvpInstructions and positions locked to it for settlement",
+    privacyBoundary: "Sees security positions it safekeeps, plus cash positions only while they are locked to it as DvP lock holder. Visibility ends when the lock is released or settled."
   },
   dealerA: {
     id: "dealer_a_node",
-    name: "Primary Dealer A (Goldman Sachs)",
-    role: "Liquidity Provider & US Treasury Primary Dealer",
+    name: "Dealer Bank A",
+    role: "Seller of US Treasuries",
     port: "10032",
-    hostedParties: ["DealerBankA", "GS_TreasuryDesk"],
-    fingerprint: "122088f1c30291e0aa4719bb2345d901a83b4c",
-    activeContracts: 29,
-    privacyBoundary: "Observes only bilateral trades, loans, and repo positions where Dealer A is a signatory or buyer/seller. Zero visibility into Dealer B's balance sheet."
+    hostedParties: ["DealerBankA"],
+    fingerprint: "Assigned at bootstrap",
+    stores: "Its own positions and the bilateral agreements it signed",
+    privacyBoundary: "Sees only contracts where Dealer A is signatory or observer. It never sees Dealer B's cash position or the Treasury after delivery to Dealer B."
   },
   dealerB: {
     id: "dealer_b_node",
-    name: "Primary Dealer B (Morgan Stanley)",
-    role: "Institutional Counterparty & Borrower",
+    name: "Dealer Bank B",
+    role: "Buyer of US Treasuries",
     port: "10042",
-    hostedParties: ["DealerBankB", "MS_PrimeBrokerage"],
-    fingerprint: "12209d81e3a24b01aa5820cc9412f810b27e99",
-    activeContracts: 24,
-    privacyBoundary: "Strict cryptographic isolation: Dealer B cannot observe Dealer A's funding rates, cash positions, or internal sweeps. Only bilateral DvP trades are visible."
+    hostedParties: ["DealerBankB"],
+    fingerprint: "Assigned at bootstrap",
+    stores: "Its own positions and the bilateral agreements it signed",
+    privacyBoundary: "Sees only contracts where Dealer B is signatory or observer. It never sees Dealer A's security position or the cash after payment to Dealer A."
   },
   regulator: {
     id: "regulator_node",
-    name: "SEC & Supervisory Authority",
-    role: "Regulatory Audit & CAT Observer",
+    name: "Supervisory Authority",
+    role: "Regulatory Observer",
     port: "10052",
-    hostedParties: ["SECRegulator", "FINRA_Auditor"],
-    fingerprint: "12203e87b21a8849aa019283fbc0192847a901",
-    activeContracts: 142,
-    privacyBoundary: "Receives automated certified transaction audit events (SEC CAT / TRACE) and compliance attestations. Blind to unshared proprietary trading book strategies."
+    hostedParties: ["SupervisoryAuthority"],
+    fingerprint: "Assigned at bootstrap",
+    stores: "Only contracts it was explicitly added to as an observer, e.g. RegulatoryReportRecords",
+    privacyBoundary: "Has no default visibility. Sees a contract only when the counterparties add it as observer, which on bilateral agreements requires both counterparties' consent."
   }
 };
 
@@ -266,7 +268,7 @@ function updateNodeDetailsCard(data) {
   document.getElementById('node-detail-port').textContent = `localhost:${data.port} (gRPC / JSON)`;
   document.getElementById('node-detail-parties').textContent = data.hostedParties.join(', ');
   document.getElementById('node-detail-fp').textContent = data.fingerprint;
-  document.getElementById('node-detail-contracts').textContent = `${data.activeContracts} Active Contracts`;
+  document.getElementById('node-detail-contracts').textContent = data.stores;
   document.getElementById('node-detail-privacy').textContent = data.privacyBoundary;
 }
 
@@ -281,28 +283,28 @@ const SCENARIOS = {
     steps: [
       {
         title: "Compliance Onboarding & Pre-Gating",
-        desc: "Dealer A & Dealer B pass automated KYC Attestation and OFAC Sanctions screening. Eligibility policy gates trade.",
-        log: "2026-09-24T10:00:01Z [COMPLIANCE] KYCAttestation verified for DealerBankA & DealerBankB (Status: Verified, Expiry: 2027-09-01). SanctionsCheck clean."
+        desc: "The KYC authority and sanctions screener attest Dealer A and Dealer B; each attesting authority checks validity at ledger time. The eligibility policy approves the asset.",
+        log: "2026-09-24T10:00:01Z [COMPLIANCE] KycAttestation IsKycValid = True for DealerBankA & DealerBankB (expiry 2027-09-01). SanctionsAttestation IsSanctionsClear = True. EligibilityPolicy -> Approved."
       },
       {
         title: "Dual Position Lockup & Escrow Staging",
-        desc: "Seller locks 5M US Treasury 4.25% 2034; Buyer locks $5,000,000 USD tokenized cash with Global Custodian & Federal Reserve Bank.",
-        log: "2026-09-24T10:00:03Z [LEDGER] Exercise LockSecurity on SecurityPosition(US912828ZM24, Qty: 5,000,000). Exercise LockCash on CashPosition(USD, Amt: 5,000,000.00)."
+        desc: "Seller locks the 5M face US Treasury; buyer splits out exactly $4,975,000 and locks it. Both locks are held by the settlement agent, so neither leg can be withdrawn.",
+        log: "2026-09-24T10:00:03Z [LEDGER] LockSecurity(US912828ZM50, Qty 5,000,000, holder: SettlementAgent). SplitCash 5,000,000 -> 4,975,000 + 25,000. LockCash(USD 4,975,000.00, holder: SettlementAgent)."
       },
       {
         title: "DvpInstruction Tri-Party Co-Signature",
-        desc: "Seller, Buyer, and Settlement Agent co-sign atomic DvpInstruction with unique CorrelationId and settlement deadline.",
-        log: "2026-09-24T10:00:05Z [CANTON] submitMulti [DealerBankA, DealerBankB, DTCCSettlementAgent] -> Created DvpInstruction(#001:2, Status: PendingDvp)."
+        desc: "Seller, buyer, and settlement agent co-sign the DvpInstruction naming the ISIN, quantity, consideration, accounts, and lock references.",
+        log: "2026-09-24T10:00:05Z [LEDGER] Created DvpInstruction(TRD-US-TREAS-4P25-NOV26-001, Model 1, Status: PendingSettlement) signed by DealerBankA, DealerBankB, SettlementAgent."
       },
       {
         title: "Atomic DvP Execution & Ownership Transfer",
-        desc: "Settlement Agent triggers ExecuteDvp: Security transfers to Buyer, Cash transfers to Seller atomically in a single Canton transaction commit.",
-        log: "2026-09-24T10:00:07Z [SETTLEMENT] ExecuteDvp committed! SecurityPosition transferred to DealerBankB; CashPosition transferred to DealerBankA. Zero delivery risk."
+        desc: "ExecuteDvpSettlement validates both locked legs against the instruction, then delivers the Treasury to the buyer and the cash to the seller in one transaction. Any mismatch aborts both legs.",
+        log: "2026-09-24T10:00:07Z [SETTLEMENT] ExecuteDvpSettlement: legs validated (owner, account, ISIN, qty, amount, lock holder, lock ref). SettleLockedSecurity -> DealerBankB; SettleLockedCash -> DealerBankA. Committed atomically."
       },
       {
-        title: "SEC CAT Regulatory Report Emission",
-        desc: "Regulatory reporting engine generates CAT trade audit report; SECRegulator node acknowledges transaction.",
-        log: "2026-09-24T10:00:09Z [REGULATOR] SEC CAT Trade Report submitted to SECRegulator node. Acknowledged: CAT-ACK-2026-US912828ZM24-001. Lifecycle Closed."
+        title: "Regulatory Report Submission",
+        desc: "The seller records a RegulatoryReportRecord under the SEC CAT regime; the regulator, an observer on that record only, acknowledges it.",
+        log: "2026-09-24T10:00:09Z [REGULATOR] RegulatoryReportRecord(SEC_CAT) created by DealerBankA. AcknowledgeReport by SupervisoryAuthority. isAcknowledged = True."
       }
     ]
   },
@@ -317,8 +319,8 @@ const SCENARIOS = {
       },
       {
         title: "Periodic Borrow Fee Accrual (Act360)",
-        desc: "Lender accrues lending fees for 30 elapsed days ($5,000,000 × 0.75% × 30/360 = $3,125.00).",
-        log: "2026-09-24T10:00:03Z [FINANCE] Exercise AccrueLendingFee. Accrued Fee: $3,125.00 USD. Borrower executes PayLendingFee via CashPosition transfer."
+        desc: "Lender and borrower jointly agree the 30-day fee ($5,000,000 × 0.75% × 30/360 = $3,125.00); the lender confirms receipt of payment.",
+        log: "2026-09-24T10:00:03Z [FINANCE] AccrueLendingFee (lender + borrower): $3,125.00 USD. PayLendingFee confirmed by lender. Accrued fee balance: $0.00."
       },
       {
         title: "Mark-to-Market Collateral Revaluation",
@@ -327,13 +329,13 @@ const SCENARIOS = {
       },
       {
         title: "Recall Issuance & Pro-Rata Return",
-        desc: "Lender issues formal recall for 2.5M securities; Borrower returns securities and Custodian releases $2.575M cash collateral.",
-        log: "2026-09-24T10:00:07Z [RECALL] Exercise RecallSecurities (Qty: 2,500,000). ReturnSecurities executed -> Collateral released pro-rata."
+        desc: "Lender recalls 2.5M securities; the borrower returns them and releases at most the pro-rata share of collateral ($2.5755M of $5.151M).",
+        log: "2026-09-24T10:00:07Z [RECALL] RecallSecurities (Qty 2,500,000). ReturnSecurities 2,500,000 with collateral release 2,575,500 (pro-rata cap enforced). Recall satisfied."
       },
       {
         title: "Final Return & Agreement Closeout",
         desc: "Borrower returns remaining balance; SecuritiesLendingAgreement transitions to LendingClosed; full lien discharged.",
-        log: "2026-09-24T10:00:09Z [CLOSEOUT] Final securities returned. Status transitioned to LendingClosed. AssetPledge permanently archived."
+        log: "2026-09-24T10:00:09Z [CLOSEOUT] Final securities returned (borrowed quantity 0). Status transitioned to LendingClosed. AssetPledge released (status Closed)."
       }
     ]
   },
@@ -343,8 +345,8 @@ const SCENARIOS = {
     steps: [
       {
         title: "Multi-Entity Cash Account Setup",
-        desc: "Operating accounts created at Global Bank for US Subsidiary ($25M USD) and EU Subsidiary (20M EUR). Master Pool initialized.",
-        log: "2026-09-24T10:00:01Z [TREASURY] Created Account ACC-US-OPS ($25M USD), ACC-EU-OPS (20M EUR), and ACC-HQ-CONCENTRATION ($10M USD)."
+        desc: "Global Bank issues cash positions to the US Subsidiary ($25M USD), the EU Subsidiary (20M EUR), and the HQ concentration account ($10M USD).",
+        log: "2026-09-24T10:00:01Z [TREASURY] Created CashPosition ACC-SUB-US-01 ($25M USD), ACC-SUB-EU-01 (20M EUR), ACC-HQ-CONCENTRATION-01 ($10M USD)."
       },
       {
         title: "Surplus Identification via SplitCash",
@@ -353,18 +355,18 @@ const SCENARIOS = {
       },
       {
         title: "Concentration Sweep & Pool Consolidation",
-        desc: "US Subsidiary transfers $15M to Treasury HQ concentration pool; HQ calls MergeCash to create $25M master liquidity pool.",
-        log: "2026-09-24T10:00:05Z [SWEEP] TransferCash to TreasuryHQ completed. MergeCash consolidated pool balance to $25,000,000.00 USD."
+        desc: "US Subsidiary, Global Bank, and Treasury HQ jointly authorize the $15M transfer; HQ merges it into a $25M master liquidity pool.",
+        log: "2026-09-24T10:00:05Z [SWEEP] TransferCash (owner + bank + receiver) to TreasuryHQ. Observers cleared. MergeCash pool balance: $25,000,000.00 USD."
       },
       {
         title: "Intercompany PaymentInstruction & SWIFT UETR Tracing",
-        desc: "Treasury HQ issues $8M funding payment instruction; Settlement Agent attaches SWIFT UETR tracking reference.",
+        desc: "Treasury HQ, the US Subsidiary, and Global Bank co-sign an $8M payment instruction; HQ locks $8M to Global Bank for the payment.",
         log: "2026-09-24T10:00:07Z [PAYMENT] PaymentInstruction created with IdempotencyKey IDEMP-2026-09-24-01. Attached UETR: e1a49f82-3d92-4f10-bf91-b3b281f9a12c."
       },
       {
         title: "Payment Clearing & Atomic Settlement",
-        desc: "Global Bank confirms clearing; funds are transferred atomically to beneficiary subsidiary with sub-transaction privacy.",
-        log: "2026-09-24T10:00:09Z [SETTLED] PaymentInstruction transitioned to Settled. EU Subsidiary and third-party competitors observe zero transaction details."
+        desc: "Global Bank, as lock holder, delivers the locked $8M to the US Subsidiary and confirms the payment instruction as settled.",
+        log: "2026-09-24T10:00:09Z [SETTLED] SettleLockedCash -> USSubsidiary ($8,000,000.00). ConfirmPaymentSettlement: Settled. EU Subsidiary sees none of these contracts."
       }
     ]
   }
@@ -478,9 +480,8 @@ function executeNextScenarioStep() {
   }
 
   const step = scenario.steps[currentStepIndex];
-  const latency = Math.floor(Math.random() * 8) + 38;
-  const latencyEl = document.getElementById('metric-latency');
-  if (latencyEl) latencyEl.textContent = `${latency} ms (BFT Commit)`;
+  const progressEl = document.getElementById('metric-latency');
+  if (progressEl) progressEl.textContent = `Step ${currentStepIndex + 1} of ${scenario.steps.length}`;
 
   appendTerminalLine(`Executing Phase ${currentStepIndex + 1}: ${step.title}...`, "cyan");
   appendTerminalLine(step.log, "green");
@@ -516,15 +517,15 @@ function exportScenarioAuditCsv() {
   const scenario = SCENARIOS[currentScenarioKey];
   if (!scenario) return;
 
-  let csv = 'Timestamp,Scenario,PhaseIndex,PhaseTitle,CantonLog,ValidationStatus\n';
+  let csv = 'ExportedAt,Scenario,PhaseIndex,PhaseTitle,SimulatedLedgerLog,SimulationStatus\n';
   scenario.steps.forEach((step, idx) => {
     const executed = idx < currentStepIndex;
     const logClean = step.log.replace(/"/g, '""');
-    csv += `"${new Date().toISOString()}","${scenario.title}","${idx + 1}","${step.title}","${logClean}","${executed ? 'EXECUTED_AND_PROVEN' : 'PENDING'}"\n`;
+    csv += `"${new Date().toISOString()}","${scenario.title}","${idx + 1}","${step.title}","${logClean}","${executed ? 'SIMULATED' : 'PENDING'}"\n`;
   });
 
   downloadFile(`aryafi_audit_${currentScenarioKey}_${Date.now()}.csv`, 'text/csv', csv);
-  appendTerminalLine(`Exported regulatory audit report: aryafi_audit_${currentScenarioKey}.csv`, "yellow");
+  appendTerminalLine(`Exported simulation log: aryafi_audit_${currentScenarioKey}.csv`, "yellow");
 }
 
 function exportScenarioAuditJson() {
@@ -533,29 +534,23 @@ function exportScenarioAuditJson() {
 
   const data = {
     exportDate: new Date().toISOString(),
-    network: "Canton Protocol v30",
-    domainId: "aryafi_domain::1220a4b7f8c1992e",
+    disclaimer: "Scripted simulation. Log lines describe the Daml choices the AryaFi library executes in its test scenarios; no ledger was contacted and nothing here is an audit record.",
+    platform: "Daml SDK 2.10.0 / Canton 2.10 (protocol version 5)",
     scenarioKey: currentScenarioKey,
     scenarioTitle: scenario.title,
     currentStepIndex: currentStepIndex,
     totalSteps: scenario.steps.length,
-    consensusEngine: "Canton BFT Sequencer",
-    invariants: {
-      lemma1_value_conservation: "PROVEN (Δ = 0.00)",
-      capitalAdequacyRule15c3_3: "COMPLIANT",
-      zeroLeakageACS: "VERIFIED"
-    },
     phases: scenario.steps.map((s, idx) => ({
       phaseNumber: idx + 1,
       title: s.title,
       description: s.desc,
       ledgerLog: s.log,
-      status: idx < currentStepIndex ? "EXECUTED" : "PENDING"
+      status: idx < currentStepIndex ? "SIMULATED" : "PENDING"
     }))
   };
 
   downloadFile(`aryafi_audit_${currentScenarioKey}_${Date.now()}.json`, 'application/json', JSON.stringify(data, null, 2));
-  appendTerminalLine(`Exported machine-readable ledger audit JSON: aryafi_audit_${currentScenarioKey}.json`, "yellow");
+  appendTerminalLine(`Exported simulation log (JSON): aryafi_audit_${currentScenarioKey}.json`, "yellow");
 }
 
 function downloadFile(filename, mimeType, content) {
@@ -585,7 +580,7 @@ function clearTerminal() {
   const terminal = document.getElementById('scenario-terminal-output');
   if (terminal) {
     terminal.innerHTML = `
-      <div class="terminal-line gray">> Canton Ledger API connected to aryafi_domain...</div>
+      <div class="terminal-line gray">> Scripted simulation of the library's Daml test scenarios (no ledger connection).</div>
       <div class="terminal-line green">> Ready. Select a scenario and click 'Next Phase' or 'Auto-Run' to begin execution.</div>
     `;
   }
@@ -1121,20 +1116,4 @@ function initCopyButtons() {
   handleCopy('btn-copy-daml', 'iso-daml-display');
   handleCopy('btn-copy-source', 'daml-viewer-content');
   handleCopy('btn-copy-log', 'scenario-terminal-output');
-}
-
-// ============================================================================
-// 9. Live Telemetry Tickers
-// ============================================================================
-
-function initTelemetryCounters() {
-  let volume = 85000000;
-  const volEl = document.getElementById('ticker-volume');
-
-  setInterval(() => {
-    volume += Math.floor(Math.random() * 25000);
-    if (volEl) {
-      volEl.textContent = `$${(volume / 1000000).toFixed(2)}M`;
-    }
-  }, 4000);
 }
