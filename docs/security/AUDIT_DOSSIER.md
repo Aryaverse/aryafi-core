@@ -1,119 +1,131 @@
-# Independent Security Review Preparation Dossier & Invariant Proofs
+# Security Review Preparation Dossier & Invariant Arguments
 
-## 1. Executive Summary & Audit Scope
+## 1. Executive Summary & Review Scope
 
-This dossier serves as the formal briefing package for independent smart contract auditing and cryptography assurance firms evaluating **AryaFi Core** for production certification.
+This dossier is the briefing package for an independent security review of **AryaFi Core**. **No independent review has taken place yet.** Until one does, no module carries the `Production Candidate` or `Production Reviewed` label (see [KNOWN_LIMITATIONS.md](../KNOWN_LIMITATIONS.md)).
 
-### 1.1 Target Architecture & Scope of Review
-- **Language**: Daml (GHC-based Haskell derivative) targeting Canton Network protocol v30.
-- **Source Code Tree**:
-  - `daml/src/AryaFi/Common/`: Domain types, mathematical conventions, error codes, identifiers, events.
-  - `daml/src/AryaFi/Finance/`: Primitives (`CashPosition`, `SecurityPosition`, `Account`, `PaymentInstruction`, `DvpInstruction`).
-  - `daml/src/AryaFi/Contracts/`: Financing lifecycle contracts (`InstitutionalLoan`, `RepoAgreement`, `SecuritiesLendingAgreement`, `AssetPledge`, `EscrowAgreement`, `FundSubscription`, `AssetRedemption`, `Transfer`).
-  - `daml/src/AryaFi/Compliance/`: Policy gating (`KYCAttestation`, `SanctionsScreening`, `Eligibility`, `RegulatoryReporting`).
-- **Target Release**: `v1.0.0-rc1`
-
----
-
-## 2. Mathematical Invariant Proofs & Formal Properties
-
-The integrity of financial transactions on AryaFi depends on strict formal properties enforced at the contract layer:
-
-### Lemma 1: Strict Value Conservation in Position Splits and Merges
-*Claim*: For any operation $\mathcal{O} \in \{\text{SplitCash}, \text{MergeCash}\}$ applied to an Active Contract Set state $\mathcal{S}$, the sum of monetary units across accounts is strictly invariant:
-
-$$\sum_{p \in \mathcal{S}_{\text{post}}} p.\text{amount} \equiv \sum_{p \in \mathcal{S}_{\text{pre}}} p.\text{amount}$$
-
-*Proof*:
-1. **Case `SplitCash`**: Let $P$ be a position with amount $A$. The choice accepts argument $s$.
-   - Precondition guards enforce: $s > 0 \land s < A$.
-   - The choice consumes $P$ and creates $P_1$ with amount $s$ and $P_2$ with amount $A - s$.
-   - The sum of output amounts is $s + (A - s) = A$.
-   - Hence $\Delta = (s + A - s) - A = 0$. Value is strictly conserved.
-2. **Case `MergeCash`**: Let $P_1$ be the calling position with amount $A_1$, and $P_2$ be the target position with amount $A_2$.
-   - Precondition guards enforce identical `(bank, owner, accountId, currency)` and `not isLocked`.
-   - The choice consumes $P_2$ via explicit `archive otherCid` and replaces $P_1$ with $P_{\text{merged}}$ of amount $A_1 + A_2$.
-   - Sum of inputs: $A_1 + A_2$. Sum of outputs: $A_1 + A_2$.
-   - Value is strictly conserved. $\blacksquare$
-
-### Lemma 2: Non-Negative Quantity Invariant
-*Claim*: No contract instance of `CashPosition` or `SecurityPosition` can exist on ledger with an amount/quantity less than or equal to zero.
-
-*Proof*:
-- Both templates define compile-time Daml `ensure` clauses:
-  ```daml
-  ensure amount > 0.0
-  ```
-  ```daml
-  ensure quantity > 0.0
-  ```
-- In Daml runtime semantics, any transaction that attempts to create a contract violating the `ensure` clause is rejected atomically by the ledger validation engine during interpretation. Therefore, negative or zero positions cannot enter the Active Contract Set. $\blacksquare$
-
-### Lemma 3: Dual-Signatory Lock Exclusivity
-*Claim*: No encumbered asset can be moved, split, merged, or double-pledged.
-
-*Proof*:
-- The choices `SplitCash`, `MergeCash`, and `TransferCash` all evaluate the precondition:
-  ```daml
-  require (not isLocked) "Cannot operate on a locked position"
-  ```
-- Because contracts are immutable and state transitions consume the contract ID, a locked contract cannot be used in a settlement leg until the dual-signatory choice `UnlockCash` is exercised jointly by both `owner` and `bank`. $\blacksquare$
+### 1.1 Target Platform & Scope of Review
+- **Language / platform**: Daml SDK 2.10.0 (Daml-LF 1.x), deployed on Canton 2.10 (protocol version 5).
+- **Source tree in scope**:
+  - `daml/src/AryaFi/Common/`: Domain types, day-count conventions, error helpers, identifiers, audit events, policy decisions.
+  - `daml/src/AryaFi/Finance/`: `CashPosition`, `SecurityPosition`, `AssetHolding`, `Account`, `InstitutionalParty`, `CollateralPosition`, `FinancialObligation`, `PaymentInstruction`, `DvpInstruction`.
+  - `daml/src/AryaFi/Contracts/`: `InstitutionalLoan`, `RepoAgreement`, `ReverseRepoPosition`, `SecuritiesLendingAgreement`, `MarginCall`, `AssetPledge`, `ConditionalEscrow`, `AssetTransferRequest`, `FundSubscription`, `AssetRedemption`.
+  - `daml/src/AryaFi/Compliance/`: `KycAttestation`, `SanctionsAttestation`, `JurisdictionProfile`, `EligibilityPolicy`, `TransferRestrictionRule`, `OwnershipRestriction`, `RegulatoryReportRecord`.
+- **Out of scope**: the test scripts under `daml/src/AryaFi/Test/`, the web terminal, and the deployment configuration.
+- **Authorization reference**: [AUTHORIZATION_MATRIX.md](AUTHORIZATION_MATRIX.md), generated from the source.
+- **Target release**: `v1.0.2`
 
 ---
 
-## 4. Automated Test Coverage & Assurance Verification
+## 2. Invariants and the Tests That Check Them
 
-AryaFi Core enforces six layers of automated testing:
+Each invariant below is argued from the code and exercised by a named test. They are arguments for reviewers to verify, not formal proofs.
 
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                        AryaFi Test Architecture                        │
-├────────────────────────────┬───────────────────────────────────────────┤
-│ 1. Unit Tests              │ Common types, time math, financial splits │
-│ 2. Lifecycle Scenarios     │ End-to-end Loan, Repo, SecLending, DvP    │
-│ 3. Negative Tests          │ Boundary violations, assertion trips      │
-│ 4. Authorization Tests     │ Unauthorized party submission rejections  │
-│ 5. Privacy Verification    │ Canton observer boundary checks           │
-│ 6. Integration Tests       │ Cross-module compliance gating pipelines  │
-└────────────────────────────┴───────────────────────────────────────────┘
-```
+### Invariant 1: Value Conservation in Splits and Merges
+*Claim*: `SplitCash` and `MergeCash` (and `SplitSecurity`) neither create nor destroy value.
 
-### Test Suite Execution Summary:
-- **Unit Suites**: Tested across 11 test modules (`FinanceTest`, `CommonTest`, `FundLifecycleTest`, `SecuritiesLendingTest`, etc.).
-- **Scenario Coverage**: 8 comprehensive multi-party institutional lifecycle scenarios.
-- **Negative & Security Hardening**:
-  - `ComplianceViolationTest.daml`: 8 negative compliance violation tests.
-  - `UnauthorizedAccessTest.daml`: 12 unauthorized access tests verifying submitter rejections.
-  - `InvalidStateTransitionTest.daml`: 15 state machine invalid transition enforcement tests.
-  - `ObserverPrivacyTest.daml`: Verifies outsider and non-observer cryptographic blindness.
+*Argument*:
+- `SplitCash` requires `0 < s < A`, consumes the position of amount `A`, and creates positions of `s` and `A - s`.
+- `MergeCash` requires the same bank, owner, account, and currency, and both positions unlocked; it archives the other position (`A2`) and recreates this one (`A1`) with `A1 + A2`.
+- Daml `Decimal` is fixed-point with 10 decimal places, so `s + (A - s) = A` holds exactly; there is no floating-point rounding.
+
+*Tests*: `Unit/AssetCashTest.daml` (split, merge, boundary cases), `Scenarios/TreasuryCashScenario.daml` (split, sweep, merge).
+
+### Invariant 2: Positive Position Quantities
+*Claim*: No `CashPosition`, `SecurityPosition`, or `AssetHolding` exists with a zero or negative amount or quantity.
+
+*Argument*: each template's `ensure` clause requires `amount > 0.0` / `quantity > 0.0`; a transaction that would create a violating contract is rejected.
+
+*Tests*: `Unit/AssetCashTest.daml`, `Negative/InvalidStateTransitionTest.daml`.
+
+### Invariant 3: Lock Integrity
+*Claim*: A locked position cannot be split, merged, transferred, or unlocked except through its lock holder.
+
+*Argument*:
+- `ensure ... isLocked == (lockHolder /= None)` ties the lock flag to a named lock holder.
+- `SplitCash`, `MergeCash`, `TransferCash` (and the security/asset equivalents) require `not isLocked`.
+- `UnlockCash` / `UnlockSecurity` / `UnlockAsset` are controlled by the lock holder alone; `SettleLockedCash` / `SettleLockedSecurity` are controlled by the lock holder and the receiver.
+- Owner and bank/custodian consent once, when creating the lock; afterwards they cannot withdraw the position from the settlement it was locked for.
+
+*Scope limit*: this invariant covers positions. It does **not** prevent double-pledging: `AssetPledge`, `CollateralPosition`, and `MarginCall` reference assets by text, so the ledger does not link them to a locked position. (An earlier version of this dossier claimed otherwise; that claim was incorrect.)
+
+*Tests*: `Scenarios/DvpSettlementTest.daml` (`testLockedLegsCannotBeWithdrawn`), `Authorization/MultiSignatoryTest.daml`, `Negative/UnauthorizedAccessTest.daml`.
+
+### Invariant 4: DvP Atomicity
+*Claim*: Either both legs of a DvP settle or neither does.
+
+*Argument*: `ExecuteDvpSettlement` fetches both locked legs, checks owner, account, ISIN, quantity, currency, amount, lock holder, and lock reference against the instruction, then exercises `SettleLockedSecurity` and `SettleLockedCash` and records `Settled`, all within one Daml transaction. Any failed check aborts the whole transaction.
+
+*Tests*: `Scenarios/DvpSettlementTest.daml` (`testDvpFullLifecycle`, `testDvpRejectsMismatchedLegs`, `testCannotReExecuteSettledDvp`), `Scenarios/TreasuryDvpScenario.daml`.
+
+### Invariant 5: No Party Reduces Its Own Obligation
+*Claim*: An obligor cannot record its own payment, and a creditor cannot unilaterally increase what is owed.
+
+*Argument*: `PayDownPrincipal` and `PayAccruedInterest` are controlled by the lender; `AccrueInterest` computes interest from the contract's rate, day count, and ledger time and takes no amount; `AccrueLendingFee` needs lender and borrower; `PayLendingFee` is controlled by the lender; margin fulfilment is only satisfied when the caller runs `ConfirmMarginReceipt`; `ReturnSecurities` caps collateral release pro rata; `DischargeObligation` is controlled by the obligee.
+
+*Tests*: `Unit/LoanTest.daml` (`testBorrowerCannotRecordOwnRepayment`), `Unit/SecuritiesLendingTest.daml` (`testBorrowerCannotReduceOwnObligations`), `Unit/RepoMarginTest.daml` (`testMarginCallPledgeFulfillment`, `testMarginDeadlineAndRejection`).
+
+### Invariant 6: Consent for Ownership and Disclosure
+*Claim*: No position is created for a party without its authority, and bilateral agreements are only disclosed with both counterparties' consent.
+
+*Argument*: transfers are controlled by owner, bank/custodian, and the receiving owner; `Add*Observer` choices on loans, repos, securities loans, margin calls, pledges, and collateral positions are controlled by both principals; observers are cleared on transfer.
+
+*Tests*: `Authorization/MultiSignatoryTest.daml`, `Privacy/ObserverPrivacyTest.daml`, `Scenarios/EscrowScenario.daml` (`testPledgeAddObserver`).
 
 ---
 
-## 5. Known Assumptions & Cryptographic Dependencies
+## 3. Automated Test Coverage
 
-1. **Entropy & Key Security**: Private keys for Canton participant nodes must be managed via hardware security modules (HSM) conforming to FIPS 140-2 Level 3.
-2. **Oracle / Market Data Feeds**: Mark-to-market prices for collateral revaluations in Repo and Securities Lending are currently provided as validated choice arguments co-signed by counterparties or trusted calculation agents. Off-ledger feeds must be vetted for Sybil and flash loan manipulation.
-3. **Clock Skew Tolerance**: Canton enforces a domain record time tolerance (default: 60 seconds). Time-dependent choices (e.g. loan maturity, recall deadlines) rely on Canton consensus sequencer timestamps.
+`daml test --show-coverage` on v1.0.2:
+
+| Measure | Result |
+|:---|:---|
+| Test scripts | 289, all passing |
+| Templates created | 26 of 27 (96.3%); `JurisdictionProfile` is never created |
+| Choices exercised | 138 of 206 (67.0%), counting each template's implicit `Archive` |
+
+| Suite | Files | Focus |
+|:---|:---|:---|
+| `Unit/` | 11 | Types, day counts, primitives, contracts, compliance policies |
+| `Scenarios/` | 9 | End-to-end DvP, repo, loan, securities lending, treasury, escrow, private credit, transfer |
+| `Negative/` | 3 | Unauthorized submitters, compliance violations, invalid state transitions |
+| `Authorization/` | 1 | Multi-signatory consent |
+| `Privacy/` | 1 | Observer visibility from each party's viewpoint |
+| `Integration/` | 1 | Cross-module workflows on a single ledger |
+
+Not yet covered: property-based tests, multi-participant tests on a real Canton topology, and concurrency/contention tests.
 
 ---
 
-## 6. Auditor Verification Runbook
+## 4. Known Assumptions & Dependencies
 
-External audit teams can verify the codebase using the following steps:
+1. **Key security**: Participant node keys are managed outside the contract layer (HSM/KMS); see [OPERATIONS_GUIDE.md](../deployment/OPERATIONS_GUIDE.md).
+2. **Market data**: Collateral and repo revaluations take prices as choice arguments from the custodian or both counterparties. There is no on-ledger price oracle; off-ledger price sources must be controlled by the operator.
+3. **Time**: Time-dependent choices (loan accrual and maturity, recall and margin deadlines, KYC and sanctions expiry) use Daml ledger time, which Canton bounds by the domain's ledger-time/record-time tolerance.
+4. **Multi-party submission**: The tests create multi-signatory contracts with `submitMulti`. On separate participants this needs propose/accept workflows (not yet provided).
+
+---
+
+## 5. Reviewer Verification Runbook
 
 ```bash
-# 1. Clean build verification
+# 1. Clean build with warnings as errors (see daml.yaml build-options)
 daml clean
 daml build
 
-# 2. Run full test suite across all modules
-daml test
+# 2. Run the full test suite with coverage
+daml test --show-coverage
 
-# 3. Inspect generated Daml Archive metadata
-daml damlc inspect-dar .daml/dist/aryafi-core-0.1.0.dar
+# 3. Inspect the DAR
+daml damlc inspect-dar .daml/dist/aryafi-core-1.0.0.dar
 
-# 4. Verify specific security & privacy suites
-daml test --test-pattern ObserverPrivacyTest
-daml test --test-pattern UnauthorizedAccessTest
-daml test --test-pattern InvalidStateTransitionTest
+# 4. Run specific security and privacy suites (--files selects a test module;
+#    --test-pattern would match script names, not file names)
+daml test --files daml/src/AryaFi/Test/Privacy/ObserverPrivacyTest.daml
+daml test --files daml/src/AryaFi/Test/Negative/UnauthorizedAccessTest.daml
+daml test --files daml/src/AryaFi/Test/Scenarios/DvpSettlementTest.daml
+
+# 5. Confirm the authorization matrix matches the source
+python3 scripts/gen_authorization_matrix.py
+git diff --exit-code docs/security/AUTHORIZATION_MATRIX.md
 ```

@@ -40,7 +40,6 @@ import AryaFi.Compliance.KYC
 import AryaFi.Compliance.Sanctions
 import AryaFi.Contracts.Subscription
 import AryaFi.Contracts.Redemption
-import AryaFi.Common.Types
 import AryaFi.Common.Identifiers
 import DA.Date (date, Month(..))
 import DA.Time (time)
@@ -59,39 +58,41 @@ testPrivateCreditFundLifecycle = script do
   regulator <- allocateParty "SEC"
 
   let now = time (date 2026 Sep 1) 9 0 0
+
+  setTime now
   let expiryDate = time (date 2027 Sep 1) 9 0 0
-  let settleDate = time (date 2026 Dec 15) 15 0 0
+  let _settleDate = time (date 2026 Dec 15) 15 0 0
 
   -- =========================================================================
   -- Phase 1: Investor Onboarding & Compliance Verification
   -- =========================================================================
   lpKycCid <- submit kycAuth do
-    createCmd KYCAttestation with
-      attestationId = "KYC-GIC-2026-001"
-      party = lp
+    createCmd KycAttestation with
       authority = kycAuth
-      kycLevel = Tier3Institutional
-      riskScore = 5
-      validFrom = now
-      validTo = expiryDate
-      lei = Some "5493000ABCD123456789"
+      subjectParty = lp
+      lei = Some (LEI "5493000ABCD123456789")
+      status = KycVerified
+      verificationTimestamp = now
+      expiryTimestamp = expiryDate
       jurisdiction = "SG"
+      riskTier = "Tier3Institutional (risk score 5)"
+      providerRef = Some (ExternalRef "KYC-GIC-2026-001")
       observers = [regulator]
 
   lpSanctionsCid <- submit sanctionsAuth do
-    createCmd SanctionsScreeningAttestation with
-      screeningId = "SANC-GIC-001"
-      party = lp
-      screener = sanctionsAuth
+    createCmd SanctionsAttestation with
+      screeningAuthority = sanctionsAuth
+      subjectParty = lp
+      lei = None
       status = SanctionsClear
-      listsChecked = ["OFAC_SDN", "EU_CONSOLIDATED", "UN_SANCTIONS"]
-      screenedAt = now
-      validUntil = expiryDate
-      screeningReference = "SCREEN-GIC-2026-01"
+      screeningTimestamp = now
+      expiryTimestamp = expiryDate
+      screeningProviderRef = "SCREEN-GIC-2026-01" <> " lists: " <> show (["OFAC_SDN", "EU_CONSOLIDATED", "UN_SANCTIONS"] : [Text])
+      providerRef = Some (ExternalRef "SANC-GIC-001")
       observers = [regulator]
 
-  isKycValid <- submit lp do exerciseCmd lpKycCid IsKycValid with asOf = now
-  isClear <- submit lp do exerciseCmd lpSanctionsCid IsSanctionsClear with asOf = now
+  isKycValid <- submit kycAuth do exerciseCmd lpKycCid IsKycValid
+  isClear <- submit sanctionsAuth do exerciseCmd lpSanctionsCid IsSanctionsClear
   assertMsg "LP KYC must be valid" isKycValid
   assertMsg "LP must be sanctions clear" isClear
 
@@ -203,7 +204,6 @@ testPrivateCreditFundLifecycle = script do
   redCidSettled <- submit custodian do
     exerciseCmd redCidApproved ExecuteRedemptionSettlement with
       paymentRef = "FEDWIRE-RED-GIC-PAYOUT-01"
-      actualSettlementTime = settleDate
 
   Some redFinal <- queryContractId lp redCidSettled
   assertMsg "Redemption must be Settled" (redFinal.status == RedemptionSettled "FEDWIRE-RED-GIC-PAYOUT-01" 11144000.0)
@@ -220,6 +220,8 @@ testLiquidityGatingScenario = script do
   custodian <- allocateParty "FundCustodian"
 
   let now = time (date 2026 Sep 1) 9 0 0
+
+  setTime now
 
   redCid <- submitMulti [gp, lp] [] do
     createCmd AssetRedemption with

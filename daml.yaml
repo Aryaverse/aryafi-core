@@ -1,7 +1,7 @@
 sdk-version: 2.10.0
 name: aryafi-core
 source: daml/src
-init-script: AryaFi.Test.Scenarios.TreasuryDvpScenario:testTreasuryDvp
+init-script: AryaFi.Test.Scenarios.TreasuryDvpScenario:runTreasuryDvpScenario
 version: 1.0.0
 dependencies:
   - daml-prim
@@ -10,3 +10,6 @@ dependencies:
 build-options:
   - --ghc-option=-Wall
   - --ghc-option=-Werror
+  # `maintainer key._1` binds a variable named `key`, which -Wall reports as
+  # shadowing Prelude.key; that idiom is safe, so this one warning is disabled.
+  - --ghc-option=-Wno-name-shadowing

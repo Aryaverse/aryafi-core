@@ -26,7 +26,7 @@
         </div>
         <div class="logo-text-group">
           <span class="logo-title">AryaFi Core</span>
-          <span class="logo-subtitle"><span class="pulse-dot"></span> Canton Protocol v30</span>
+          <span class="logo-subtitle"><span class="pulse-dot"></span> Daml 2.10 · Canton 2.10</span>
         </div>
       </a>
 
@@ -66,7 +66,7 @@
         <button class="btn-shortcuts-toggle" id="shortcuts-toggle-btn" aria-label="Terminal Keyboard Shortcuts" title="Press ? for keyboard shortcuts">
           <span>⌨</span> <span>Hotkeys</span>
         </button>
-        <span class="badge-tag">v1.0.0-rc1 Production Candidate</span>
+        <span class="badge-tag">v1.0.2 · Beta (not yet audited)</span>
         <a href="https://github.com/Aryaverse/aryafi-core" target="_blank" rel="noopener noreferrer" class="btn-github">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
           GitHub
@@ -89,24 +89,24 @@
       <!-- Telemetry Ticker -->
       <div class="telemetry-grid">
         <div class="telemetry-card">
-          <span class="telemetry-label">Settled Volume (24h)</span>
-          <span class="telemetry-value emerald" id="ticker-volume">$85.00M</span>
-          <span class="telemetry-sub">Across 5 Primary Dealers</span>
+          <span class="telemetry-label">Daml Test Scripts</span>
+          <span class="telemetry-value emerald">289 Passing</span>
+          <span class="telemetry-sub">daml test, -Wall -Werror build</span>
         </div>
         <div class="telemetry-card">
-          <span class="telemetry-label">Active Contract Set</span>
-          <span class="telemetry-value cyan">142 Contracts</span>
-          <span class="telemetry-sub">On-Ledger Zero-Knowledge Proofs</span>
+          <span class="telemetry-label">Contract Templates</span>
+          <span class="telemetry-value cyan">27 Templates</span>
+          <span class="telemetry-sub">96% created · 67% of choices exercised in tests</span>
         </div>
         <div class="telemetry-card">
-          <span class="telemetry-label">Canton Domain State</span>
-          <span class="telemetry-value purple">30ms Latency</span>
-          <span class="telemetry-sub">Protocol v30 | 5 Participant Nodes</span>
+          <span class="telemetry-label">Reference Topology</span>
+          <span class="telemetry-value purple">5 Participants</span>
+          <span class="telemetry-sub">Canton 2.10 · protocol version 5</span>
         </div>
         <div class="telemetry-card">
-          <span class="telemetry-label">Mathematical Invariant</span>
-          <span class="telemetry-value emerald">&Delta; = 0.00</span>
-          <span class="telemetry-sub">Conservation of Value Guaranteed</span>
+          <span class="telemetry-label">Settlement Model</span>
+          <span class="telemetry-value emerald">Atomic DvP</span>
+          <span class="telemetry-sub">Both legs in one Daml transaction</span>
         </div>
       </div>
     </div>
@@ -157,7 +157,7 @@
               <circle cx="400" cy="250" r="85" fill="url(#centerGlow)"/>
               <circle cx="400" cy="250" r="50" class="topology-hub-circle" stroke="#10b981" stroke-width="2"/>
               <text x="400" y="246" text-anchor="middle" class="topology-hub-title">CANTON DOMAIN</text>
-              <text x="400" y="262" text-anchor="middle" fill="#059669" font-family="JetBrains Mono" font-size="9" font-weight="700">BFT Sequencer</text>
+              <text x="400" y="262" text-anchor="middle" fill="#059669" font-family="JetBrains Mono" font-size="9" font-weight="700">Sequencer · Mediator</text>
 
               <!-- Connection Mesh Lines -->
               <line x1="400" y1="250" x2="200" y2="120" stroke="var(--border-medium)" stroke-width="1.5" stroke-dasharray="4 4"/>
@@ -175,7 +175,7 @@
                 <circle cx="0" cy="0" r="42" fill="url(#nodeGlow)"/>
                 <circle cx="0" cy="0" r="34" class="node-ring" stroke="var(--border-accent)" stroke-width="2"/>
                 <text x="0" y="-3" class="node-label">BANK NODE</text>
-                <text x="0" y="12" class="node-sublabel">USD Cash Custodian</text>
+                <text x="0" y="12" class="node-sublabel">Cash Settlement</text>
               </g>
 
               <!-- Node 2: Global Custodian (Safekeeping) -->
@@ -183,7 +183,7 @@
                 <circle cx="0" cy="0" r="42" fill="url(#nodeGlow)"/>
                 <circle cx="0" cy="0" r="34" class="node-ring" stroke="var(--border-accent)" stroke-width="2"/>
                 <text x="0" y="-3" class="node-label">CUSTODIAN</text>
-                <text x="0" y="12" class="node-sublabel">Securities CSD</text>
+                <text x="0" y="12" class="node-sublabel">Settlement Agent</text>
               </g>
 
               <!-- Node 3: Primary Dealer A -->
@@ -191,7 +191,7 @@
                 <circle cx="0" cy="0" r="42" fill="url(#nodeGlow)"/>
                 <circle cx="0" cy="0" r="34" class="node-ring" stroke="var(--border-accent)" stroke-width="2"/>
                 <text x="0" y="-3" class="node-label">DEALER A</text>
-                <text x="0" y="12" class="node-sublabel">Goldman Sachs Desk</text>
+                <text x="0" y="12" class="node-sublabel">Seller Desk</text>
               </g>
 
               <!-- Node 4: Primary Dealer B -->
@@ -199,14 +199,14 @@
                 <circle cx="0" cy="0" r="42" fill="url(#nodeGlow)"/>
                 <circle cx="0" cy="0" r="34" class="node-ring" stroke="var(--border-accent)" stroke-width="2"/>
                 <text x="0" y="-3" class="node-label">DEALER B</text>
-                <text x="0" y="12" class="node-sublabel">Morgan Stanley Desk</text>
+                <text x="0" y="12" class="node-sublabel">Buyer Desk</text>
               </g>
 
               <!-- Node 5: Regulator / Observer -->
               <g class="node-group" data-node="regulator" transform="translate(400, 420)">
                 <circle cx="0" cy="0" r="38" fill="url(#nodeGlow)"/>
                 <circle cx="0" cy="0" r="30" class="node-ring" stroke="#10b981" stroke-width="2"/>
-                <text x="0" y="-3" class="node-label">SEC / CAT</text>
+                <text x="0" y="-3" class="node-label">REGULATOR</text>
                 <text x="0" y="11" class="node-sublabel">Supervisory Node</text>
               </g>
             </svg>
@@ -216,8 +216,8 @@
         <!-- Node Details Inspector -->
         <div class="node-details-card">
           <div class="node-details-header">
-            <h3 class="node-details-title" id="node-detail-title">Federal Reserve Bank (Cash Custodian)</h3>
-            <span class="node-details-role" id="node-detail-role">Central Cash Authority &amp; Settlement Agent</span>
+            <h3 class="node-details-title" id="node-detail-title">Cash Settlement Bank</h3>
+            <span class="node-details-role" id="node-detail-role">Tokenized Deposit Issuer (CashPosition bank)</span>
           </div>
 
           <div class="node-info-grid">
@@ -231,20 +231,20 @@
             </div>
             <div class="node-info-item">
               <span class="node-info-label">Hosted Parties</span>
-              <span class="node-info-val" id="node-detail-parties">FederalReserveBank, USDCashAuthority</span>
+              <span class="node-info-val" id="node-detail-parties">CashSettlementBank</span>
             </div>
             <div class="node-info-item">
-              <span class="node-info-label">KMS Fingerprint</span>
-              <span class="node-info-val" id="node-detail-fp">1220a4b7f8c1992e401b972e3650aa1b01c38e</span>
+              <span class="node-info-label">Party Namespace</span>
+              <span class="node-info-val" id="node-detail-fp">Assigned at bootstrap</span>
             </div>
             <div class="node-info-item">
-              <span class="node-info-label">Active Contract Set (ACS)</span>
-              <span class="node-info-val" id="node-detail-contracts">48 Active Contracts</span>
+              <span class="node-info-label">Contracts Stored</span>
+              <span class="node-info-val" id="node-detail-contracts">CashPosition contracts it issued; PaymentInstructions where it is settlement agent</span>
             </div>
             <div class="node-info-item">
               <span class="node-info-label">Sub-Transaction Privacy Boundary</span>
               <span class="node-info-val" id="node-detail-privacy" style="font-size: 0.8rem; line-height: 1.45;">
-                Maintains full read visibility over tokenized USD CashPosition contracts and inter-bank clearing legs. Blind to corporate equity and fund commitments.
+                Stores only contracts where the bank is a stakeholder: the cash positions it issued. It does not see securities positions, loans, or repo agreements it is not party to.
               </span>
             </div>
           </div>
@@ -314,24 +314,24 @@
           <!-- Telemetry / Finality Metrics Row -->
           <div class="simulator-telemetry-bar">
             <div class="sim-metric-item">
-              <span class="sim-metric-label">Settlement Latency</span>
-              <span class="sim-metric-val" id="metric-latency">-- ms</span>
+              <span class="sim-metric-label">Progress</span>
+              <span class="sim-metric-val" id="metric-latency">Not started</span>
             </div>
             <div class="sim-metric-item">
-              <span class="sim-metric-label">Consensus Protocol</span>
-              <span class="sim-metric-val">Canton BFT v30</span>
+              <span class="sim-metric-label">Mode</span>
+              <span class="sim-metric-val">Scripted simulation</span>
             </div>
             <div class="sim-metric-item">
-              <span class="sim-metric-label">Crypto Proof</span>
-              <span class="sim-metric-val" id="metric-crypto">SHA-256 Validated</span>
+              <span class="sim-metric-label">Backed By</span>
+              <span class="sim-metric-val" id="metric-crypto">Daml test scenarios</span>
             </div>
             <div class="sim-metric-item">
-              <span class="sim-metric-label">Privacy Boundary</span>
-              <span class="sim-metric-val" id="metric-privacy">Zero-Leakage ACS</span>
+              <span class="sim-metric-label">Privacy Model</span>
+              <span class="sim-metric-val" id="metric-privacy">Stakeholders only</span>
             </div>
             <div class="sim-metric-item">
-              <span class="sim-metric-label">Invariant Verification</span>
-              <span class="sim-metric-val" style="color: var(--accent-emerald);">Δ = 0.00 Verified</span>
+              <span class="sim-metric-label">Ledger</span>
+              <span class="sim-metric-val">Not connected</span>
             </div>
           </div>
 
@@ -343,11 +343,11 @@
           <!-- Terminal Output Log -->
           <div>
             <div style="display: flex; justify-content: space-between; margin-bottom: 0.4rem;">
-              <span style="font-size: 0.75rem; font-family: var(--font-mono); color: var(--text-tertiary);">CANTON SUB-TRANSACTION TERMINAL LOG</span>
-              <span style="font-size: 0.75rem; font-family: var(--font-mono); color: var(--accent-emerald);">● LIVE STREAMING</span>
+              <span style="font-size: 0.75rem; font-family: var(--font-mono); color: var(--text-tertiary);">SIMULATED LEDGER LOG</span>
+              <span style="font-size: 0.75rem; font-family: var(--font-mono); color: var(--text-tertiary);">● SCRIPTED — NO LEDGER CONNECTION</span>
             </div>
             <div class="terminal-card" id="scenario-terminal-output">
-              <div class="terminal-line gray">&gt; Canton Ledger API connected to aryafi_domain...</div>
+              <div class="terminal-line gray">&gt; Scripted simulation of the library's Daml test scenarios (no ledger connection).</div>
               <div class="terminal-line green">&gt; Ready. Select a scenario and click 'Next Phase' or 'Auto-Run' to begin execution.</div>
             </div>
           </div>
@@ -356,7 +356,7 @@
     </div>
 
     <!-- ====================================================================
-         Tab 3: Contract Explorer & Invariant Proof Calculator
+         Tab 3: Contract Explorer & Split Conservation Calculator
          ==================================================================== -->
     <div class="tab-pane" id="tab-contracts" role="tabpanel" aria-labelledby="tab-btn-contracts">
       <div class="section-header">
@@ -370,10 +370,10 @@
         <!-- Invariant Calculator Card -->
         <div class="calculator-card">
           <div>
-            <span class="hero-pill">Lemma 1 Verification</span>
-            <h3 style="font-size: 1.25rem; font-weight: 800;">CashPosition Split &amp; Merge Mathematical Invariant Proof</h3>
+            <span class="hero-pill">SplitCash Illustration</span>
+            <h3 style="font-size: 1.25rem; font-weight: 800;">CashPosition Split &amp; Merge Value Conservation</h3>
             <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem;">
-              In AryaFi, every SplitCash and MergeCash operation strictly obeys the algebraic conservation law: &sum; Outputs &equiv; &sum; Inputs. No token inflation or rounding leakage is permitted.
+              SplitCash creates positions of <em>split</em> and <em>amount &minus; split</em>; MergeCash creates one position of the sum. Daml's Decimal has 10 fixed decimal places, so the arithmetic is exact. This calculator mirrors that arithmetic in the browser; the on-ledger behaviour is covered by the Daml test suite.
             </p>
           </div>
 
@@ -394,7 +394,7 @@
               <input type="number" id="calc-split-amount" class="form-input" value="3500000.00" step="50000" min="1">
             </div>
             <button class="btn-primary" id="btn-execute-split" style="height: 42px;">
-              Execute Split &amp; Verify Proof
+              Execute Split
             </button>
           </div>
 
@@ -414,8 +414,8 @@
               <span class="calc-stat-lbl">Reconstituted Total Sum</span>
             </div>
             <div class="calc-stat">
-              <span class="calc-stat-val emerald" id="calc-invariant-status">VERIFIED (&Delta; = 0.00)</span>
-              <span class="calc-stat-lbl">Lemma 1 Invariant Guarantee</span>
+              <span class="calc-stat-val emerald" id="calc-invariant-status">Run a split</span>
+              <span class="calc-stat-lbl">Split + remainder = original</span>
             </div>
           </div>
         </div>
@@ -468,7 +468,7 @@
               <span class="calc-stat-lbl">Automated Margin Call Trigger</span>
             </div>
             <div class="calc-stat">
-              <span class="calc-stat-val emerald" id="calc-lcr-status">Level 1 HQLA (Compliant)</span>
+              <span class="calc-stat-val emerald" id="calc-lcr-status">Level 1 HQLA</span>
               <span class="calc-stat-lbl">Basel III Capital Eligibility</span>
             </div>
           </div>
@@ -614,15 +614,15 @@
       <div class="iso-toolbar">
         <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
           <span class="iso-direction-badge" id="iso-direction-display">
-            <span>⇄</span> <span id="iso-direction-text">SWIFT MX (XML) &rarr; Canton Daml JSON</span>
+            <span>⇄</span> <span id="iso-direction-text">SWIFT MX (XML) &rarr; Daml JSON API request</span>
           </span>
-          <span class="badge-tag" id="iso-status-badge" style="color: var(--accent-emerald); border-color: rgba(16, 185, 129, 0.4);">
-            ✓ ISO 20022 Schema Validated
+          <span class="badge-tag" id="iso-status-badge" style="color: var(--text-secondary);">
+            Not yet validated
           </span>
         </div>
         <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
           <button class="btn-secondary" id="btn-toggle-iso-dir">⇄ Invert Direction</button>
-          <button class="btn-secondary" id="btn-validate-iso">✓ Validate Syntax &amp; Invariants</button>
+          <button class="btn-secondary" id="btn-validate-iso">Run Validation Checks</button>
         </div>
       </div>
 
@@ -642,7 +642,7 @@
         <!-- Daml Ledger API Payload Card -->
         <div class="editor-card">
           <div class="editor-header">
-            <span class="editor-title" id="iso-right-title">CANTON LEDGER API COMMAND (JSON RPC)</span>
+            <span class="editor-title" id="iso-right-title">DAML JSON API v1 REQUEST BODY</span>
             <div class="editor-actions">
               <span class="badge-tag">Daml v2.10</span>
               <button class="btn-copy" id="btn-copy-daml">Copy Daml</button>
@@ -687,7 +687,7 @@
       <div class="section-header">
         <div>
           <h2 class="section-title">Institutional Security Assurance &amp; Regulatory Alignment</h2>
-          <p class="section-desc">Audited STRIDE threat mitigations, US banking capital rules compliance, and SEC tokenization frameworks.</p>
+          <p class="section-desc">STRIDE threat model, regulatory mapping, and design controls. Not yet independently audited; see docs/KNOWN_LIMITATIONS.md.</p>
         </div>
       </div>
 
@@ -760,7 +760,7 @@
           </div>
           <div class="checklist-item">
             <span class="check-icon">&#10003;</span>
-            <div><strong>SEC CAT Audits:</strong> Automated trade audit reports emitted to SEC observer nodes on atomic settlement.</div>
+            <div><strong>Regulatory Reports:</strong> RegulatoryReportRecord captures CAT / TRACE / EMIR submissions and regulator acknowledgement. Reports are created by the reporting party; automatic emission on settlement is on the roadmap.</div>
           </div>
           <div class="checklist-item">
             <span class="check-icon">&#10003;</span>
@@ -788,6 +788,7 @@
           <select id="daml-file-select" class="form-input" style="min-width: 280px; font-weight: 600;">
             <option value="cash">AryaFi.Finance.Cash (Tokenized Cash)</option>
             <option value="security">AryaFi.Finance.Security (Safekeeping)</option>
+            <option value="settlement">AryaFi.Finance.Settlement (Atomic DvP)</option>
             <option value="collateral">AryaFi.Finance.Collateral (Haircut &amp; Margin)</option>
             <option value="loan">AryaFi.Contracts.Loan (Credit Facility)</option>
             <option value="repo">AryaFi.Contracts.Repo (Repurchase Agreement)</option>
@@ -813,7 +814,7 @@
   <footer class="footer">
     <div class="footer-container">
       <div class="footer-text">
-        &copy; 2026 Aryaverse. All rights reserved. Licensed under Apache 2.0. Built for Canton Network Protocol v30.
+        &copy; 2026 Aryaverse. All rights reserved. Licensed under Apache 2.0. Built with Daml SDK 2.10 for Canton 2.10.
       </div>
       <div class="footer-links">
         <a href="https://github.com/Aryaverse/aryafi-core/blob/main/docs/ROADMAP.md" target="_blank" rel="noopener noreferrer" class="footer-link">Roadmap</a>

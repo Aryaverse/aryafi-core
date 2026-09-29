@@ -62,45 +62,47 @@ template SanctionsAttestation
     maintainer key._1
 
     -- | Update the sanctions status and extend validity.
+    -- The screening timestamp is the current ledger time (cannot be backdated).
     choice UpdateSanctionsStatus : ContractId SanctionsAttestation
       with
         newStatus : SanctionsStatus
         newExpiry : Time
-        newTimestamp : Time
       controller screeningAuthority
       do
+        now <- getTime
+        require (newExpiry > now) "Screening expiry must be in the future"
         create this with
           status = newStatus
           expiryTimestamp = newExpiry
-          screeningTimestamp = newTimestamp
+          screeningTimestamp = now
 
     -- | Block a party following a confirmed sanctions hit.
     -- Sets status to SanctionsBlocked with the mandatory sanctions list reference.
     choice BlockParty : ContractId SanctionsAttestation
       with
         sanctionsListRef : Text
-        blockTimestamp : Time
       controller screeningAuthority
       do
         requireNonEmpty sanctionsListRef "sanctionsListRef"
+        now <- getTime
         create this with
           status = SanctionsBlocked sanctionsListRef
-          screeningTimestamp = blockTimestamp
+          screeningTimestamp = now
 
     -- | Clear a previously flagged or blocked party following compliance resolution.
     choice ClearParty : ContractId SanctionsAttestation
       with
         clearanceRef : Text
-        clearTimestamp : Time
       controller screeningAuthority
       do
         requireNonEmpty clearanceRef "clearanceRef"
         require
           (case status of { SanctionsClear -> False; _ -> True })
           "Party is already clear"
+        now <- getTime
         create this with
           status = SanctionsClear
-          screeningTimestamp = clearTimestamp
+          screeningTimestamp = now
           screeningProviderRef = clearanceRef
 
     -- | Add an observer (e.g. custodian, prime broker, regulator).

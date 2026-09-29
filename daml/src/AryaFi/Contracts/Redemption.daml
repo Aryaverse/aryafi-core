@@ -25,7 +25,11 @@ data RedemptionStatus
     -- ^ Fund manager approved request at struck NAV per unit.
   | RedemptionGated Text
     -- ^ Liquidity gate applied by fund manager with stated reason.
-  | RedemptionSettled ReferenceId Amount
+  | RedemptionSettled with
+      paymentReference : ReferenceId
+      -- ^ Payment reference of the cash payout.
+      netPayout : Amount
+      -- ^ Net amount paid to the investor.
     -- ^ Cash redemption payout settled by custodian with payment reference and net amount.
   | RedemptionRejected Text
     -- ^ Rejected by fund manager with stated reason.
@@ -84,7 +88,7 @@ template AssetRedemption
       controller fundManager
       do
         require (status == RedemptionRequested) "Only requested redemptions can be approved"
-        requirePositive officialNav "Official NAV must be positive"
+        requirePositive officialNav "officialNav"
 
         let grossPayout = unitsToRedeem * officialNav
         let feeAmount = grossPayout * redemptionFeeRate
@@ -102,7 +106,7 @@ template AssetRedemption
       controller fundManager
       do
         require (status == RedemptionRequested) "Only requested redemptions can be gated"
-        requireNonEmpty gateReason "Gate reason must be provided"
+        requireNonEmpty gateReason "gateReason"
         create this with
           status = RedemptionGated gateReason
 
@@ -122,24 +126,25 @@ template AssetRedemption
       do
         require (status == RedemptionRequested || isGated status)
           "Can only reject requested or gated redemptions"
-        requireNonEmpty reason "Rejection reason must be provided"
+        requireNonEmpty reason "reason"
         create this with
           status = RedemptionRejected reason
 
     -- | Custodian executes cash payout and finalizes redemption settlement.
+    -- The settlement date is the current ledger time.
     choice ExecuteRedemptionSettlement : ContractId AssetRedemption
       with
         paymentRef : ReferenceId
-        actualSettlementTime : Time
       controller custodian
       do
         require (isApproved status) "Redemption must be Approved to execute settlement"
-        requireNonEmpty paymentRef "Payment reference must not be empty"
+        requireNonEmpty paymentRef "paymentRef"
         let payout = fromSome settlementPayout
+        now <- getTime
 
         create this with
-          settlementDate = Some actualSettlementTime
-          status = RedemptionSettled paymentRef payout
+          settlementDate = Some now
+          status = RedemptionSettled with paymentReference = paymentRef; netPayout = payout
 
     -- | Investor cancels redemption request prior to manager approval.
     choice CancelRedemption : ContractId AssetRedemption
@@ -149,7 +154,7 @@ template AssetRedemption
       do
         require (status == RedemptionRequested || isGated status)
           "Can only cancel pending or gated redemption"
-        requireNonEmpty reason "Cancellation reason must be specified"
+        requireNonEmpty reason "reason"
         create this with
           status = RedemptionCancelled reason
 
@@ -168,7 +173,7 @@ template AssetRedemption
       controller fundManager
       do
         case status of
-          RedemptionSettled _ _ -> return True
+          RedemptionSettled{} -> return True
           _ -> return False
 
 -- | Helper to test if status is approved.

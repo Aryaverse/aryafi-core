@@ -23,13 +23,13 @@ newtype LEI = LEI { unLEI : Text }
 
 -- | ISO 6166 International Securities Identification Number — 12 alphanumeric characters.
 -- Format: 2-letter country code + 9-character NSIN + 1 check digit.
--- e.g. "US912828ZM24" for a US Treasury bond.
+-- e.g. "US912828ZM50" for a US Treasury bond.
 newtype ISIN = ISIN { unISIN : Text }
   deriving (Eq, Ord, Show)
 
 -- | CUSIP — 9-character identifier for securities traded in the US and Canada.
 -- Format: 6-char issuer code + 2-char issue code + 1 check digit.
--- e.g. "912828ZM2" for a US Treasury note.
+-- e.g. "912828ZM5" for a US Treasury note.
 newtype CUSIP = CUSIP { unCUSIP : Text }
   deriving (Eq, Ord, Show)
 

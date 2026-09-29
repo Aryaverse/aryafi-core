@@ -12,7 +12,7 @@ module AryaFi.Contracts.ReverseRepo where
 
 import AryaFi.Common.Types (Amount, Currency, Rate, LifecycleStatus(..))
 import AryaFi.Common.Identifiers (ISIN, ReferenceId, CorrelationId)
-import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
+import AryaFi.Common.Errors (require, requirePositive)
 import qualified DA.List as List
 
 -- | Buyer-side Reverse Repo Position.
@@ -68,7 +68,8 @@ template ReverseRepoPosition
         newMarketValue : Amount
       controller buyer
       do
-        requirePositive newMarketValue "Market value must be positive"
+        require (status == Active) "Can only revalue an Active reverse repo position"
+        requirePositive newMarketValue "newMarketValue"
         create this with
           currentMarketValue = newMarketValue
 
@@ -76,6 +77,7 @@ template ReverseRepoPosition
     choice CloseReverseRepo : ContractId ReverseRepoPosition
       controller buyer
       do
+        require (status == Active) "Can only close an Active reverse repo position"
         create this with
           status = Closed
 

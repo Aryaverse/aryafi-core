@@ -20,8 +20,8 @@ import DA.Time (time)
 testIdentifierConstruction : Script ()
 testIdentifierConstruction = script do
   let lei   = LEI   "5493006MHB84DD0ZWV18"
-      isin  = ISIN  "US912828ZM24"
-      cusip = CUSIP "912828ZM2"
+      isin  = ISIN  "US912828ZM50"
+      cusip = CUSIP "912828ZM5"
       figi  = FIGI  "BBG000BLNQ16"
       sedol = SEDOL "BN65R31"
       accId = AccountId "ACC-CUSTODY-USD-001"
@@ -31,8 +31,8 @@ testIdentifierConstruction = script do
       trade  = TradeId "TRD-2026-US-001"
 
   assertMsg "LEI unpack" (unLEI   lei   == "5493006MHB84DD0ZWV18")
-  assertMsg "ISIN unpack" (unISIN  isin  == "US912828ZM24")
-  assertMsg "CUSIP unpack" (unCUSIP cusip == "912828ZM2")
+  assertMsg "ISIN unpack" (unISIN  isin  == "US912828ZM50")
+  assertMsg "CUSIP unpack" (unCUSIP cusip == "912828ZM5")
   assertMsg "FIGI unpack" (unFIGI  figi  == "BBG000BLNQ16")
   assertMsg "SEDOL unpack" (unSEDOL sedol == "BN65R31")
   assertMsg "AccountId unpack" (unAccountId accId == "ACC-CUSTODY-USD-001")
@@ -51,7 +51,7 @@ testIdentifierOrdering = script do
   assertMsg "LEI Eq: equal to self" (lei1 == lei1)
 
   let isin1 = ISIN "GB00BN65R313"
-      isin2 = ISIN "US912828ZM24"
+      isin2 = ISIN "US912828ZM50"
   assertMsg "ISIN Ord" (isin1 < isin2)
 
   let accA = AccountId "ACC-001"
@@ -124,12 +124,28 @@ testYearFractionAct365 = script do
 
 testYearFractionActActISDA : Script ()
 testYearFractionActActISDA = script do
-  let start = time (date 2026 Jan 1) 0 0 0
-      end   = time (date 2027 Jan 1) 0 0 0   -- 365 days
-  -- Act/Act ISDA: 365 / 365.25 ≈ 0.9993...
-  let yf = calcYearFraction ActActISDA start end
-  assertMsg "Act/Act ISDA for 365 days < 1.0" (yf < 1.0)
-  assertMsg "Act/Act ISDA for 365 days > 0.99" (yf > 0.99)
+  -- A full calendar year is exactly 1.0, leap or not
+  let nonLeap = calcYearFraction ActActISDA (time (date 2026 Jan 1) 0 0 0) (time (date 2027 Jan 1) 0 0 0)
+  assertMsg ("Act/Act ISDA for 2026 must be 1.0, got " <> show nonLeap) (nonLeap == 1.0)
+  let leap = calcYearFraction ActActISDA (time (date 2028 Jan 1) 0 0 0) (time (date 2029 Jan 1) 0 0 0)
+  assertMsg ("Act/Act ISDA for leap year 2028 must be 1.0, got " <> show leap) (leap == 1.0)
+  -- A period straddling a leap year: 184 days of 2027 / 365 + 182 days of 2028 / 366
+  let straddle = calcYearFraction ActActISDA (time (date 2027 Jul 1) 0 0 0) (time (date 2028 Jul 1) 0 0 0)
+  let expected = 184.0 / 365.0 + 182.0 / 366.0
+  assertMsg ("Act/Act ISDA straddle must be " <> show expected <> ", got " <> show straddle)
+    (abs (straddle - expected) < 0.0000000002)
+
+testYearFractionThirty360 : Script ()
+testYearFractionThirty360 = script do
+  -- End-of-month rule: Jan 31 -> Mar 31 counts as 60 days (D1 = 30, D2 = 30)
+  let eom = calcYearFraction Thirty360 (time (date 2026 Jan 31) 0 0 0) (time (date 2026 Mar 31) 0 0 0)
+  assertMsg ("30/360 Jan 31 -> Mar 31 must be 60/360, got " <> show eom) (eom == 60.0 / 360.0)
+  -- D2 is only adjusted when D1 is 30 or 31: Feb 28 -> Mar 31 counts 33 days
+  let feb = calcYearFraction Thirty360 (time (date 2026 Feb 28) 0 0 0) (time (date 2026 Mar 31) 0 0 0)
+  assertMsg ("30/360 Feb 28 -> Mar 31 must be 33/360, got " <> show feb) (feb == 33.0 / 360.0)
+  -- A full year is exactly 1.0 even though it has 365 actual days
+  let year = calcYearFraction Thirty360 (time (date 2026 Mar 15) 0 0 0) (time (date 2027 Mar 15) 0 0 0)
+  assertMsg ("30/360 full year must be 1.0, got " <> show year) (year == 1.0)
 
 -- ---------------------------------------------------------------------------
 -- Interest Calculation Tests
@@ -221,6 +237,7 @@ runTypesAndTimeTests = script do
   testYearFractionAct360
   testYearFractionAct365
   testYearFractionActActISDA
+  testYearFractionThirty360
   testSimpleAccruedInterest
   testZeroRateInterest
   testAccruedInterestBetweenDates

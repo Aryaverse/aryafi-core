@@ -95,7 +95,7 @@ template FundSubscription
       controller fundManager
       do
         require (status == SubscriptionRequested) "Only requested subscriptions can be rejected"
-        requireNonEmpty reason "Rejection reason must be provided"
+        requireNonEmpty reason "reason"
         create this with
           status = SubscriptionRejected reason
           rejectionReason = Some reason
@@ -108,7 +108,7 @@ template FundSubscription
       do
         require (status == SubscriptionApproved || status == SubscriptionPartiallyFunded)
           "Subscription must be Approved or PartiallyFunded to call capital"
-        requirePositive callAmount "Call amount must be positive"
+        requirePositive callAmount "callAmount"
         require (calledAmount + callAmount <= committedAmount)
           "Capital call exceeds uncalled commitment"
         create this with
@@ -124,8 +124,8 @@ template FundSubscription
       do
         require (status == SubscriptionApproved || status == SubscriptionPartiallyFunded)
           "Subscription must be in callable state to confirm funding"
-        requirePositive fundedPaymentAmount "Funded amount must be positive"
-        requireNonEmpty paymentRef "Payment reference must not be empty"
+        requirePositive fundedPaymentAmount "fundedPaymentAmount"
+        requireNonEmpty paymentRef "paymentRef"
         require (fundedAmount + fundedPaymentAmount <= calledAmount)
           "Funded amount cannot exceed called capital"
 
@@ -147,7 +147,7 @@ template FundSubscription
       controller investor
       do
         require (status == SubscriptionRequested) "Can only cancel pending subscription request"
-        requireNonEmpty reason "Cancellation reason must be specified"
+        requireNonEmpty reason "reason"
         create this with
           status = SubscriptionCancelled reason
 

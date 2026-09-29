@@ -5,8 +5,9 @@
 --
 -- Supports Initial Margin (IM) and Variation Margin (VM) workflows:
 --   - Cash margin settlement or AssetPledge collateral perfection
+--   - Two-step fulfilment: payer submits, caller confirms receipt
 --   - Formal dispute arbitration and agreed adjustment
---   - Deadline enforcement and margin default declaration
+--   - Deadline enforcement: default can only be declared after the deadline
 --   - Tri-party custodian supervision
 module AryaFi.Contracts.Margin where
 
@@ -35,8 +36,11 @@ data MarginFulfillmentType
 data MarginCallStatus
   = MarginCallIssued
     -- ^ Margin call has been served to payer; awaiting fulfillment or dispute.
+  | MarginCallPendingConfirmation MarginFulfillmentType
+    -- ^ Payer has submitted cash or pledged securities; awaiting the caller's
+    --   confirmation of receipt.
   | MarginCallSatisfied MarginFulfillmentType
-    -- ^ Margin requirement satisfied via cash or pledged securities.
+    -- ^ Caller has confirmed receipt of the cash or pledged securities.
   | MarginCallDisputed Text
     -- ^ Payer has formally disputed the margin calculation with reason.
   | MarginCallDefaulted Text
@@ -80,7 +84,8 @@ template MarginCall
       requiredAmount > 0.0 &&
       marginCallId /= ""
 
-    -- | Payer satisfies the margin call via cash transfer.
+    -- | Payer submits a cash payment against the margin call.
+    -- The call is only satisfied once the caller confirms receipt.
     choice SatisfyWithCash : ContractId MarginCall
       with
         paymentRef : ReferenceId
@@ -88,11 +93,12 @@ template MarginCall
       do
         require (status == MarginCallIssued || isDisputed status)
           "Margin call must be Issued or Disputed to satisfy"
-        requireNonEmpty paymentRef "Payment reference must not be empty"
+        requireNonEmpty paymentRef "paymentRef"
         create this with
-          status = MarginCallSatisfied (CashMargin paymentRef)
+          status = MarginCallPendingConfirmation (CashMargin paymentRef)
 
-    -- | Payer satisfies the margin call via an AssetPledge collateral perfection.
+    -- | Payer submits an AssetPledge collateral perfection against the call.
+    -- The call is only satisfied once the caller confirms receipt.
     choice SatisfyWithPledge : ContractId MarginCall
       with
         pledgeRef : ReferenceId
@@ -100,9 +106,29 @@ template MarginCall
       do
         require (status == MarginCallIssued || isDisputed status)
           "Margin call must be Issued or Disputed to satisfy"
-        requireNonEmpty pledgeRef "Pledge reference must not be empty"
+        requireNonEmpty pledgeRef "pledgeRef"
         create this with
-          status = MarginCallSatisfied (CollateralPledgeMargin pledgeRef)
+          status = MarginCallPendingConfirmation (CollateralPledgeMargin pledgeRef)
+
+    -- | Caller confirms receipt of the submitted cash or pledge.
+    choice ConfirmMarginReceipt : ContractId MarginCall
+      controller caller
+      do
+        case status of
+          MarginCallPendingConfirmation fulfilment ->
+            create this with status = MarginCallSatisfied fulfilment
+          _ -> abort "Margin call has no submitted fulfilment awaiting confirmation"
+
+    -- | Caller rejects a submitted fulfilment (e.g. payment not received);
+    -- the call returns to Issued.
+    choice RejectMarginFulfilment : ContractId MarginCall
+      with
+        reason : Text
+      controller caller
+      do
+        require (isPendingConfirmation status) "Margin call has no submitted fulfilment to reject"
+        requireNonEmpty reason "reason"
+        create this with status = MarginCallIssued
 
     -- | Payer formally disputes the margin call calculation within deadline.
     choice DisputeMarginCall : ContractId MarginCall
@@ -111,7 +137,7 @@ template MarginCall
       controller payer
       do
         require (status == MarginCallIssued) "Only newly issued margin calls can be disputed"
-        requireNonEmpty disputeReason "Dispute reason must be provided"
+        requireNonEmpty disputeReason "disputeReason"
         create this with
           status = MarginCallDisputed disputeReason
 
@@ -122,20 +148,23 @@ template MarginCall
       controller caller, payer
       do
         require (isDisputed status) "Margin call must be in Disputed status to resolve"
-        requirePositive adjustedAmount "Adjusted amount must be positive"
+        requirePositive adjustedAmount "adjustedAmount"
         create this with
           requiredAmount = adjustedAmount
           status = MarginCallIssued
 
     -- | Caller declares default if margin is unpaid past deadline.
+    -- Not possible while a submitted fulfilment awaits confirmation.
     choice DeclareMarginDefault : ContractId MarginCall
       with
         reason : Text
       controller caller
       do
         require (status == MarginCallIssued || isDisputed status)
-          "Cannot declare default on already satisfied or cancelled call"
-        requireNonEmpty reason "Default reason must be specified"
+          "Can only declare default on an Issued or Disputed margin call"
+        now <- getTime
+        require (now > deadline) "Cannot declare margin default before the deadline"
+        requireNonEmpty reason "reason"
         create this with
           status = MarginCallDefaulted reason
 
@@ -148,10 +177,11 @@ template MarginCall
           status = MarginCallCancelled
 
     -- | Add an authorized observer (e.g. tri-party agent).
+    -- Both counterparties must consent to disclosure.
     choice AddMarginObserver : ContractId MarginCall
       with
         newObserver : Party
-      controller caller
+      controller caller, payer
       do
         require (not (newObserver `elem` observers)) "Observer already registered"
         create this with
@@ -169,4 +199,9 @@ template MarginCall
 isDisputed : MarginCallStatus -> Bool
 isDisputed (MarginCallDisputed _) = True
 isDisputed _ = False
+
+-- | Helper to test whether a submitted fulfilment awaits confirmation.
+isPendingConfirmation : MarginCallStatus -> Bool
+isPendingConfirmation (MarginCallPendingConfirmation _) = True
+isPendingConfirmation _ = False
 
