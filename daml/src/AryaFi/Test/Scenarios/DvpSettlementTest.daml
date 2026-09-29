@@ -3,8 +3,9 @@
 
 -- | End-to-end DvP settlement scenario and negative test suite.
 -- Tests the full lifecycle of a Delivery-versus-Payment instruction:
---   Setup → Lock positions → Create DvP → Execute → Verify
--- Also covers: failure, retry, cancellation, authorization, and boundary cases.
+--   Setup → Lock both legs to the agent → Create DvP → Execute → Verify ownership
+-- Also covers: leg validation, lock integrity, failure, retry, cancellation,
+-- authorization, privacy, and boundary cases.
 module AryaFi.Test.Scenarios.DvpSettlementTest where
 
 import Daml.Script
@@ -13,6 +14,25 @@ import AryaFi.Finance.Security
 import AryaFi.Finance.Cash
 import AryaFi.Common.Identifiers
 import AryaFi.Common.Types
+
+-- ---------------------------------------------------------------------------
+-- Constants
+-- ---------------------------------------------------------------------------
+
+bondIsin : ISIN
+bondIsin = ISIN "US912828ZM50"
+
+bondQuantity : Amount
+bondQuantity = 5000000.0
+
+cashConsideration : Amount
+cashConsideration = 4975000.0
+
+sellerSecAcc, buyerSecAcc, sellerCashAcc, buyerCashAcc : AccountId
+sellerSecAcc = AccountId "ACC-SELLER-SEC-001"
+buyerSecAcc = AccountId "ACC-BUYER-SEC-001"
+sellerCashAcc = AccountId "ACC-SELLER-CASH-001"
+buyerCashAcc = AccountId "ACC-BUYER-CASH-001"
 
 -- ---------------------------------------------------------------------------
 -- Helpers
@@ -27,8 +47,8 @@ setupSecurityPosition custodian owner accId qty =
       custodian = custodian
       owner = owner
       accountId = accId
-      isin = ISIN "US912828ZM24"
-      cusip = Some (CUSIP "912828ZM2")
+      isin = bondIsin
+      cusip = Some (CUSIP "912828ZM5")
       instrumentName = "US Treasury 4.25% Nov 2026"
       instrumentType = GovernmentBond
       quantity = qty
@@ -39,6 +59,7 @@ setupSecurityPosition custodian owner accId qty =
       seniority = Some Senior
       isLocked = False
       lockReference = None
+      lockHolder = None
       csdRef = None
       observers = []
 
@@ -55,6 +76,7 @@ setupCashPosition bank owner accId amt =
       amount = amt
       isLocked = False
       lockReference = None
+      lockHolder = None
       observers = []
 
 mkDvp
@@ -68,14 +90,14 @@ mkDvp agent seller buyer secLockRef cashLockRef = do
       seller = seller
       buyer = buyer
       tradeId = TradeId "TRD-US-TREAS-2026-001"
-      isin = ISIN "US912828ZM24"
-      securityQuantity = 5000000.0
-      sellerSecurityAccount = AccountId "ACC-SELLER-SEC-001"
-      buyerSecurityAccount = AccountId "ACC-BUYER-SEC-001"
+      isin = bondIsin
+      securityQuantity = bondQuantity
+      sellerSecurityAccount = sellerSecAcc
+      buyerSecurityAccount = buyerSecAcc
       currency = "USD"
-      cashAmount = 4975000.0
-      sellerCashAccount = AccountId "ACC-SELLER-CASH-001"
-      buyerCashAccount = AccountId "ACC-BUYER-CASH-001"
+      cashAmount = cashConsideration
+      sellerCashAccount = sellerCashAcc
+      buyerCashAccount = buyerCashAcc
       dvpModel = DvpModel1
       settlementDate = now
       correlationId = CorrelationId "CORR-DVP-TREAS-001"
@@ -86,66 +108,196 @@ mkDvp agent seller buyer secLockRef cashLockRef = do
       failureReason = None
       observers = []
 
+-- | Everything needed to settle one DvP: parties, locked legs, and the instruction.
+data DvpFixture = DvpFixture
+  with
+    agent : Party
+    seller : Party
+    buyer : Party
+    custodian : Party
+    bank : Party
+    lockedSecCid : ContractId SecurityPosition
+    lockedCashCid : ContractId CashPosition
+    dvpCid : ContractId DvpInstruction
+
+-- | Seller holds the bond, buyer holds exactly the consideration; both legs are
+-- locked to the settlement agent under the trade reference; all three parties
+-- sign the instruction.
+stageDvp : Text -> Script DvpFixture
+stageDvp lockRef = do
+  custodian <- allocateParty "GlobalCustodian"
+  bank      <- allocateParty "CashSettlementBank"
+  seller    <- allocateParty "DealerBankA"
+  buyer     <- allocateParty "DealerBankB"
+  agent     <- allocateParty "SettlementAgent"
+  secCid  <- setupSecurityPosition custodian seller sellerSecAcc bondQuantity
+  cashCid <- setupCashPosition bank buyer buyerCashAcc cashConsideration
+  lockedSecCid <- submitMulti [seller, custodian] [] do
+    exerciseCmd secCid LockSecurity with lockRef; holder = agent
+  lockedCashCid <- submitMulti [buyer, bank] [] do
+    exerciseCmd cashCid LockCash with lockRef; holder = agent
+  dvpCid <- mkDvp agent seller buyer lockRef lockRef
+  pure DvpFixture with ..
+
+execute : DvpFixture -> ContractId DvpInstruction -> Script DvpSettlementResult
+execute f cid = submit f.agent do
+  exerciseCmd cid ExecuteDvpSettlement with
+    sellerSecurityCid = f.lockedSecCid
+    buyerCashCid = f.lockedCashCid
+
 -- ---------------------------------------------------------------------------
 -- Full DvP Lifecycle Scenario
 -- ---------------------------------------------------------------------------
 
 testDvpFullLifecycle : Script ()
 testDvpFullLifecycle = script do
-  -- Parties
-  custodian <- allocateParty "FederalCustodian"
-  bank      <- allocateParty "FederalReserve"
+  custodian <- allocateParty "GlobalCustodian"
+  bank      <- allocateParty "CashSettlementBank"
   seller    <- allocateParty "DealerBankA"
   buyer     <- allocateParty "DealerBankB"
-  agent     <- allocateParty "DTCCSettlementAgent"
-  csd       <- allocateParty "DTC"
+  agent     <- allocateParty "SettlementAgent"
+  csd       <- allocateParty "CentralSecuritiesDepository"
 
-  -- Step 1: Setup seller's T-Bond position
-  secCid <- setupSecurityPosition custodian seller
-              (AccountId "ACC-SELLER-SEC-001") 5000000.0
+  -- Step 1: Seller holds the bond; buyer holds 5M cash
+  secCid <- setupSecurityPosition custodian seller sellerSecAcc bondQuantity
+  cashCid <- setupCashPosition bank buyer buyerCashAcc 5000000.0
 
-  -- Step 2: Setup buyer's cash position
-  cashCid <- setupCashPosition bank buyer
-               (AccountId "ACC-BUYER-CASH-001") 5000000.0
+  -- Step 2: Buyer carves out exactly the consideration (4,975,000)
+  (considerationCid, remainderCid) <- submit buyer do
+    exerciseCmd cashCid SplitCash with splitAmount = cashConsideration
 
-  -- Step 3: Seller locks security (pre-condition for DvP)
-  let secLockRef = "DVP-TRD-US-TREAS-2026-001"
+  -- Step 3: Both legs are locked to the settlement agent (pre-condition for DvP)
+  let lockRef = "DVP-TRD-US-TREAS-2026-001"
   lockedSecCid <- submitMulti [seller, custodian] [] do
-    exerciseCmd secCid LockSecurity with lockRef = secLockRef
-
-  -- Step 4: Buyer locks cash (pre-condition for DvP)
-  let cashLockRef = "DVP-TRD-US-TREAS-2026-001"
+    exerciseCmd secCid LockSecurity with lockRef; holder = agent
   lockedCashCid <- submitMulti [buyer, bank] [] do
-    exerciseCmd cashCid LockCash with lockRef = cashLockRef
+    exerciseCmd considerationCid LockCash with lockRef; holder = agent
 
-  -- Step 5: Create DvP instruction (all three parties sign)
-  dvpCid <- mkDvp agent seller buyer secLockRef cashLockRef
+  -- The agent can see both locked legs
+  agentSecView <- queryContractId agent lockedSecCid
+  agentCashView <- queryContractId agent lockedCashCid
+  assertMsg "Agent sees the locked security leg" (agentSecView /= None)
+  assertMsg "Agent sees the locked cash leg" (agentCashView /= None)
 
-  -- Step 6: Agent adds CSD as observer
+  -- Step 4: Create DvP instruction (all three parties sign)
+  dvpCid <- mkDvp agent seller buyer lockRef lockRef
+
+  -- Step 5: Agent adds CSD as observer
   dvpWithCsdCid <- submit agent do
     exerciseCmd dvpCid AddDvpObserver with newObserver = csd
-
-  -- CSD can now see the DvP
   csdView <- queryContractId csd dvpWithCsdCid
   assertMsg "CSD can see DvP instruction" (csdView /= None)
 
-  -- Step 7: Execute settlement
-  settledCid <- submit agent do
-    exerciseCmd dvpWithCsdCid ExecuteDvpSettlement
+  -- Step 6: Execute settlement — both legs move in one transaction
+  result <- submit agent do
+    exerciseCmd dvpWithCsdCid ExecuteDvpSettlement with
+      sellerSecurityCid = lockedSecCid
+      buyerCashCid = lockedCashCid
 
-  -- Step 8: Verify settled status
-  settledData <- queryContractId seller settledCid
-  case settledData of
-    None -> abort "Settled DvP not visible to seller"
-    Some dvp -> do
-      assertMsg "Status Settled" (dvp.status == Settled)
-      assertMsg "No failure reason" (dvp.failureReason == None)
-      assertMsg "Security quantity" (dvp.securityQuantity == 5000000.0)
-      assertMsg "Cash amount" (dvp.cashAmount == 4975000.0)
+  -- Step 7: Verify the instruction
+  Some dvp <- queryContractId seller result.instructionCid
+  assertMsg "Status Settled" (dvp.status == Settled)
+  assertMsg "No failure reason" (dvp.failureReason == None)
 
-  -- Buyer also sees the settled instruction
-  buyerView <- queryContractId buyer settledCid
-  assertMsg "Buyer sees settled DvP" (buyerView /= None)
+  -- Step 8: Verify ownership actually changed
+  Some delivered <- queryContractId buyer result.deliveredSecurityCid
+  assertMsg "Buyer owns the bond" (delivered.owner == buyer)
+  assertMsg "Bond is in the buyer's security account" (delivered.accountId == buyerSecAcc)
+  assertMsg "Full quantity delivered" (delivered.quantity == bondQuantity)
+  assertMsg "Delivered bond is unlocked" (not delivered.isLocked && delivered.lockHolder == None)
+
+  Some paid <- queryContractId seller result.paidCashCid
+  assertMsg "Seller owns the cash" (paid.owner == seller)
+  assertMsg "Cash is in the seller's cash account" (paid.accountId == sellerCashAcc)
+  assertMsg "Full consideration paid" (paid.amount == cashConsideration)
+  assertMsg "Paid cash is unlocked" (not paid.isLocked)
+
+  -- Step 9: The old positions are gone; balances are conserved
+  oldSec <- queryContractId custodian lockedSecCid
+  oldCash <- queryContractId bank lockedCashCid
+  assertMsg "Seller's bond position archived" (oldSec == None)
+  assertMsg "Buyer's locked cash archived" (oldCash == None)
+  sellerBonds <- query @SecurityPosition seller
+  assertMsg "Seller no longer holds any bond" (null sellerBonds)
+  Some remainder <- queryContractId buyer remainderCid
+  assertMsg "Buyer keeps the 25,000 remainder" (remainder.amount == 25000.0)
+
+  -- Step 10: Privacy after settlement — the seller cannot see the buyer's bond,
+  -- the buyer cannot see the seller's cash
+  sellerSeesBond <- queryContractId seller result.deliveredSecurityCid
+  buyerSeesCash <- queryContractId buyer result.paidCashCid
+  assertMsg "Seller cannot see buyer's new bond" (sellerSeesBond == None)
+  assertMsg "Buyer cannot see seller's new cash" (buyerSeesCash == None)
+
+-- ---------------------------------------------------------------------------
+-- Lock Integrity
+-- ---------------------------------------------------------------------------
+
+-- | Once locked to the agent, neither owner nor custodian/bank can pull a leg
+-- out of the settlement — the exploit where a seller unlocked mid-settlement.
+testLockedLegsCannotBeWithdrawn : Script ()
+testLockedLegsCannotBeWithdrawn = script do
+  f <- stageDvp "DVP-LOCK-INTEGRITY"
+  submitMultiMustFail [f.seller, f.custodian] [] do
+    exerciseCmd f.lockedSecCid UnlockSecurity
+  submitMultiMustFail [f.buyer, f.bank] [] do
+    exerciseCmd f.lockedCashCid UnlockCash
+  submitMultiMustFail [f.seller, f.custodian] [] do
+    exerciseCmd f.lockedSecCid TransferSecurity with
+      newOwner = f.agent
+      newAccountId = AccountId "ELSEWHERE"
+      correlationId = CorrelationId "X"
+  -- The seller cannot settle the leg to itself either
+  submitMultiMustFail [f.seller] [] do
+    exerciseCmd f.lockedSecCid SettleLockedSecurity with
+      newOwner = f.seller
+      newAccountId = AccountId "ELSEWHERE"
+  -- Settlement still succeeds
+  result <- execute f f.dvpCid
+  Some dvp <- queryContractId f.agent result.instructionCid
+  assertMsg "Settled despite withdrawal attempts" (dvp.status == Settled)
+
+-- ---------------------------------------------------------------------------
+-- Leg Validation
+-- ---------------------------------------------------------------------------
+
+-- | Legs that do not match the instruction are rejected and nothing moves.
+testDvpRejectsMismatchedLegs : Script ()
+testDvpRejectsMismatchedLegs = script do
+  f <- stageDvp "DVP-MISMATCH"
+
+  -- A bond position of the wrong quantity, correctly locked
+  shortSecCid <- setupSecurityPosition f.custodian f.seller sellerSecAcc 4000000.0
+  shortLockedCid <- submitMulti [f.seller, f.custodian] [] do
+    exerciseCmd shortSecCid LockSecurity with lockRef = "DVP-MISMATCH"; holder = f.agent
+  submitMustFail f.agent do
+    exerciseCmd f.dvpCid ExecuteDvpSettlement with
+      sellerSecurityCid = shortLockedCid
+      buyerCashCid = f.lockedCashCid
+
+  -- Cash locked to someone other than the agent
+  otherCashCid <- setupCashPosition f.bank f.buyer buyerCashAcc cashConsideration
+  wrongHolderCid <- submitMulti [f.buyer, f.bank] [] do
+    exerciseCmd otherCashCid LockCash with lockRef = "DVP-MISMATCH"; holder = f.bank
+  submitMustFail f.agent do
+    exerciseCmd f.dvpCid ExecuteDvpSettlement with
+      sellerSecurityCid = f.lockedSecCid
+      buyerCashCid = wrongHolderCid
+
+  -- Cash locked under a different trade reference
+  thirdCashCid <- setupCashPosition f.bank f.buyer buyerCashAcc cashConsideration
+  wrongRefCid <- submitMulti [f.buyer, f.bank] [] do
+    exerciseCmd thirdCashCid LockCash with lockRef = "SOME-OTHER-TRADE"; holder = f.agent
+  submitMustFail f.agent do
+    exerciseCmd f.dvpCid ExecuteDvpSettlement with
+      sellerSecurityCid = f.lockedSecCid
+      buyerCashCid = wrongRefCid
+
+  -- Nothing moved: the original legs are still locked with their owners
+  Some sec <- queryContractId f.seller f.lockedSecCid
+  Some cash <- queryContractId f.buyer f.lockedCashCid
+  assertMsg "Bond still with seller" (sec.owner == f.seller && sec.isLocked)
+  assertMsg "Cash still with buyer" (cash.owner == f.buyer && cash.isLocked)
 
 -- ---------------------------------------------------------------------------
 -- Failure and Retry Scenario
@@ -153,46 +305,37 @@ testDvpFullLifecycle = script do
 
 testDvpFailureAndRetry : Script ()
 testDvpFailureAndRetry = script do
-  agent  <- allocateParty "DTCCSettlementAgent"
-  seller <- allocateParty "DealerBankA"
-  buyer  <- allocateParty "DealerBankB"
+  f <- stageDvp "DVP-RETRY"
 
-  dvpCid <- mkDvp agent seller buyer "SEC-LOCK-001" "CASH-LOCK-001"
+  -- Agent fails the settlement (e.g. a regulatory hold)
+  failedCid <- submit f.agent do
+    exerciseCmd f.dvpCid FailDvpSettlement with
+      reason = "REGULATORY_HOLD_PENDING_REVIEW"
 
-  -- Agent fails the settlement (e.g. position validation failed)
-  failedCid <- submit agent do
-    exerciseCmd dvpCid FailDvpSettlement with
-      reason = "SECURITY_POSITION_NOT_FOUND_AT_CUSTODIAN"
+  Some failed <- queryContractId f.seller failedCid
+  case failed.status of
+    Failed r -> assertMsg "Failure reason" (r == "REGULATORY_HOLD_PENDING_REVIEW")
+    _        -> abort "Expected Failed status"
+  assertMsg "failureReason field set" (failed.failureReason == Some "REGULATORY_HOLD_PENDING_REVIEW")
 
-  failedData <- queryContractId seller failedCid
-  case failedData of
-    None -> abort "Failed DvP not visible to seller"
-    Some dvp -> do
-      case dvp.status of
-        Failed r -> assertMsg "Failure reason" (r == "SECURITY_POSITION_NOT_FOUND_AT_CUSTODIAN")
-        _        -> abort "Expected Failed status"
-      assertMsg "failureReason field set"
-        (dvp.failureReason == Some "SECURITY_POSITION_NOT_FOUND_AT_CUSTODIAN")
+  -- A failed instruction cannot be executed
+  submitMustFail f.agent do
+    exerciseCmd failedCid ExecuteDvpSettlement with
+      sellerSecurityCid = f.lockedSecCid
+      buyerCashCid = f.lockedCashCid
 
   -- All three parties agree to retry
-  retriedCid <- submitMulti [agent, seller, buyer] [] do
+  retriedCid <- submitMulti [f.agent, f.seller, f.buyer] [] do
     exerciseCmd failedCid RetrySettlement
 
-  retriedData <- queryContractId buyer retriedCid
-  case retriedData of
-    None -> abort "Retried DvP not visible to buyer"
-    Some dvp -> do
-      assertMsg "Status back to PendingSettlement" (dvp.status == PendingSettlement)
-      assertMsg "failureReason cleared" (dvp.failureReason == None)
+  Some retried <- queryContractId f.buyer retriedCid
+  assertMsg "Status back to PendingSettlement" (retried.status == PendingSettlement)
+  assertMsg "failureReason cleared" (retried.failureReason == None)
 
-  -- Now execute successfully
-  settledCid <- submit agent do
-    exerciseCmd retriedCid ExecuteDvpSettlement
-
-  settledData <- queryContractId agent settledCid
-  case settledData of
-    None -> abort "Final settled DvP not found"
-    Some dvp -> assertMsg "Status Settled after retry" (dvp.status == Settled)
+  -- Now execute successfully with the still-locked legs
+  result <- execute f retriedCid
+  Some settled <- queryContractId f.agent result.instructionCid
+  assertMsg "Status Settled after retry" (settled.status == Settled)
 
 -- ---------------------------------------------------------------------------
 -- Cancellation Scenario
@@ -200,24 +343,27 @@ testDvpFailureAndRetry = script do
 
 testDvpCancellation : Script ()
 testDvpCancellation = script do
-  agent  <- allocateParty "DTCCSettlementAgent"
-  seller <- allocateParty "DealerBankA"
-  buyer  <- allocateParty "DealerBankB"
-
-  dvpCid <- mkDvp agent seller buyer "SEC-LOCK-002" "CASH-LOCK-002"
+  f <- stageDvp "DVP-CANCEL"
 
   -- Buyer and seller agree to cancel (e.g. trade error)
-  cancelledCid <- submitMulti [seller, buyer] [] do
-    exerciseCmd dvpCid CancelDvpSettlement with
+  cancelledCid <- submitMulti [f.seller, f.buyer] [] do
+    exerciseCmd f.dvpCid CancelDvpSettlement with
       reason = "TRADE_ERROR_INCORRECT_ISIN"
 
-  cancelData <- queryContractId agent cancelledCid
-  case cancelData of
-    None -> abort "Cancelled DvP not visible to agent"
-    Some dvp ->
-      case dvp.status of
-        Cancelled r -> assertMsg "Cancellation reason" (r == "TRADE_ERROR_INCORRECT_ISIN")
-        _           -> abort "Expected Cancelled status"
+  Some cancelled <- queryContractId f.agent cancelledCid
+  case cancelled.status of
+    Cancelled r -> assertMsg "Cancellation reason" (r == "TRADE_ERROR_INCORRECT_ISIN")
+    _           -> abort "Expected Cancelled status"
+
+  -- The agent releases both locks back to their owners
+  releasedSecCid <- submit f.agent do exerciseCmd f.lockedSecCid UnlockSecurity
+  releasedCashCid <- submit f.agent do exerciseCmd f.lockedCashCid UnlockCash
+  Some sec <- queryContractId f.seller releasedSecCid
+  Some cash <- queryContractId f.buyer releasedCashCid
+  assertMsg "Bond released to the seller" (sec.owner == f.seller && not sec.isLocked)
+  assertMsg "Cash released to the buyer" (cash.owner == f.buyer && not cash.isLocked)
+  agentView <- queryContractId f.agent releasedSecCid
+  assertMsg "Agent loses visibility once the lock is released" (agentView == None)
 
 -- ---------------------------------------------------------------------------
 -- Privacy Tests
@@ -225,23 +371,24 @@ testDvpCancellation = script do
 
 testDvpPrivacy : Script ()
 testDvpPrivacy = script do
-  agent    <- allocateParty "DTCCSettlementAgent"
-  seller   <- allocateParty "DealerBankA"
-  buyer    <- allocateParty "DealerBankB"
+  f <- stageDvp "DVP-PRIVACY"
   outsider <- allocateParty "OutsiderCorp"
 
-  dvpCid <- mkDvp agent seller buyer "SEC-LOCK-003" "CASH-LOCK-003"
-
-  -- Outsider cannot see DvP instruction
-  outsiderView <- queryContractId outsider dvpCid
+  outsiderView <- queryContractId outsider f.dvpCid
   assertMsg "Outsider cannot see DvP instruction" (outsiderView == None)
+  outsiderSec <- queryContractId outsider f.lockedSecCid
+  assertMsg "Outsider cannot see the locked bond" (outsiderSec == None)
 
-  -- Seller and buyer can see it
-  sellerView <- queryContractId seller dvpCid
+  sellerView <- queryContractId f.seller f.dvpCid
   assertMsg "Seller sees DvP instruction" (sellerView /= None)
-
-  buyerView <- queryContractId buyer dvpCid
+  buyerView <- queryContractId f.buyer f.dvpCid
   assertMsg "Buyer sees DvP instruction" (buyerView /= None)
+
+  -- Counterparties do not see each other's legs before settlement
+  buyerSeesBond <- queryContractId f.buyer f.lockedSecCid
+  sellerSeesCash <- queryContractId f.seller f.lockedCashCid
+  assertMsg "Buyer cannot see seller's bond position" (buyerSeesBond == None)
+  assertMsg "Seller cannot see buyer's cash position" (sellerSeesCash == None)
 
 -- ---------------------------------------------------------------------------
 -- Negative Tests
@@ -250,73 +397,82 @@ testDvpPrivacy = script do
 -- Negative: only settlement agent can execute DvP
 testOnlyAgentCanExecuteDvp : Script ()
 testOnlyAgentCanExecuteDvp = script do
-  agent  <- allocateParty "DTCCSettlementAgent"
-  seller <- allocateParty "DealerBankA"
-  buyer  <- allocateParty "DealerBankB"
+  f <- stageDvp "DVP-AUTH"
+  submitMustFail f.seller do
+    exerciseCmd f.dvpCid ExecuteDvpSettlement with
+      sellerSecurityCid = f.lockedSecCid
+      buyerCashCid = f.lockedCashCid
 
-  dvpCid <- mkDvp agent seller buyer "SEC-LOCK-004" "CASH-LOCK-004"
-
-  submitMustFail seller do
-    exerciseCmd dvpCid ExecuteDvpSettlement
-
--- Negative: cannot execute already-settled DvP
+-- Negative: cannot execute an already-settled DvP (its legs are consumed)
 testCannotReExecuteSettledDvp : Script ()
 testCannotReExecuteSettledDvp = script do
-  agent  <- allocateParty "DTCCSettlementAgent"
-  seller <- allocateParty "DealerBankA"
-  buyer  <- allocateParty "DealerBankB"
-
-  dvpCid <- mkDvp agent seller buyer "SEC-LOCK-005" "CASH-LOCK-005"
-
-  settledCid <- submit agent do exerciseCmd dvpCid ExecuteDvpSettlement
-
-  submitMustFail agent do
-    exerciseCmd settledCid ExecuteDvpSettlement
+  f <- stageDvp "DVP-REEXEC"
+  result <- execute f f.dvpCid
+  submitMustFail f.agent do
+    exerciseCmd result.instructionCid ExecuteDvpSettlement with
+      sellerSecurityCid = f.lockedSecCid
+      buyerCashCid = f.lockedCashCid
 
 -- Negative: settlement agent cannot unilaterally cancel (needs seller + buyer)
 testAgentCannotCancelAlone : Script ()
 testAgentCannotCancelAlone = script do
-  agent  <- allocateParty "DTCCSettlementAgent"
-  seller <- allocateParty "DealerBankA"
-  buyer  <- allocateParty "DealerBankB"
-
-  dvpCid <- mkDvp agent seller buyer "SEC-LOCK-006" "CASH-LOCK-006"
-
-  submitMustFail agent do
-    exerciseCmd dvpCid CancelDvpSettlement with reason = "Agent unilateral cancel"
+  f <- stageDvp "DVP-AGENT-CANCEL"
+  submitMustFail f.agent do
+    exerciseCmd f.dvpCid CancelDvpSettlement with reason = "Agent unilateral cancel"
 
 -- Negative: cannot retry a settled instruction
 testCannotRetrySettledDvp : Script ()
 testCannotRetrySettledDvp = script do
-  agent  <- allocateParty "DTCCSettlementAgent"
-  seller <- allocateParty "DealerBankA"
-  buyer  <- allocateParty "DealerBankB"
-
-  dvpCid <- mkDvp agent seller buyer "SEC-LOCK-007" "CASH-LOCK-007"
-
-  settledCid <- submit agent do exerciseCmd dvpCid ExecuteDvpSettlement
-
-  submitMultiMustFail [agent, seller, buyer] [] do
-    exerciseCmd settledCid RetrySettlement
+  f <- stageDvp "DVP-RETRY-SETTLED"
+  result <- execute f f.dvpCid
+  submitMultiMustFail [f.agent, f.seller, f.buyer] [] do
+    exerciseCmd result.instructionCid RetrySettlement
 
 -- Negative: cannot cancel a settled DvP
 testCannotCancelSettledDvp : Script ()
 testCannotCancelSettledDvp = script do
-  agent  <- allocateParty "DTCCSettlementAgent"
-  seller <- allocateParty "DealerBankA"
-  buyer  <- allocateParty "DealerBankB"
+  f <- stageDvp "DVP-CANCEL-SETTLED"
+  result <- execute f f.dvpCid
+  submitMultiMustFail [f.seller, f.buyer] [] do
+    exerciseCmd result.instructionCid CancelDvpSettlement with reason = "Late cancel attempt"
 
-  dvpCid <- mkDvp agent seller buyer "SEC-LOCK-008" "CASH-LOCK-008"
-
-  settledCid <- submit agent do exerciseCmd dvpCid ExecuteDvpSettlement
-
-  submitMultiMustFail [seller, buyer] [] do
-    exerciseCmd settledCid CancelDvpSettlement with reason = "Late cancel attempt"
+-- Negative: netted models (2 and 3) are not executed on-ledger
+testNettedDvpModelNotExecuted : Script ()
+testNettedDvpModelNotExecuted = script do
+  f <- stageDvp "DVP-MODEL2"
+  now <- getTime
+  model2Cid <- submitMulti [f.agent, f.seller, f.buyer] [] do
+    createCmd DvpInstruction with
+      settlementAgent = f.agent
+      seller = f.seller
+      buyer = f.buyer
+      tradeId = TradeId "TRD-MODEL2-001"
+      isin = bondIsin
+      securityQuantity = bondQuantity
+      sellerSecurityAccount = sellerSecAcc
+      buyerSecurityAccount = buyerSecAcc
+      currency = "USD"
+      cashAmount = cashConsideration
+      sellerCashAccount = sellerCashAcc
+      buyerCashAccount = buyerCashAcc
+      dvpModel = DvpModel2
+      settlementDate = now
+      correlationId = CorrelationId "CORR-MODEL2-001"
+      idempotencyKey = IdempotencyKey "IKEY-MODEL2-001"
+      sellerSecurityLockRef = "DVP-MODEL2"
+      buyerCashLockRef = "DVP-MODEL2"
+      status = PendingSettlement
+      failureReason = None
+      observers = []
+  submitMustFail f.agent do
+    exerciseCmd model2Cid ExecuteDvpSettlement with
+      sellerSecurityCid = f.lockedSecCid
+      buyerCashCid = f.lockedCashCid
 
 -- Negative: ensure rejects zero security quantity
 testDvpEnsurePositiveSecurityQuantity : Script ()
 testDvpEnsurePositiveSecurityQuantity = script do
-  agent  <- allocateParty "DTCCSettlementAgent"
+  agent  <- allocateParty "SettlementAgent"
   seller <- allocateParty "DealerBankA"
   buyer  <- allocateParty "DealerBankB"
   now <- getTime
@@ -327,7 +483,7 @@ testDvpEnsurePositiveSecurityQuantity = script do
       seller = seller
       buyer = buyer
       tradeId = TradeId "TRD-ZERO-001"
-      isin = ISIN "US912828ZM24"
+      isin = bondIsin
       securityQuantity = 0.0    -- invalid: ensure rejects
       sellerSecurityAccount = AccountId "ACC-SEL-SEC-001"
       buyerSecurityAccount = AccountId "ACC-BUY-SEC-001"
@@ -348,7 +504,7 @@ testDvpEnsurePositiveSecurityQuantity = script do
 -- Negative: ensure rejects zero cash amount
 testDvpEnsurePositiveCashAmount : Script ()
 testDvpEnsurePositiveCashAmount = script do
-  agent  <- allocateParty "DTCCSettlementAgent"
+  agent  <- allocateParty "SettlementAgent"
   seller <- allocateParty "DealerBankA"
   buyer  <- allocateParty "DealerBankB"
   now <- getTime
@@ -359,7 +515,7 @@ testDvpEnsurePositiveCashAmount = script do
       seller = seller
       buyer = buyer
       tradeId = TradeId "TRD-ZEROCASH-001"
-      isin = ISIN "US912828ZM24"
+      isin = bondIsin
       securityQuantity = 1000000.0
       sellerSecurityAccount = AccountId "ACC-SEL-SEC-001"
       buyerSecurityAccount = AccountId "ACC-BUY-SEC-001"
@@ -384,6 +540,8 @@ testDvpEnsurePositiveCashAmount = script do
 runDvpSettlementTests : Script ()
 runDvpSettlementTests = script do
   testDvpFullLifecycle
+  testLockedLegsCannotBeWithdrawn
+  testDvpRejectsMismatchedLegs
   testDvpFailureAndRetry
   testDvpCancellation
   testDvpPrivacy
@@ -392,5 +550,6 @@ runDvpSettlementTests = script do
   testAgentCannotCancelAlone
   testCannotRetrySettledDvp
   testCannotCancelSettledDvp
+  testNettedDvpModelNotExecuted
   testDvpEnsurePositiveSecurityQuantity
   testDvpEnsurePositiveCashAmount
