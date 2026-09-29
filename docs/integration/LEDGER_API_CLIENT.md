@@ -23,11 +23,11 @@ This specification details the client application architecture, command submissi
                  ┌──────────────────┴──────────────────┐
                  │                                     │
                  ▼                                     ▼
-      [gRPC Services (Port 5011)]         [HTTP JSON API v2 (Port 7575)]
-      • CommandSubmissionService           • POST /v2/commands/submit-wait
-      • CommandCompletionService           • GET  /v2/state/active-contracts
-      • TransactionService                 • POST /v2/state/updates (Stream)
-      • StateService (ACS)                 • POST /v2/user-management
+      [gRPC Ledger API (e.g. 10012)]      [HTTP JSON API v1 (Port 7575)]
+      • CommandSubmissionService           • POST /v1/create, /v1/exercise
+      • CommandCompletionService           • POST /v1/query (ACS)
+      • TransactionService                 • WS   /v1/stream/query
+      • ActiveContractsService             • POST /v1/parties/allocate
                  │                                     │
                  └──────────────────┬──────────────────┘
                                     │
@@ -112,13 +112,13 @@ In high-throughput financial environments, network disconnects or gateway timeou
 
 ### 6.1 Bootstrap Phase: Active Contract Set Snapshot
 Upon startup, the client pulls the current active state:
-- Service: `StateService.GetActiveContracts`
+- Service: `ActiveContractsService.GetActiveContracts`
 - Filter: Template ID (e.g., `AryaFi.Finance.Cash:CashPosition`) + Party filter.
 - Returns all currently active, unconsumed contract instances and their contract keys.
 
 ### 6.2 Streaming Phase: Transaction Update Stream
-- Service: `UpdateService.GetUpdates`
-- Parameter: `begin_exclusive` set to the offset returned by the ACS response.
+- Service: `TransactionService.GetTransactions`
+- Parameter: `begin` set to the offset returned with the ACS snapshot.
 - Streams real-time `CreatedEvent` and `ArchivedEvent` objects.
 
 ```typescript
@@ -160,74 +160,54 @@ stream.on('data', (update) => {
 
 ## 7. Concrete Client Implementation (TypeScript)
 
-The following reference implementation demonstrates client connection, command submission with idempotency, and error handling using the Daml / Canton SDK:
+The following reference implementation submits a `SplitCash` exercise through the Daml 2.10 HTTP JSON API (v1). Idempotency comes from the **command ID**: it is derived from the caller's idempotency key, so a retry of the same business request reuses the same command ID and the ledger rejects the duplicate within the deduplication period. (The `IdempotencyKey` fields stored on contracts are for traceability only; the ledger does not enforce them.)
 
 ```typescript
-import { ChannelCredentials } from '@grpc/grpc-js';
-import { v4 as uuidv4 } from 'uuid';
-
 export interface SplitCashRequest {
   cashCid: string;
-  splitAmount: number;
-  ownerParty: string;
-  bankParty: string;
+  splitAmount: string;      // Daml Decimal as a string, e.g. "4975000.00", to avoid float rounding
+  ownerParty: string;       // full party ID, e.g. "DealerBankB::1220..."
+  idempotencyKey: string;   // stable per business request, e.g. the upstream MsgId
 }
 
 export class AryaFiLedgerClient {
-  private endpoint: string;
-  private jwtToken: string;
-
-  constructor(endpoint: string, jwtToken: string) {
-    this.endpoint = endpoint;
-    this.jwtToken = jwtToken;
-  }
+  constructor(private endpoint: string, private jwtToken: string) {}
 
   /**
-   * Submits an atomic SplitCash choice exercise with guaranteed idempotency.
+   * Exercises SplitCash. Retries with the same idempotencyKey are deduplicated by the
+   * ledger because they carry the same commandId.
    */
-  async splitCashPosition(req: SplitCashRequest): Promise<{ newCid1: string; newCid2: string }> {
-    const commandId = `CMD-SPLIT-${uuidv4()}`;
-    
-    const payload = {
-      commands: {
-        commandId,
+  async splitCashPosition(req: SplitCashRequest): Promise<{ splitCid: string; remainderCid: string }> {
+    const body = {
+      templateId: "AryaFi.Finance.Cash:CashPosition",
+      contractId: req.cashCid,
+      choice: "SplitCash",
+      argument: { splitAmount: req.splitAmount },
+      meta: {
+        commandId: `aryafi-split-${req.idempotencyKey}`,
         actAs: [req.ownerParty],
-        applicationId: "AryaFi_CashConcentration_Service",
-        commands: [
-          {
-            exercise: {
-              templateId: "AryaFi.Finance.Cash:CashPosition",
-              contractId: req.cashCid,
-              choice: "SplitCash",
-              choiceArgument: {
-                splitAmount: req.splitAmount.toFixed(4)
-              }
-            }
-          }
-        ]
+        deduplicationPeriod: { durationInMillis: 24 * 60 * 60 * 1000, type: "Duration" }
       }
     };
 
-    const response = await fetch(`${this.endpoint}/v2/commands/submit-wait`, {
+    const response = await fetch(`${this.endpoint}/v1/exercise`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${this.jwtToken}`
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(body)
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Canton submission failed (${response.status}): ${errorText}`);
+      // A 409 with a duplicate-command error means an earlier attempt already committed:
+      // look the result up by commandId instead of resubmitting.
+      throw new Error(`JSON API submission failed (${response.status}): ${await response.text()}`);
     }
 
-    const result = await response.json();
-    const exerciseResult = result.completion.exerciseResult;
-    return {
-      newCid1: exerciseResult._1,
-      newCid2: exerciseResult._2
-    };
+    // SplitCash returns (ContractId CashPosition, ContractId CashPosition): (split, remainder)
+    const { result } = await response.json();
+    return { splitCid: result.exerciseResult._1, remainderCid: result.exerciseResult._2 };
   }
 }
 ```
@@ -253,7 +233,7 @@ class AryaFiPythonClient:
         Submits a multi-party PaymentInstruction creation request.
         """
         command_id = f"CMD-PAY-{uuid.uuid4()}"
-        
+
         # Prepare submission command payload
         command_payload = {
             "commands": {
