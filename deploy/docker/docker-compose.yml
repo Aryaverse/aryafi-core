@@ -19,14 +19,15 @@ services:
       - "5018:5018"
       - "5019:5019"
       # Participant Ledger APIs
-      - "10012:10012"  # Bank Node (FederalReserveBank)
+      - "10012:10012"  # Bank Node (CashSettlementBank)
       - "10022:10022"  # Custodian Node (GlobalCustodian)
       - "10032:10032"  # Dealer A Node (DealerBankA)
       - "10042:10042"  # Dealer B Node (DealerBankB)
-      - "10052:10052"  # Regulator Node (SECRegulator)
+      - "10052:10052"  # Regulator Node (SupervisoryAuthority)
     volumes:
       - ../../deploy/canton/canton.conf:/canton/config/canton.conf:ro
       - ../../deploy/docker/bootstrap.sh:/canton/scripts/bootstrap.sh:ro
+      # Output of `daml build`; every .dar found here is uploaded at startup.
       - ../../.daml/dist:/canton/dars:ro
     environment:
       - JAVA_OPTS=-Xms1g -Xmx2g -XX:+UseG1GC
@@ -40,27 +41,9 @@ services:
     networks:
       - aryafi-network
 
-  # ---------------------------------------------------------------------------
-  # Optional Ledger Storage Backend (PostgreSQL for Persistence Testing)
-  # ---------------------------------------------------------------------------
-  postgres:
-    image: postgres:16-alpine
-    container_name: aryafi-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: canton
-      POSTGRES_PASSWORD: cantonpassword
-      POSTGRES_MULTIPLE_DATABASES: bank_db,custodian_db,dealer_a_db,dealer_b_db,regulator_db,domain_db
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    networks:
-      - aryafi-network
-
-volumes:
-  postgres-data:
-    driver: local
+# All nodes use in-memory storage (see deploy/canton/canton.conf). A persistent
+# PostgreSQL-backed topology is a production deployment concern, not part of
+# this local test environment.
 
 networks:
   aryafi-network:
