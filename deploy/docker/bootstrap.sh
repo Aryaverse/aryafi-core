@@ -4,59 +4,57 @@
 
 set -euo pipefail
 
+CANTON_HOME="${CANTON_HOME:-/canton}"
+CANTON_CONF="${CANTON_CONF:-$CANTON_HOME/config/canton.conf}"
+DAR_DIR="${DAR_DIR:-$CANTON_HOME/dars}"
+BOOTSTRAP_SCRIPT="${BOOTSTRAP_SCRIPT:-/tmp/canton_bootstrap.canton}"
+
 echo "================================================================="
 echo " Starting AryaFi Multi-Participant Canton Cluster"
-echo " Protocol Version: 30 | Canton Engine: 3.0.0"
+echo " Canton 2.10 (open source) | Daml SDK 2.10.0"
 echo "================================================================="
 
-CANTON_CONF="/canton/config/canton.conf"
-BOOTSTRAP_SCRIPT="/tmp/canton_bootstrap.canton"
-
-cat << 'EOF' > "$BOOTSTRAP_SCRIPT"
+# The Canton console script below is Scala, not shell.
+cat << EOF > "$BOOTSTRAP_SCRIPT"
 println("Connecting all participant nodes to aryafi_domain...")
+participants.local.foreach(_.domains.connect_local(aryafi_domain))
 
-// Connect participants to the shared synchronization domain
-val domain = domains.aryafi_domain
-participants.bank_node.domains.connect_local(domain)
-participants.custodian_node.domains.connect_local(domain)
-participants.dealer_a_node.domains.connect_local(domain)
-participants.dealer_b_node.domains.connect_local(domain)
-participants.regulator_node.domains.connect_local(domain)
+println("Allocating institutional parties, one organization per node...")
+val bankParty      = bank_node.parties.enable("CashSettlementBank")
+val custodianParty = custodian_node.parties.enable("GlobalCustodian")
+val dealerAParty   = dealer_a_node.parties.enable("DealerBankA")
+val dealerBParty   = dealer_b_node.parties.enable("DealerBankB")
+val regulatorParty = regulator_node.parties.enable("SupervisoryAuthority")
 
-println("Allocating institutional parties across nodes...")
-val bankParty      = participants.bank_node.parties.enable("FederalReserveBank")
-val custodianParty = participants.custodian_node.parties.enable("GlobalCustodian")
-val dealerAParty   = participants.dealer_a_node.parties.enable("DealerBankA")
-val dealerBParty   = participants.dealer_b_node.parties.enable("DealerBankB")
-val regulatorParty = participants.regulator_node.parties.enable("SECRegulator")
+println("Parties allocated:")
+println(s"  - Bank:      \${bankParty}")
+println(s"  - Custodian: \${custodianParty}")
+println(s"  - Dealer A:  \${dealerAParty}")
+println(s"  - Dealer B:  \${dealerBParty}")
+println(s"  - Regulator: \${regulatorParty}")
 
-println(s"Parties allocated successfully:")
-println(s"  - Bank:      ${bankParty}")
-println(s"  - Custodian: ${custodianParty}")
-println(s"  - Dealer A:  ${dealerAParty}")
-println(s"  - Dealer B:  ${dealerBParty}")
-println(s"  - Regulator: ${regulatorParty}")
-
-// Upload DAR file if present
-val darPath = "/canton/dars/aryafi-core.dar"
-val darFile = new java.io.File(darPath)
-if (darFile.exists()) {
-  println(s"Uploading ${darPath} to all participant nodes...")
-  participants.all.dars.upload(darPath)
-  println("DAR upload complete across all nodes.")
+// Upload every DAR found in the mounted directory (daml build output).
+val darDir = new java.io.File("$DAR_DIR")
+val dars = Option(darDir.listFiles()).toList.flatten.filter(_.getName.endsWith(".dar"))
+if (dars.isEmpty) {
+  println("Notice: no .dar found in $DAR_DIR (run 'daml build' first). Skipping DAR upload.")
 } else {
-  println(s"Notice: ${darPath} not found mounted. Skipping initial DAR upload.")
+  dars.foreach { dar =>
+    println(s"Uploading \${dar.getName} to all participant nodes...")
+    participants.all.dars.upload(dar.getPath)
+  }
+  println("DAR upload complete across all nodes.")
 }
 
 println("=================================================================")
-println(" AryaFi Canton Cluster Ready for Transaction Processing")
-echo "  Bank Ledger API:      localhost:10012"
-echo "  Custodian Ledger API: localhost:10022"
-echo "  Dealer A Ledger API:  localhost:10032"
-echo "  Dealer B Ledger API:  localhost:10042"
-echo "  Regulator Ledger API: localhost:10052"
+println(" AryaFi Canton Cluster Ready")
+println("  Bank Ledger API:      localhost:10012")
+println("  Custodian Ledger API: localhost:10022")
+println("  Dealer A Ledger API:  localhost:10032")
+println("  Dealer B Ledger API:  localhost:10042")
+println("  Regulator Ledger API: localhost:10052")
 println("=================================================================")
 EOF
 
 # Launch Canton daemon with configuration and bootstrap script
-exec bin/canton daemon -c "$CANTON_CONF" --bootstrap "$BOOTSTRAP_SCRIPT"
+exec "$CANTON_HOME/bin/canton" daemon -c "$CANTON_CONF" --bootstrap "$BOOTSTRAP_SCRIPT"
