@@ -1,0 +1,60 @@
+# Known Limitations
+
+This page records what AryaFi Core does **not** do yet, so that nobody builds on an assumption the code does not support. It is required by the *Definition of Done — Production Module* (Technical & Business Requirements §21, §30) and is updated with every release.
+
+Last reviewed: 2026-09-29, against the code at v1.0.2 (unreleased).
+
+---
+
+## 1. Maturity Status
+
+Maturity labels follow [VERSIONING_AND_RELEASE.md](governance/VERSIONING_AND_RELEASE.md#2-module-maturity-levels). No module has had an independent security review, so none is `Production Candidate` or `Production Reviewed`.
+
+| Module | Status | Why |
+|:---|:---|:---|
+| `Common.*` (Types, Identifiers, Time, Errors, Policies, Events) | Beta | Used by all modules and unit-tested; day-count conventions verified against ISDA examples. |
+| `Finance.Cash`, `Finance.Security`, `Finance.Asset` | Beta | Lock-holder model, receiver-authorized transfers, and split/merge are tested, including negative and privacy tests. |
+| `Finance.Settlement` (DvP) | Beta | Atomic Model 1 DvP moves real positions and is tested for leg mismatch, lock integrity, retry, and cancellation. |
+| `Finance.Account`, `Finance.Party`, `Finance.Obligation`, `Finance.Payment`, `Finance.Collateral` | Experimental | State records; not yet linked to the positions they describe. |
+| `Contracts.*` (Loan, Repo, ReverseRepo, SecuritiesLending, Margin, Pledge, Escrow, Transfer, Subscription, Redemption) | Experimental | Lifecycle state machines with corrected authorization, but no on-ledger movement of cash or securities (see §3). |
+| `Compliance.*` | Experimental | Policies evaluate correctly but cannot yet be called from business workflows (see §4). |
+
+## 2. Platform
+
+- **Daml SDK 2.10 / Canton 2.10 only.** The DAR targets Daml-LF 1.x and runs on Canton 2.10 (protocol version 5 or 7). It cannot be deployed to Canton 3.x, which the Canton Network Global Synchronizer uses.
+- **Contract keys.** `Account`, `InstitutionalParty`, `FinancialObligation`, `KycAttestation`, `SanctionsAttestation`, `TransferRestrictionRule`, and `OwnershipRestriction` declare keys. Daml 3 does not support contract keys this way, so a Canton 3 migration needs a redesign of these templates.
+- **No smart-contract upgrade path.** Templates are not designed for Daml smart contract upgrading, and the test scripts (with their `daml-script` dependency) are compiled into the same DAR as the production templates.
+
+## 3. Composition and Asset Movement
+
+- **Only DvP moves assets.** `ExecuteDvpSettlement` delivers locked `SecurityPosition` and `CashPosition` contracts atomically. Every other workflow (`InstitutionalLoan`, `RepoAgreement`, `SecuritiesLendingAgreement`, `MarginCall`, `AssetPledge`, `ConditionalEscrow`, `AssetTransferRequest`, `FundSubscription`, `AssetRedemption`, `PaymentInstruction`) records lifecycle state only. Cash and securities move off-ledger or through separate transfers.
+- **References are text, not contract IDs.** Pledges, collateral positions, margin calls, loans, and repos identify assets and payments by text reference, so the ledger does not stop one asset being pledged to several agreements.
+- **Exact-size legs.** A DvP leg must match the instructed quantity or amount exactly; split the position first. Partial settlement is not supported.
+- **Netted settlement.** `DvpModel2` and `DvpModel3` exist as reference data; only Model 1 executes.
+- **Failed or cancelled DvP.** Both legs stay locked to the settlement agent, who must release them with `UnlockSecurity` / `UnlockCash`.
+
+## 4. Multi-Party Workflows and Compliance
+
+- **No propose/accept workflows.** Every multi-signatory contract is created with multi-party submission (`submitMulti`). On a real multi-participant topology, parties hosted on different participants cannot co-submit, so these workflows need proposal templates first. The reference topology in `deploy/` boots and accepts the DAR, but no cross-participant workflow is scripted yet.
+- **Compliance checks are not composable.** `IsKycValid`, `IsSanctionsClear`, `EvaluateEligibility`, `EvaluateTransfer`, and `CheckOwnershipLimit` are controlled by the policy owner. Transfer approval (`ApproveTransfer`) is a manual decision by the compliance officer; it does not evaluate the policies itself.
+- **Simplified policies.** `EvaluateTransfer` maps regulatory categories to investor flags supplied by the caller; it is not legal advice. `EligibilityPolicy.minCreditRating` is stored but not evaluated. Asset classes are free text rather than the `AssetClass` type. `OwnershipRestriction` percentages are supplied by the caller, not computed from holdings. `JurisdictionProfile` has no effective dates.
+- **Identifiers are not validated on-ledger.** ISIN, CUSIP, and LEI values are wrapped in newtypes but their check digits are not verified by any template.
+
+## 5. Financial Semantics
+
+- **Interest is computed only for loans.** `InstitutionalLoan` accrues interest from rate, day count, and ledger time. Securities-lending fees are agreed by both counterparties; the rebate rate is stored but not applied. Repo repurchase prices are agreed, not checked against the repo rate.
+- **Day counts.** Act/360 and Act/365F count elapsed 24-hour periods between timestamps; Act/Act ISDA and 30/360 (US Bond Basis only) use UTC calendar dates. There is no business-day calendar or date adjustment.
+- **Rounding.** Amounts use Daml `Decimal` (10 decimal places). The `RoundingMode` type exists but no calculation applies a currency-specific rounding convention.
+
+## 6. Integration and Operations
+
+- **Idempotency keys are stored, not enforced.** Use the Ledger API command ID and deduplication period for idempotent submission.
+- **Audit events are not emitted automatically.** `AuditLog` and `RegulatoryReportRecord` contracts are created by the reporting party; no workflow emits them on settlement.
+- **Local test topology only.** `deploy/` runs five in-memory Canton 2.10 participants for integration testing. The config and bootstrap script have been run against Canton 2.10, and the DvP scenario and test suites (`runTreasuryDvpScenario`, `runDvpSettlementTests`) pass with `daml script` against one of its participants. Scripts that call `setTime` only run on the test ledger, and the Docker image itself is not built in CI.
+- **Web terminal is a simulation.** The site at https://aryafi-core.vercel.app replays scripted scenarios and does not connect to a ledger. Its code viewer shows the real source files.
+
+## 7. Test Coverage
+
+`daml test` runs 289 scripts, all passing. Coverage: 26 of 27 templates created (96%) and 138 of 206 choices exercised (67%, including each template's implicit `Archive`). `JurisdictionProfile` is never created in tests. Property-based tests and multi-participant integration tests do not exist yet.
+
+See [IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md) for how these limitations are addressed.
