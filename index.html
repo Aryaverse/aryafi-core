@@ -356,7 +356,7 @@
     </div>
 
     <!-- ====================================================================
-         Tab 3: Contract Explorer & Invariant Proof Calculator
+         Tab 3: Contract Explorer & Split Conservation Calculator
          ==================================================================== -->
     <div class="tab-pane" id="tab-contracts" role="tabpanel" aria-labelledby="tab-btn-contracts">
       <div class="section-header">
@@ -370,10 +370,10 @@
         <!-- Invariant Calculator Card -->
         <div class="calculator-card">
           <div>
-            <span class="hero-pill">Lemma 1 Verification</span>
-            <h3 style="font-size: 1.25rem; font-weight: 800;">CashPosition Split &amp; Merge Mathematical Invariant Proof</h3>
+            <span class="hero-pill">SplitCash Illustration</span>
+            <h3 style="font-size: 1.25rem; font-weight: 800;">CashPosition Split &amp; Merge Value Conservation</h3>
             <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem;">
-              In AryaFi, every SplitCash and MergeCash operation strictly obeys the algebraic conservation law: &sum; Outputs &equiv; &sum; Inputs. No token inflation or rounding leakage is permitted.
+              SplitCash creates positions of <em>split</em> and <em>amount &minus; split</em>; MergeCash creates one position of the sum. Daml's Decimal has 10 fixed decimal places, so the arithmetic is exact. This calculator mirrors that arithmetic in the browser; the on-ledger behaviour is covered by the Daml test suite.
             </p>
           </div>
 
@@ -394,7 +394,7 @@
               <input type="number" id="calc-split-amount" class="form-input" value="3500000.00" step="50000" min="1">
             </div>
             <button class="btn-primary" id="btn-execute-split" style="height: 42px;">
-              Execute Split &amp; Verify Proof
+              Execute Split
             </button>
           </div>
 
@@ -414,8 +414,8 @@
               <span class="calc-stat-lbl">Reconstituted Total Sum</span>
             </div>
             <div class="calc-stat">
-              <span class="calc-stat-val emerald" id="calc-invariant-status">VERIFIED (&Delta; = 0.00)</span>
-              <span class="calc-stat-lbl">Lemma 1 Invariant Guarantee</span>
+              <span class="calc-stat-val emerald" id="calc-invariant-status">Run a split</span>
+              <span class="calc-stat-lbl">Split + remainder = original</span>
             </div>
           </div>
         </div>
@@ -468,7 +468,7 @@
               <span class="calc-stat-lbl">Automated Margin Call Trigger</span>
             </div>
             <div class="calc-stat">
-              <span class="calc-stat-val emerald" id="calc-lcr-status">Level 1 HQLA (Compliant)</span>
+              <span class="calc-stat-val emerald" id="calc-lcr-status">Level 1 HQLA</span>
               <span class="calc-stat-lbl">Basel III Capital Eligibility</span>
             </div>
           </div>
