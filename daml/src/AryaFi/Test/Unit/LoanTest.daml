@@ -8,8 +8,9 @@ import Daml.Script
 import AryaFi.Contracts.Loan
 import AryaFi.Common.Types (DayCountConvention(..), LifecycleStatus(..))
 import AryaFi.Common.Identifiers (CorrelationId(..))
+import AryaFi.Common.Time (calcAccruedInterestBetween)
 import DA.Date (date, Month(..))
-import DA.Time (time)
+import DA.Time (time, addRelTime, days)
 
 setupParties : Script (Party, Party, Party, Party)
 setupParties = do
@@ -33,6 +34,7 @@ baseMaturityDate = time (date 2027 Sep 1) 9 0 0
 testLoanFullLifecycle : Script ()
 testLoanFullLifecycle = script do
   (lender, borrower, agentBank, regulator) <- setupParties
+  setTime baseStartDate
 
   loanCid <- submitMulti [lender, borrower] [] do
     createCmd InstitutionalLoan with
@@ -47,6 +49,7 @@ testLoanFullLifecycle = script do
       interestRate = 0.0575
       dayCountConvention = Act360
       startDate = baseStartDate
+      interestAccruedThrough = baseStartDate
       maturityDate = baseMaturityDate
       collateralPledgeRef = None
       status = Active
@@ -75,32 +78,38 @@ testLoanFullLifecycle = script do
   Some loan3 <- queryContractId borrower loanCid3
   assertMsg "Collateral reference must be populated" (loan3.collateralPledgeRef == Some "PLEDGE-UST-2026-001")
 
-  -- Accrue interest (33,541.67 USD for one month)
+  -- 30 days pass; the contract computes interest from rate, day count, and time:
+  -- 7,000,000 x 5.75% x 30/360 = 33,541.67 USD
+  let accrualEnd = addRelTime baseStartDate (days 30)
+  setTime accrualEnd
   loanCid4 <- submit lender do
-    exerciseCmd loanCid3 AccrueInterest with
-      additionalInterest = 33541.67
+    exerciseCmd loanCid3 AccrueInterest
 
   Some loan4 <- queryContractId lender loanCid4
-  assertMsg "Accrued interest must be 33541.67" (loan4.accruedInterest == 33541.67)
+  assertMsg "Accrued interest must follow the contractual formula"
+    (loan4.accruedInterest == calcAccruedInterestBetween Act360 7000000.0 0.0575 baseStartDate accrualEnd)
+  assertMsg "Accrued interest must be 33,541.67 to the cent"
+    (abs (loan4.accruedInterest - 33541.67) < 0.01)
+  assertMsg "Accrual date must advance" (loan4.interestAccruedThrough == accrualEnd)
 
-  -- Pay accrued interest
-  loanCid5 <- submit borrower do
+  -- Lender confirms receipt of the interest payment
+  loanCid5 <- submit lender do
     exerciseCmd loanCid4 PayAccruedInterest with
-      paymentAmount = 33541.67
+      paymentAmount = loan4.accruedInterest
 
   Some loan5 <- queryContractId borrower loanCid5
   assertMsg "Accrued interest must be zero" (loan5.accruedInterest == 0.0)
 
-  -- Add regulator as observer
-  loanCid6 <- submit lender do
+  -- Add regulator as observer (both counterparties consent)
+  loanCid6 <- submitMulti [lender, borrower] [] do
     exerciseCmd loanCid5 AddLoanObserver with
       newObserver = regulator
 
   Some loan6 <- queryContractId lender loanCid6
   assertMsg "Regulator must be observer" (regulator `elem` loan6.observers)
 
-  -- Pay down principal in full
-  loanCid7 <- submit borrower do
+  -- Lender confirms receipt of the full principal repayment
+  loanCid7 <- submit lender do
     exerciseCmd loanCid6 PayDownPrincipal with
       paymentAmount = 7000000.0
 
@@ -134,6 +143,7 @@ testLoanDefaultAndCure = script do
       interestRate = 0.06
       dayCountConvention = Act360
       startDate = baseStartDate
+      interestAccruedThrough = baseStartDate
       maturityDate = baseMaturityDate
       collateralPledgeRef = None
       status = Active
@@ -181,6 +191,7 @@ testOverLimitDrawdownFails = script do
       interestRate = 0.05
       dayCountConvention = Act360
       startDate = baseStartDate
+      interestAccruedThrough = baseStartDate
       maturityDate = baseMaturityDate
       collateralPledgeRef = None
       status = Active
@@ -210,6 +221,7 @@ testPaydownExceedingDrawnFails = script do
       interestRate = 0.05
       dayCountConvention = Act360
       startDate = baseStartDate
+      interestAccruedThrough = baseStartDate
       maturityDate = baseMaturityDate
       collateralPledgeRef = None
       status = Active
@@ -217,7 +229,7 @@ testPaydownExceedingDrawnFails = script do
       correlationId = CorrelationId "CORR-EXC-001"
       observers = []
 
-  submitMustFail borrower do
+  submitMustFail lender do
     exerciseCmd loanCid PayDownPrincipal with
       paymentAmount = 1500000.0
 
@@ -240,6 +252,7 @@ testUnauthorizedDrawdownFails = script do
       interestRate = 0.05
       dayCountConvention = Act360
       startDate = baseStartDate
+      interestAccruedThrough = baseStartDate
       maturityDate = baseMaturityDate
       collateralPledgeRef = None
       status = Active
@@ -269,6 +282,7 @@ testUnlinkCollateralWhileBalanceOutstandingFails = script do
       interestRate = 0.05
       dayCountConvention = Act360
       startDate = baseStartDate
+      interestAccruedThrough = baseStartDate
       maturityDate = baseMaturityDate
       collateralPledgeRef = Some "PLEDGE-001"
       status = Active
@@ -278,3 +292,74 @@ testUnlinkCollateralWhileBalanceOutstandingFails = script do
 
   submitMustFail lender do
     exerciseCmd loanCid UnlinkCollateralPledge
+
+-- | Negative: the borrower cannot record its own repayment or interest payment.
+-- Only the lender (the creditor) can confirm receipt of funds.
+testBorrowerCannotRecordOwnRepayment : Script ()
+testBorrowerCannotRecordOwnRepayment = script do
+  (lender, borrower, _, _) <- setupParties
+
+  loanCid <- submitMulti [lender, borrower] [] do
+    createCmd InstitutionalLoan with
+      loanId = "FACILITY-SELF-REPAY-TEST"
+      lender = lender
+      borrower = borrower
+      agentBank = None
+      currency = "USD"
+      facilityLimit = 10000000.0
+      drawnPrincipal = 10000000.0
+      accruedInterest = 50000.0
+      interestRate = 0.05
+      dayCountConvention = Act360
+      startDate = baseStartDate
+      interestAccruedThrough = baseStartDate
+      maturityDate = baseMaturityDate
+      collateralPledgeRef = None
+      status = Active
+      defaultReason = None
+      correlationId = CorrelationId "CORR-SELF-001"
+      observers = []
+
+  submitMustFail borrower do
+    exerciseCmd loanCid PayDownPrincipal with
+      paymentAmount = 10000000.0
+  submitMustFail borrower do
+    exerciseCmd loanCid PayAccruedInterest with
+      paymentAmount = 50000.0
+
+-- | Negative: interest cannot be accrued twice for the same period, and a
+-- drawdown after maturity is rejected.
+testAccrualAndMaturityGuards : Script ()
+testAccrualAndMaturityGuards = script do
+  (lender, borrower, _, _) <- setupParties
+  setTime baseStartDate
+
+  loanCid <- submitMulti [lender, borrower] [] do
+    createCmd InstitutionalLoan with
+      loanId = "FACILITY-GUARDS-TEST"
+      lender = lender
+      borrower = borrower
+      agentBank = None
+      currency = "USD"
+      facilityLimit = 5000000.0
+      drawnPrincipal = 1000000.0
+      accruedInterest = 0.0
+      interestRate = 0.05
+      dayCountConvention = Act360
+      startDate = baseStartDate
+      interestAccruedThrough = baseStartDate
+      maturityDate = baseMaturityDate
+      collateralPledgeRef = None
+      status = Active
+      defaultReason = None
+      correlationId = CorrelationId "CORR-GUARD-001"
+      observers = []
+
+  -- No time has elapsed since the accrual date
+  submitMustFail lender do
+    exerciseCmd loanCid AccrueInterest
+
+  setTime baseMaturityDate
+  submitMustFail borrower do
+    exerciseCmd loanCid DrawdownPrincipal with
+      drawdownAmount = 100000.0
