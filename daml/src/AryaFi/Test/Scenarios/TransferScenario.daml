@@ -10,7 +10,6 @@ module AryaFi.Test.Scenarios.TransferScenario where
 import Daml.Script
 import AryaFi.Contracts.Transfer
 import AryaFi.Common.Identifiers
-import AryaFi.Common.Types
 
 -- ---------------------------------------------------------------------------
 -- Helpers
