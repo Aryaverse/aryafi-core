@@ -1,14 +1,16 @@
 # AryaFi Core: User & Operator Guide
 
-Welcome to the **AryaFi Core** user guide. This document provides comprehensive, step-by-step instructions for interacting with the institutional digital asset terminal, running multi-party financial scenarios, validating algebraic contract invariants, testing ISO 20022 translations, and deploying the platform to Canton testnets.
+Welcome to the **AryaFi Core** user guide. This document explains how to use the web terminal (a scripted simulation that explains the library), how to build and test the Daml library, and how to run the local multi-participant Canton topology. For what the library does not do yet, see [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md).
 
 ---
 
 ## 1. Accessing the Live Web Terminal
 
-The live institutional terminal is hosted in production on Vercel at:
+The web terminal is hosted on Vercel at:
 
 🌐 **[https://aryafi-core.vercel.app](https://aryafi-core.vercel.app)**
+
+> The terminal does **not** connect to a ledger. Its simulator replays the library's Daml test scenarios step by step; the code viewer loads the real source files from this repository.
 
 ### System Requirements
 * Any modern web browser (Chrome, Chromium, Edge, Safari, Firefox) with JavaScript enabled.
@@ -35,41 +37,41 @@ The terminal is structured into six dedicated modules accessible via the top nav
 
 ### Module 1: Canton Multi-Participant Topology Visualizer (`#topology`)
 
-The Topology Visualizer models a live Canton Network protocol v30 domain with 5 segregated participant nodes and a central sequencer domain hub.
+The Topology Visualizer shows the five-participant reference topology defined in `deploy/canton/canton.conf` (Canton 2.10, protocol version 5): one domain and one participant node per organization.
 
 #### How to Use:
 1. **Interactive SVG Node Map**:
    * Click on any participant circle on the map:
-     * **Bank Node** (Federal Reserve Bank / Central Cash Authority)
-     * **Custodian Node** (Global Custodian / Safekeeping CSD)
-     * **Dealer A** (Goldman Sachs Primary Dealer)
-     * **Dealer B** (Morgan Stanley Primary Dealer)
-     * **SEC / CAT** (Supervisory & Audit Authority)
+     * **Bank Node** (Cash Settlement Bank: issues tokenized deposits)
+     * **Custodian Node** (Global Custodian / DvP Settlement Agent)
+     * **Dealer A** (Seller)
+     * **Dealer B** (Buyer)
+     * **Regulator** (Supervisory Authority, observer only)
 2. **Participant ACS Inspector**:
    * The right-hand inspector card dynamically updates to display:
      * **Participant ID**: Node identifier in the Canton topology configuration.
      * **Ledger API Endpoint**: Default gRPC / JSON endpoint (e.g. `localhost:10012`).
      * **Hosted Parties**: Daml parties allocated on that node.
-     * **KMS Fingerprint**: Cryptographic public key fingerprint managing the node's namespace.
-     * **Active Contract Set (ACS)**: Live count of unarchived contracts observed by the node.
-     * **Sub-Transaction Privacy Boundary**: Strict cryptographic rule defining which contract types and payload data this participant can observe vs. which are obscured.
+     * **Party Namespace**: Assigned when the topology is bootstrapped.
+     * **Contracts Stored**: Which contracts this node stores, i.e. those where its party is a stakeholder.
+     * **Privacy Boundary**: What this participant can and cannot see.
 
 ---
 
 ### Module 2: Multi-Party Financial Lifecycle Simulator (`#simulator`)
 
-The Simulator executes complex, multi-party smart contract lifecycles phase-by-phase, demonstrating state machine progression and non-repudiable audit logs.
+The Simulator replays the library's scenario tests phase by phase. Each log line names the Daml choices the corresponding test exercises; nothing is submitted to a ledger.
 
 #### Available Scenarios:
 1. **Tokenized US Treasury + Cash DvP**:
    * Phase 1: Compliance Onboarding (KYC & Sanctions pre-trade gating).
-   * Phase 2: Dual Position Lockup (Seller locks $5M US Treasuries, Buyer locks $5M cash).
-   * Phase 3: `DvpInstruction` Tri-Party Co-signature.
-   * Phase 4: Atomic Settlement Execution (Simultaneous cross-asset transfer in 1 transaction commit).
-   * Phase 5: SEC CAT regulatory audit report emission.
+   * Phase 2: Both legs locked to the settlement agent (seller's 5M face Treasury; buyer's 4,975,000 USD, split from 5M).
+   * Phase 3: `DvpInstruction` co-signed by seller, buyer, and settlement agent.
+   * Phase 4: `ExecuteDvpSettlement` validates both legs and delivers them in one transaction.
+   * Phase 5: Seller records a `RegulatoryReportRecord` (SEC CAT regime); the regulator acknowledges it.
 2. **Institutional Securities Lending**:
    * Tri-party lending agreement creation with 102% cash collateral pledge via `AssetPledge`.
-   * Act/360 borrow fee accrual and payment servicing.
+   * Borrow fee agreed by both counterparties (Act/360) and payment confirmed by the lender.
    * Mark-to-market collateral revaluation.
    * Recall notice issuance and pro-rata collateral release.
    * Full return and agreement closeout.
@@ -77,40 +79,30 @@ The Simulator executes complex, multi-party smart contract lifecycles phase-by-p
    * Multi-entity corporate cash accounts setup (US subsidiary, EU subsidiary, HQ pool).
    * Surplus capital identification via `SplitCash`.
    * Concentration sweep and pool consolidation via `MergeCash`.
-   * Intercompany funding instruction with SWIFT UETR tracking reference.
-   * Settlement agent clearing with complete competitor blindness.
+   * Intercompany payment instruction co-signed by payer, payee, and bank; HQ locks 8M to the bank.
+   * The bank delivers the locked cash (`SettleLockedCash`) and confirms the payment; the EU subsidiary sees none of it.
 
 #### How to Operate:
 1. **Select a Scenario**: Click on one of the scenario buttons in the left sidebar.
 2. **Step-by-Step Execution**: Click **"Next Phase"** to advance through each step individually. The active step is highlighted with a cyan indicator, and executed phases turn emerald with a checkmark.
-3. **Automated Run**: Click **"Auto-Run"** to execute the entire lifecycle with real-time streaming intervals.
+3. **Automated Run**: Click **"Auto-Run"** to step through the entire lifecycle automatically.
 4. **Reset**: Click **"Reset"** to return the state machine to Phase 1.
-5. **Copy Log**: Click **"Copy Log"** to copy the complete ledger API execution log to your clipboard.
+5. **Copy Log / Export**: Copy the simulated log, or export it as CSV or JSON (the export is labelled as a simulation, not an audit record).
 
 ---
 
-### Module 3: Contract Explorer & Invariant Proof Calculator (`#contracts`)
+### Module 3: Contract Explorer & Split Calculator (`#contracts`)
 
-This section allows quantitative analysts, auditors, and engineers to verify the algebraic properties and conservation invariants of AryaFi contracts.
+#### Split Conservation Calculator
+`SplitCash` turns a position of amount `A` into positions of `s` and `A − s`. Daml's `Decimal` is fixed-point with 10 decimal places, so the arithmetic is exact. The calculator mirrors that arithmetic in the browser (JavaScript floats would drift, e.g. `0.3 − 0.1`). It illustrates the rule; the on-ledger behaviour is verified by the Daml tests, not by this page.
 
-#### Lemma 1: Conservation of Value ($\Delta = 0.00$):
-In AryaFi, every `SplitCash` and `MergeCash` operation satisfies the strict algebraic conservation equation:
-$$\sum \text{Outputs} \equiv \sum \text{Inputs}$$
-No rounding leakage or token inflation is mathematically possible.
-
-#### Testing the Proof:
-1. Enter a **Total CashPosition Amount** (e.g. `$10,000,000.00`).
-2. Enter a **Split Amount** (e.g. `$3,500,000.00`).
-3. Click **"Execute Split & Verify Proof"** (or use the one-click quick presets: **$1M**, **$25M**, or **$100M**).
-4. Inspect the output box:
-   * Output Position A: `$3,500,000.00`
-   * Output Position B: `$6,500,000.00`
-   * Reconstituted Total Sum: `$10,000,000.00`
-   * Guarantee Status: **VERIFIED ($\Delta = 0.00$)**
+1. Enter a **Total CashPosition Amount** (e.g. `10000000.00`).
+2. Enter a **Split Amount** (e.g. `3500000.00`), or use a preset.
+3. Click **"Execute Split"**. The panel shows both output positions, their sum, and `CONSERVED (exact, Δ = 0)`. Invalid inputs are rejected with the same rule `SplitCash` applies (split must be > 0 and < the position).
 
 #### Template Cards:
 Browse detailed operational parameters for:
-* **`CashPosition`**: Fiat deposit primitive with maintainer keys and encumbrance locks.
+* **`CashPosition`**: Tokenized deposit with split/merge, receiver-authorized transfer, and locks held by a named lock holder.
 * **`SecurityPosition`**: CUSIP/ISIN safekeeping token.
 * **`CollateralPosition`**: Haircut model ($V = M \times (1 - h)$), substitution, and disputes.
 * **`DvpInstruction`**: BIS CPSS Model 1 atomic cross-asset delivery.
@@ -121,7 +113,7 @@ Browse detailed operational parameters for:
 
 ### Module 4: ISO 20022 Financial Messaging Hub (`#iso`)
 
-Enables enterprise integration teams to inspect bidirectional translation between SWIFT ISO 20022 MX XML messages and Daml Ledger API JSON-RPC command payloads.
+Shows how ISO 20022 MX messages map to Daml 2.10 JSON API (v1) request bodies against the actual AryaFi templates.
 
 #### Supported Messages:
 * **`pacs.008.001.10`**: Financial Institutional Customer Credit Transfer $\rightarrow$ `PaymentInstruction`
@@ -132,33 +124,35 @@ Enables enterprise integration teams to inspect bidirectional translation betwee
 #### How to Use:
 1. Select a message from the dropdown menu.
 2. The left pane renders the incoming ISO 20022 XML with UETR and end-to-end IDs.
-3. The right pane renders the exact compiled Daml Ledger API JSON command with parameters.
-4. Click **"Copy XML"** or **"Copy Daml"** to copy payloads for testing against your own API gateways.
+3. The right pane shows the JSON API request body (create or query) with the templates' real field names and encodings; party fields are placeholders because party IDs are assigned at allocation.
+4. Click **"Run Validation Checks"** to check the displayed payloads: XML well-formedness, required elements, ISIN and LEI check digits, UETR format, currency codes, and XML/JSON consistency. The badge reports how many checks passed or which ones failed.
+5. Click **"Copy XML"** or **"Copy Daml"** to copy the payloads.
 
 ---
 
 ### Module 5: Security Assurance & Regulatory Alignment (`#security`)
 
-Presents the audited regulatory and threat modeling matrix:
+Presents the threat model and regulatory mapping (not yet independently audited):
 * **STRIDE Threat Mitigations**: Analysis of Spoofing, Tampering, Repudiation, Information Disclosure, Denial of Service, and Elevation of Privilege across the contract library.
 * **US Banking Capital Rules**: OCC/Fed/FDIC capital neutrality, Basel III LCR Level 1 HQLA classification, UCC Article 8/12 perfection, and custodial segregation.
-* **SEC Regulatory Framework**: SEC Rule 15c3-3 customer protection, automated SEC CAT reporting, FINRA TRACE compliance, and Reg D / Reg S / Rule 144A transfer restrictions.
+* **SEC Regulatory Framework**: SEC Rule 15c3-3 customer protection, SEC CAT / FINRA TRACE report records, and Reg D / Reg S / Rule 144A transfer restrictions.
 
 ---
 
 ### Module 6: Daml Smart Contract Source Code Dossier (`#docs`)
 
-Allows developers and auditors to review actual production Daml smart contract code directly in the terminal without opening an IDE.
+Loads the actual Daml source files from this repository, so the viewer always matches the code. (Opened from disk without a web server, it shows a link to the file on GitHub instead.)
 
 #### How to Use:
 1. Select a contract module from the dropdown:
    * `AryaFi.Finance.Cash` (Tokenized Cash Primitive)
    * `AryaFi.Finance.Security` (Safekeeping & Encumbrance)
+   * `AryaFi.Finance.Settlement` (Atomic DvP)
    * `AryaFi.Finance.Collateral` (Haircut & Margin Revaluation)
    * `AryaFi.Contracts.Loan` (Institutional Credit Facility)
    * `AryaFi.Contracts.Repo` (Repurchase Agreement)
    * `AryaFi.Compliance.TransferRestrictions` (Reg D, Reg S, Rule 144A)
-2. Review syntax-highlighted Daml template choices, controllers, signatories, and invariants.
+2. Review the template's choices, controllers, signatories, and invariants.
 3. Click **"Copy Source"** to copy the code directly to your clipboard.
 
 ---
@@ -175,27 +169,30 @@ daml version
 # Compile Daml Archive (DAR)
 daml build
 
-# Run comprehensive test suite across all modules
-daml test
+# Run the test suite (289 scripts; requires Java 11 or 17)
+daml test --show-coverage
 ```
 
-### 2. Start Multi-Participant Canton Docker Sandbox
+### 2. Start the Multi-Participant Canton Topology
+The container installs Canton 2.10 (open source), starts one domain and five participants, allocates one party per participant, and uploads every DAR in `.daml/dist`.
 ```bash
+daml build            # the DAR must exist before the container starts
 cd deploy/docker
-docker compose up -d
+docker compose up -d --build
 
 # Verify running participant nodes (Ports 10012, 10022, 10032, 10042, 10052)
 docker compose ps
 ```
 
-### 3. Run Scenario via Daml Script
+### 3. Run a Scenario via Daml Script
 ```bash
 daml script \
   --dar .daml/dist/aryafi-core-1.0.0.dar \
-  --script-name AryaFi.Test.Scenarios.TreasuryDvpScenario:testTreasuryDvp \
+  --script-name AryaFi.Test.Scenarios.TreasuryDvpScenario:runTreasuryDvpScenario \
   --ledger-host localhost \
   --ledger-port 10012
 ```
+This allocates the scenario's parties on the bank participant and runs the DvP there. Workflows whose parties live on different participants need propose/accept templates (see [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)).
 
 ---
 
