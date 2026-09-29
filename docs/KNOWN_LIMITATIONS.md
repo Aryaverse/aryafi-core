@@ -2,7 +2,7 @@
 
 This page records what AryaFi Core does **not** do yet, so that nobody builds on an assumption the code does not support. It is required by the *Definition of Done — Production Module* (Technical & Business Requirements §21, §30) and is updated with every release.
 
-Last reviewed: 2026-09-29, against the code at v1.0.2 (unreleased).
+Last reviewed: 2026-09-29, against the code at v2.0.0.
 
 ---
 
@@ -50,7 +50,7 @@ Maturity labels follow [VERSIONING_AND_RELEASE.md](governance/VERSIONING_AND_REL
 
 - **Idempotency keys are stored, not enforced.** Use the Ledger API command ID and deduplication period for idempotent submission.
 - **Audit events are not emitted automatically.** `AuditLog` and `RegulatoryReportRecord` contracts are created by the reporting party; no workflow emits them on settlement.
-- **Local test topology only.** `deploy/` runs five in-memory Canton 2.10 participants for integration testing. The config and bootstrap script have been run against Canton 2.10, and the DvP scenario and test suites (`runTreasuryDvpScenario`, `runDvpSettlementTests`) pass with `daml script` against one of its participants. Scripts that call `setTime` only run on the test ledger, and the Docker image itself is not built in CI.
+- **Local test topology only.** `deploy/` runs five in-memory Canton 2.10 participants for integration testing. The config and bootstrap script have been run against Canton 2.10, and the DvP scenario and test suites (`runTreasuryDvpScenario`, `runDvpSettlementTests`) pass with `daml script` against one of its participants. CI builds the Docker image, boots the topology, and runs both suites against it on every push and pull request (`canton-topology` job). Scripts that call `setTime` only run on the test ledger.
 - **Web terminal is a simulation.** The site at https://aryafi-core.vercel.app replays scripted scenarios and does not connect to a ledger. Its code viewer shows the real source files.
 
 ## 7. Test Coverage

@@ -51,10 +51,10 @@ For long-running contracts (`InstitutionalLoan`, `RepoAgreement`), the custodian
 ```bash
 # 1. Inspect package IDs of current and new DAR packages
 daml damlc inspect-dar .daml/dist/aryafi-core-0.1.0.dar | grep "package-id"
-daml damlc inspect-dar .daml/dist/aryafi-core-1.0.0.dar | grep "package-id"
+daml damlc inspect-dar .daml/dist/aryafi-core-2.0.0.dar | grep "package-id"
 
 # 2. Upload new DAR to all participant nodes
-canton console --connect=bank_node -c 'participants.all.dars.upload(".daml/dist/aryafi-core-1.0.0.dar")'
+canton console --connect=bank_node -c 'participants.all.dars.upload(".daml/dist/aryafi-core-2.0.0.dar")'
 
 # 3. Query un-migrated contracts on active node
 canton console --connect=bank_node -c '
@@ -73,9 +73,9 @@ canton console --connect=bank_node -c '
 
 ---
 
-## 5. Upgrading to v1.0.2
+## 5. Upgrading to v2.0.0
 
-v1.0.2 changes template fields and choice signatures, so its package ID differs from v1.0.1 and existing contracts must be migrated (Strategy B above: archive under the old package, recreate under the new one with the signatories of each contract). Because v1.0.1 did not build, most deployments have no live contracts; the notes below apply to any that do.
+v2.0.0 changes template fields and choice signatures, so its package ID differs from v1.0.1 and existing contracts must be migrated (Strategy B above: archive under the old package, recreate under the new one with the signatories of each contract). Because v1.0.1 did not build, most deployments have no live contracts; the notes below apply to any that do.
 
 ### 5.1 New Template Fields
 
@@ -92,7 +92,7 @@ v1.0.2 changes template fields and choice signatures, so its package ID differs 
 
 ### 5.3 Client Code Changes
 
-| Before (v1.0.1) | After (v1.0.2) |
+| Before (v1.0.1) | After (v2.0.0) |
 |:---|:---|
 | `LockCash with lockRef` / `LockSecurity with lockRef` | add `holder = <lock holder>`; unlock and settle as the lock holder |
 | `UnlockCash` / `UnlockSecurity` submitted by owner + bank/custodian | submitted by the lock holder |
