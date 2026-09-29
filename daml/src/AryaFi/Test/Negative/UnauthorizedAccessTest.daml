@@ -46,6 +46,7 @@ negativeUnauthorizedCashSplit = script do
       amount = 500000.0
       isLocked = False
       lockReference = None
+      lockHolder = None
       observers = []
 
   -- Eve tries to split Alice's cash position -> Must Fail
@@ -71,6 +72,7 @@ negativeUnauthorizedCashTransfer = script do
       amount = 250000.0
       isLocked = False
       lockReference = None
+      lockHolder = None
       observers = []
 
   -- Eve tries to transfer Alice's cash -> Must Fail (requires owner + bank)
@@ -98,12 +100,14 @@ negativeUnauthorizedCashLock = script do
       amount = 100000.0
       isLocked = False
       lockReference = None
+      lockHolder = None
       observers = []
 
   -- Owner alone tries to lock without bank co-authorization
   submitMustFail alice do
     exerciseCmd cashCid LockCash with
       lockRef = "UNAUTHORIZED-LOCK"
+      holder = bank
 
   pure ()
 
@@ -124,7 +128,7 @@ negativeUnauthorizedSecuritySplit = script do
       custodian = custodian
       owner = alice
       accountId = acc
-      isin = "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       cusip = None
       instrumentName = "US Treasury 4.25% Nov 2026"
       instrumentType = GovernmentBond
@@ -136,6 +140,7 @@ negativeUnauthorizedSecuritySplit = script do
       seniority = Some Senior
       isLocked = False
       lockReference = None
+      lockHolder = None
       csdRef = None
       observers = []
 
@@ -157,7 +162,7 @@ negativeUnauthorizedSecurityLock = script do
       custodian = custodian
       owner = alice
       accountId = acc
-      isin = "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       cusip = None
       instrumentName = "US Treasury 4.25% Nov 2026"
       instrumentType = GovernmentBond
@@ -169,12 +174,13 @@ negativeUnauthorizedSecurityLock = script do
       seniority = Some Senior
       isLocked = False
       lockReference = None
+      lockHolder = None
       csdRef = None
       observers = []
 
   -- Owner alone tries to lock without custodian co-auth
   submitMustFail alice do
-    exerciseCmd secCid LockSecurity with lockRef = "UNAUTHORIZED-PLEDGE"
+    exerciseCmd secCid LockSecurity with lockRef = "UNAUTHORIZED-PLEDGE"; holder = custodian
 
   pure ()
 
@@ -204,6 +210,7 @@ negativeUnauthorizedLoanDrawdown = script do
       interestRate = 0.065
       dayCountConvention = Act360
       startDate = now
+      interestAccruedThrough = now
       maturityDate = maturity
       collateralPledgeRef = None
       status = Active
@@ -239,6 +246,7 @@ negativeUnauthorizedLoanDefault = script do
       interestRate = 0.055
       dayCountConvention = Act360
       startDate = now
+      interestAccruedThrough = now
       maturityDate = maturity
       collateralPledgeRef = None
       status = Active
@@ -274,7 +282,7 @@ negativeUnauthorizedRepoOpening = script do
       buyer = buyer
       tripartyAgent = None
       custodian = custodian
-      isin = "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       collateralQuantity = 5000000.0
       collateralAccountId = AccountId "ACC-TRI-001"
       haircut = 0.02
@@ -315,7 +323,7 @@ negativeUnauthorizedRepoDefault = script do
       buyer = buyer
       tripartyAgent = None
       custodian = custodian
-      isin = "US912828XG34"
+      isin = ISIN "US912828XG01"
       collateralQuantity = 10000000.0
       collateralAccountId = AccountId "ACC-TRI-002"
       haircut = 0.02
@@ -362,7 +370,7 @@ negativeUnauthorizedTransferApproval = script do
       receiver = receiver
       custodian = custodian
       complianceOfficer = complianceOfficer
-      assetId = "SEC-US912828ZM24"
+      assetId = "SEC-US912828ZM50"
       quantity = 500000.0
       fromAccount = AccountId "ACC-SENDER-001"
       toAccount = AccountId "ACC-RECEIVER-001"
@@ -396,7 +404,7 @@ negativeUnauthorizedTransferCancel = script do
       receiver = receiver
       custodian = custodian
       complianceOfficer = complianceOfficer
-      assetId = "SEC-US912828ZM24"
+      assetId = "SEC-US912828ZM50"
       quantity = 250000.0
       fromAccount = AccountId "ACC-SENDER-002"
       toAccount = AccountId "ACC-RECEIVER-002"

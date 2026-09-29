@@ -28,6 +28,7 @@ mkAssetHolding issuer custodian owner accId = submitMulti [issuer, custodian, ow
     quantity = 50000.0
     isLocked = False
     lockReference = None
+    lockHolder = None
     externalRef = None
     observers = []
 
@@ -72,7 +73,7 @@ testAssetTransfer = script do
 
   holdingCid <- mkAssetHolding issuer custodian seller (AccountId "ACC-SELLER-001")
 
-  transferredCid <- submitMulti [seller, custodian] [] do
+  transferredCid <- submitMulti [seller, custodian, buyer] [] do
     exerciseCmd holdingCid TransferAsset with
       newOwner = buyer
       newAccountId = AccountId "ACC-BUYER-001"
@@ -180,6 +181,7 @@ mkCash bank owner accId amt = submitMulti [bank, owner] [] do
     amount = amt
     isLocked = False
     lockReference = None
+    lockHolder = None
     observers = []
 
 testCashSplitPreservesAmount : Script ()
@@ -229,7 +231,7 @@ testCashTransfer = script do
 
   cashCid <- mkCash bank alice (AccountId "ACC-ALICE-001") 5000000.0
 
-  transferredCid <- submitMulti [alice, bank] [] do
+  transferredCid <- submitMulti [alice, bank, bob] [] do
     exerciseCmd cashCid TransferCash with
       newOwner = bob
       newAccountId = AccountId "ACC-BOB-001"
@@ -253,7 +255,7 @@ testCashLockAndUnlock = script do
 
   -- Lock for DvP
   lockedCid <- submitMulti [owner, bank] [] do
-    exerciseCmd cashCid LockCash with lockRef = "DVP-TREASURY-2026-001"
+    exerciseCmd cashCid LockCash with lockRef = "DVP-TREASURY-2026-001"; holder = bank
 
   lockedData <- queryContractId owner lockedCid
   case lockedData of
@@ -331,7 +333,7 @@ testCannotSplitLockedCash = script do
   cashCid <- mkCash bank owner (AccountId "ACC-SPLK-001") 1000000.0
 
   lockedCid <- submitMulti [owner, bank] [] do
-    exerciseCmd cashCid LockCash with lockRef = "LOCK-REF-001"
+    exerciseCmd cashCid LockCash with lockRef = "LOCK-REF-001"; holder = bank
 
   submitMustFail owner do
     exerciseCmd lockedCid SplitCash with splitAmount = 200000.0
@@ -354,6 +356,7 @@ testCannotMergeAcrossCurrencies = script do
       amount = 1000000.0
       isLocked = False
       lockReference = None
+      lockHolder = None
       observers = []
 
   -- Create EUR position at same account (different currency, so different key)
@@ -367,6 +370,7 @@ testCannotMergeAcrossCurrencies = script do
       amount = 900000.0
       isLocked = False
       lockReference = None
+      lockHolder = None
       observers = []
 
   -- Attempt to merge USD into EUR — must fail
@@ -403,6 +407,7 @@ testCashEnsurePositiveAmount = script do
       amount = 0.0      -- ensure clause rejects this
       isLocked = False
       lockReference = None
+      lockHolder = None
       observers = []
 
 -- ---------------------------------------------------------------------------

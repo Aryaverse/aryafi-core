@@ -48,11 +48,11 @@ observerPrivacyVerification = script do
       accountType = SegregatedCustody
       description = "Alice Segregated Account"
       isFrozen = False
+      freezeReason = None
       observers = []
 
   -- Bob should NOT be able to see Alice's account
-  bobQuery <- submit bob do
-    queryContractId bob accCid
+  bobQuery <- queryContractId bob accCid
 
   assert (bobQuery == None)
 
@@ -61,8 +61,7 @@ observerPrivacyVerification = script do
     exerciseCmd accCid AddObserver with newObserver = auditor
 
   -- Auditor can now query the contract
-  auditorQuery <- submit auditor do
-    queryContractId auditor updatedAccCid
+  auditorQuery <- queryContractId auditor updatedAccCid
 
   assert (auditorQuery /= None)
   pure ()
@@ -89,16 +88,15 @@ cashPositionPrivacy = script do
       amount = 5000000.0
       isLocked = False
       lockReference = None
+      lockHolder = None
       observers = []
 
   -- Bob cannot see Alice's cash position
-  bobCashQuery <- submit bob do
-    queryContractId bob cashCid
+  bobCashQuery <- queryContractId bob cashCid
   assert (bobCashQuery == None)
 
   -- Bank can see it (signatory)
-  bankCashQuery <- submit bank do
-    queryContractId bank cashCid
+  bankCashQuery <- queryContractId bank cashCid
   assert (bankCashQuery /= None)
 
   -- Alice adds settlement agent as observer for DvP coordination
@@ -106,13 +104,11 @@ cashPositionPrivacy = script do
     exerciseCmd cashCid AddCashObserver with newObserver = settlementAgent
 
   -- Settlement agent can now see the cash position
-  agentQuery <- submit settlementAgent do
-    queryContractId settlementAgent cashCidWithObserver
+  agentQuery <- queryContractId settlementAgent cashCidWithObserver
   assert (agentQuery /= None)
 
   -- Bob is still blind
-  bobStillBlind <- submit bob do
-    queryContractId bob cashCidWithObserver
+  bobStillBlind <- queryContractId bob cashCidWithObserver
   assert (bobStillBlind == None)
 
   -- Alice removes settlement agent's visibility
@@ -121,8 +117,7 @@ cashPositionPrivacy = script do
       observerToRemove = settlementAgent
 
   -- Settlement agent can no longer see it
-  agentGone <- submit settlementAgent do
-    queryContractId settlementAgent cashCidNoObserver
+  agentGone <- queryContractId settlementAgent cashCidNoObserver
   assert (agentGone == None)
 
   pure ()
@@ -145,8 +140,8 @@ securityPositionPrivacy = script do
       custodian = custodian
       owner = alice
       accountId = acc
-      isin = "US912828ZM24"
-      cusip = Some "912828ZM2"
+      isin = ISIN "US912828ZM50"
+      cusip = Some (CUSIP "912828ZM5")
       instrumentName = "US Treasury 4.25% Nov 2026"
       instrumentType = GovernmentBond
       quantity = 10000000.0
@@ -157,12 +152,12 @@ securityPositionPrivacy = script do
       seniority = Some Senior
       isLocked = False
       lockReference = None
+      lockHolder = None
       csdRef = None
       observers = []
 
   -- Bob (counterparty) cannot see Alice's security position
-  bobSecQuery <- submit bob do
-    queryContractId bob secCid
+  bobSecQuery <- queryContractId bob secCid
   assert (bobSecQuery == None)
 
   -- Alice adds tri-party agent as observer for repo collateral coordination
@@ -170,13 +165,11 @@ securityPositionPrivacy = script do
     exerciseCmd secCid AddSecurityObserver with newObserver = tripartyAgent
 
   -- Tri-party agent can now see it
-  agentSecQuery <- submit tripartyAgent do
-    queryContractId tripartyAgent secCidWithAgent
+  agentSecQuery <- queryContractId tripartyAgent secCidWithAgent
   assert (agentSecQuery /= None)
 
   -- Bob is still blind to Alice's security holdings
-  bobStillBlind <- submit bob do
-    queryContractId bob secCidWithAgent
+  bobStillBlind <- queryContractId bob secCidWithAgent
   assert (bobStillBlind == None)
 
   pure ()
@@ -208,6 +201,7 @@ loanObserverPrivacy = script do
       interestRate = 0.065
       dayCountConvention = Act360
       startDate = now
+      interestAccruedThrough = now
       maturityDate = maturity
       collateralPledgeRef = None
       status = Active
@@ -216,27 +210,23 @@ loanObserverPrivacy = script do
       observers = []
 
   -- Unrelated bank cannot see loan contract
-  thirdPartyQuery <- submit thirdParty do
-    queryContractId thirdParty loanCid
+  thirdPartyQuery <- queryContractId thirdParty loanCid
   assert (thirdPartyQuery == None)
 
   -- Regulator also cannot see loan before being added as observer
-  regQuery <- submit regulator do
-    queryContractId regulator loanCid
+  regQuery <- queryContractId regulator loanCid
   assert (regQuery == None)
 
   -- Lender adds regulator as observer
-  loanCidWithReg <- submit lender do
+  loanCidWithReg <- submitMulti [lender, borrower] [] do
     exerciseCmd loanCid AddLoanObserver with newObserver = regulator
 
   -- Regulator can now see the loan
-  regAfterAdd <- submit regulator do
-    queryContractId regulator loanCidWithReg
+  regAfterAdd <- queryContractId regulator loanCidWithReg
   assert (regAfterAdd /= None)
 
   -- Unrelated bank is still blind
-  thirdPartyStillBlind <- submit thirdParty do
-    queryContractId thirdParty loanCidWithReg
+  thirdPartyStillBlind <- queryContractId thirdParty loanCidWithReg
   assert (thirdPartyStillBlind == None)
 
   pure ()
@@ -259,7 +249,7 @@ kycAttestationPrivacy = script do
     createCmd KycAttestation with
       authority = authority
       subjectParty = subject
-      lei = Some "SUBJ12345678901234"
+      lei = Some (LEI "SUBJ12345678901234")
       status = KycVerified
       verificationTimestamp = now
       expiryTimestamp = expiry
@@ -269,13 +259,11 @@ kycAttestationPrivacy = script do
       observers = []
 
   -- Subject can see own KYC attestation (observer via subjectParty)
-  subjectQuery <- submit subject do
-    queryContractId subject kycCid
+  subjectQuery <- queryContractId subject kycCid
   assert (subjectQuery /= None)
 
   -- Competitor cannot see subject's KYC status
-  competitorQuery <- submit competitor do
-    queryContractId competitor kycCid
+  competitorQuery <- queryContractId competitor kycCid
   assert (competitorQuery == None)
 
   -- Authority adds custodian as observer for compliance gating
@@ -283,13 +271,11 @@ kycAttestationPrivacy = script do
     exerciseCmd kycCid AddKycObserver with newObserver = custodian
 
   -- Custodian can now see the KYC attestation
-  custodianQuery <- submit custodian do
-    queryContractId custodian kycCidWithCustodian
+  custodianQuery <- queryContractId custodian kycCidWithCustodian
   assert (custodianQuery /= None)
 
   -- Competitor remains blind
-  competitorStillBlind <- submit competitor do
-    queryContractId competitor kycCidWithCustodian
+  competitorStillBlind <- queryContractId competitor kycCidWithCustodian
   assert (competitorStillBlind == None)
 
   pure ()
@@ -315,11 +301,11 @@ cashObserverCannotControl = script do
       amount = 2000000.0
       isLocked = False
       lockReference = None
+      lockHolder = None
       observers = [observer]
 
   -- Observer can see it
-  obsQuery <- submit observer do
-    queryContractId observer cashCid
+  obsQuery <- queryContractId observer cashCid
   assert (obsQuery /= None)
 
   -- Observer cannot split (requires owner)
