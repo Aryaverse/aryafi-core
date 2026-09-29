@@ -92,19 +92,23 @@ The `DtcDvPAdapter` coordinates atomic Delivery-versus-Payment between tokenized
               │                               │     DvpInstruction            │
               │                               │──────────────────────────────>│
               │                               │                               │
-              │                               │  3. Stream: PendingDvp        │
+              │                               │  3. Stream: PendingSettlement │
               │                               │<──────────────────────────────│
               │                               │                               │
               │  4. Stage DTC Security        │                               │
               │<──────────────────────────────│                               │
               │  5. DTC IMS Position Blocked  │                               │
               │──────────────────────────────>│  6. submit LockCash &         │
-              │                               │     LockSecurity              │
+              │                               │     LockSecurity (holder =    │
+              │                               │     settlement agent)         │
               │                               │──────────────────────────────>│
               │                               │                               │
-              │                               │  7. submit ExecuteDvp         │
+              │                               │  7. submit                    │
+              │                               │     ExecuteDvpSettlement with │
+              │                               │     both locked leg IDs       │
               │                               │──────────────────────────────>│
-              │                               │     (Atomic Ownership Swap)   │
+              │                               │     (atomic delivery of both  │
+              │                               │      legs, or nothing moves)  │
 ```
 
 ---
@@ -115,10 +119,10 @@ The `AmlKycAdapter` automates the onboarding and continuous screening gates requ
 
 #### Interfaces:
 1. **KYC Verification Feed**: Ingests verified institutional client profiles from enterprise KYC hubs (e.g. Fenergo, Encompass).
-   - Issues on-ledger `KYCAttestation` contracts with expiration timestamps and verified jurisdictions.
+   - Issues on-ledger `KycAttestation` contracts with expiry timestamps and verified jurisdictions (`UpdateKycStatus` records ledger time as the verification time).
 2. **Sanctions Screening Engine**: Connects to real-time screening services (e.g. LexisNexis Bridger, Accuity, Fircosoft).
    - Ingests OFAC, EU, and UN sanctions updates.
-   - Automatically executes choice `RevokeKYC` or updates `SanctionsScreening` contracts if an active institutional counterparty is flagged.
+   - Exercises `RevokeKyc` on the `KycAttestation`, or `BlockParty` / `UpdateSanctionsStatus` on the `SanctionsAttestation`, when an active counterparty is flagged.
 
 ---
 
