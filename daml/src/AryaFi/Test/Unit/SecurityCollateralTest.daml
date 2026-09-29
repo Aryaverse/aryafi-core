@@ -12,7 +12,6 @@ import AryaFi.Finance.Collateral as Collateral hiding (Active)
 import AryaFi.Common.Identifiers
 import AryaFi.Common.Types as Types hiding (Active)
 import qualified AryaFi.Finance.Collateral as Collateral
-import qualified AryaFi.Common.Types as Types
 
 -- ---------------------------------------------------------------------------
 -- Helpers
@@ -24,8 +23,8 @@ mkGovtBond custodian owner accId qty = submitMulti [custodian, owner] [] do
     custodian = custodian
     owner = owner
     accountId = accId
-    isin = ISIN "US912828ZM24"
-    cusip = Some (CUSIP "912828ZM2")
+    isin = ISIN "US912828ZM50"
+    cusip = Some (CUSIP "912828ZM5")
     instrumentName = "US Treasury 4.25% Nov 2026"
     instrumentType = GovernmentBond
     quantity = qty
@@ -36,6 +35,7 @@ mkGovtBond custodian owner accId qty = submitMulti [custodian, owner] [] do
     seniority = Some Senior
     isLocked = False
     lockReference = None
+    lockHolder = None
     csdRef = None
     observers = []
 
@@ -49,7 +49,7 @@ mkCollateral provider receiver custodian accId qty mv haircut =
       custodian = custodian
       accountId = accId
       assetClass = GovernmentSecurity
-      isin = ISIN "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       quantity = qty
       marketValue = mv
       haircut = haircut
@@ -75,7 +75,7 @@ testSecurityCreation = script do
   case secData of
     None -> abort "Security not visible to owner"
     Some s -> do
-      assertMsg "ISIN set" (s.isin == ISIN "US912828ZM24")
+      assertMsg "ISIN set" (s.isin == ISIN "US912828ZM50")
       assertMsg "Quantity set" (s.quantity == 10000000.0)
       assertMsg "Not locked" (s.isLocked == False)
       assertMsg "Instrument type" (s.instrumentType == GovernmentBond)
@@ -110,7 +110,7 @@ testSecurityLockAndUnlock = script do
   secCid <- mkGovtBond custodian owner (AccountId "ACC-LOCK-001") 5000000.0
 
   lockedCid <- submitMulti [owner, custodian] [] do
-    exerciseCmd secCid LockSecurity with lockRef = "REPO-OPENING-2026-001"
+    exerciseCmd secCid LockSecurity with lockRef = "REPO-OPENING-2026-001"; holder = custodian
 
   lockedData <- queryContractId owner lockedCid
   case lockedData of
@@ -137,7 +137,7 @@ testSecurityTransfer = script do
 
   secCid <- mkGovtBond custodian seller (AccountId "ACC-SELLER-001") 5000000.0
 
-  transferredCid <- submitMulti [seller, custodian] [] do
+  transferredCid <- submitMulti [seller, custodian, buyer] [] do
     exerciseCmd secCid TransferSecurity with
       newOwner = buyer
       newAccountId = AccountId "ACC-BUYER-001"
@@ -185,7 +185,7 @@ testCannotSplitLockedSecurity = script do
   secCid <- mkGovtBond custodian owner (AccountId "ACC-SPLK-001") 5000000.0
 
   lockedCid <- submitMulti [owner, custodian] [] do
-    exerciseCmd secCid LockSecurity with lockRef = "REPO-001"
+    exerciseCmd secCid LockSecurity with lockRef = "REPO-001"; holder = custodian
 
   submitMustFail owner do
     exerciseCmd lockedCid SplitSecurity with splitQuantity = 1000000.0
@@ -200,7 +200,7 @@ testCannotTransferLockedSecurity = script do
   secCid <- mkGovtBond custodian seller (AccountId "ACC-TRLK-001") 5000000.0
 
   lockedCid <- submitMulti [seller, custodian] [] do
-    exerciseCmd secCid LockSecurity with lockRef = "REPO-001"
+    exerciseCmd secCid LockSecurity with lockRef = "REPO-001"; holder = custodian
 
   submitMultiMustFail [seller, custodian] [] do
     exerciseCmd lockedCid TransferSecurity with
@@ -229,7 +229,7 @@ testSecurityEnsurePositiveQuantity = script do
       custodian = custodian
       owner = owner
       accountId = AccountId "ACC-ZERO-001"
-      isin = ISIN "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       cusip = None
       instrumentName = "Test Bond"
       instrumentType = GovernmentBond
@@ -241,6 +241,7 @@ testSecurityEnsurePositiveQuantity = script do
       seniority = None
       isLocked = False
       lockReference = None
+      lockHolder = None
       csdRef = None
       observers = []
 
@@ -453,7 +454,7 @@ testCollateralEnsureHaircutRange = script do
       custodian = custodian
       accountId = AccountId "ACC-HCUT-001"
       assetClass = GovernmentSecurity
-      isin = ISIN "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       quantity = 1000000.0
       marketValue = 990000.0
       haircut = 1.0        -- invalid: must be < 1.0

@@ -11,6 +11,7 @@ module AryaFi.Finance.Asset where
 import AryaFi.Common.Identifiers (AccountId, ExternalRef)
 import AryaFi.Common.Types (Amount, AssetClass)
 import AryaFi.Common.Errors (require, requireNonEmpty)
+import DA.Optional (fromOptional, optionalToList)
 
 -- ---------------------------------------------------------------------------
 -- AssetHolding Template
@@ -22,8 +23,9 @@ import AryaFi.Common.Errors (require, requireNonEmpty)
 -- and owner (beneficial owner with economic rights).
 --
 -- Authorization model:
---   - Transfer requires owner + custodian (economic consent + operational approval).
---   - Lock/Unlock requires owner + custodian (bilateral agreement to restrict asset).
+--   - Transfer requires owner + custodian + receiving owner.
+--   - Lock requires owner + custodian and names a locking party; only that
+--     party can unlock the asset afterwards.
 --   - Only custodian can update external references (CSD, core banking refs).
 --
 -- Privacy: issuer, custodian, and owner always see this contract.
@@ -49,19 +51,22 @@ template AssetHolding
     -- ^ Whether this asset is encumbered (e.g. pledged, in settlement, margined).
     lockReference : Optional Text
     -- ^ Reference to the contract or obligation that locked this asset.
+    lockHolder : Optional Party
+    -- ^ Party holding the lock; only this party can release it.
     externalRef : Optional ExternalRef
     -- ^ Reference to the holding in an external custody or CSD system.
     observers : [Party]
     -- ^ Additional parties with read access (e.g. collateral receiver, settlement agent).
   where
     signatory issuer, custodian, owner
-    observer observers
+    observer observers, optionalToList lockHolder
 
-    ensure quantity > 0.0
+    ensure quantity > 0.0 && isLocked == (lockHolder /= None)
 
     -- | Lock this asset, preventing transfer or further encumbrance.
     -- Used for: pledging as collateral, initiating settlement, margin posting.
-    -- Requires joint agreement of owner and custodian.
+    -- Requires joint agreement of owner and custodian. The locking party
+    -- becomes the lock holder and gains visibility of the holding.
     choice LockAsset : ContractId AssetHolding
       with
         lockRef : Text
@@ -73,31 +78,35 @@ template AssetHolding
         create this with
           isLocked = True
           lockReference = Some lockRef
+          lockHolder = Some lockingParty
 
     -- | Unlock a previously locked asset, making it freely transferable again.
-    -- Requires joint agreement of owner and custodian.
+    -- Only the lock holder can release the lock.
     choice UnlockAsset : ContractId AssetHolding
-      controller owner, custodian
+      controller fromOptional owner lockHolder
       do
         require isLocked "Asset is not currently locked"
         create this with
           isLocked = False
           lockReference = None
+          lockHolder = None
 
     -- | Transfer ownership of this asset to a new owner and account.
     -- Asset must not be locked before transfer.
-    -- Requires joint authorization of current owner and custodian.
+    -- Requires joint authorization of current owner, custodian, and the
+    -- receiver (who becomes a signatory). Observers are cleared on transfer.
     choice TransferAsset : ContractId AssetHolding
       with
         newOwner : Party
         newAccountId : AccountId
-      controller owner, custodian
+      controller owner, custodian, newOwner
       do
         require (not isLocked) "Cannot transfer a locked asset"
         require (newOwner /= owner) "New owner must be different from current owner"
         create this with
           owner = newOwner
           accountId = newAccountId
+          observers = []
 
     -- | Update the external custody or CSD system reference.
     -- Only the custodian can update this reference.
