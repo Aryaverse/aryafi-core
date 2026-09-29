@@ -65,14 +65,14 @@ AryaFi's `RegulatoryReporting` module generates deterministic audit records:
 
 ## 5. Basel Committee (BCBS) Group 1a Qualification Matrix
 
-To qualify as a **Group 1a asset** under the Basel Committee framework (and avoid the 1,250% risk weight applied to Group 2 cryptoassets), a digital asset must satisfy four core conditions:
+To qualify as a **Group 1a asset** under the Basel Committee framework (and avoid the 1,250% risk weight applied to Group 2 cryptoassets), a digital asset must satisfy four core conditions. Qualification is a determination by the holding bank and its supervisor, supported by legal opinions; a contract library cannot establish it. The table shows how AryaFi supports each condition and what remains outside the code.
 
-| Basel Group 1a Criterion | Regulatory Requirement | AryaFi Implementation & Mitigation | Status |
+| Basel Group 1a Criterion | Regulatory Requirement | How AryaFi Supports It | Status |
 |:---|:---|:---|:---:|
-| **Criterion 1: Legal Enforceability** | All rights, obligations, and legal interests are clear, binding, and enforceable in all relevant jurisdictions. | Dual-signatory contracts co-signed by regulated custodians and institutional beneficial owners; jurisdiction tag (`AryaFi.Compliance.Jurisdiction`). | **MET** |
-| **Criterion 2: Stable Valuation & Rights** | The digital asset confers the same economic payoff, cash flow, and liquidation priority as the traditional form. | Par-value preservation in `CashPosition`; direct coupon and maturity redemption linkage in `SecurityPosition`. | **MET** |
-| **Criterion 3: Robust Technology & Governance** | The distributed ledger protocol possesses institutional-grade operational resilience and privacy protection. | Canton protocol v30: sub-transaction privacy, Byzantine-resistant sequencers, HSM key isolation, and no anonymous miners. | **MET** |
-| **Criterion 4: Comprehensive AML / CFT** | Network participants and asset transfers are subject to full customer due diligence and sanctions screening. | Pre-settlement compliance gating (`KYCAttestation`, `SanctionsScreening`, `AssetTransferRequest`). | **MET** |
+| **Criterion 1: Legal Enforceability** | All rights, obligations, and legal interests are clear, binding, and enforceable in all relevant jurisdictions. | Positions are signed by the custodian or bank and the beneficial owner; transfers require the receiver's authority; jurisdiction profiles (`AryaFi.Compliance.Jurisdiction`). | **Requires legal opinion** |
+| **Criterion 2: Stable Valuation & Rights** | The digital asset confers the same economic payoff, cash flow, and liquidation priority as the traditional form. | `CashPosition` amounts are conserved exactly by split, merge, and settlement. `SecurityPosition` records coupon and maturity metadata, but coupon payment and redemption lifecycle events are not implemented. | **Partially supported** |
+| **Criterion 3: Robust Technology & Governance** | The distributed ledger protocol possesses institutional-grade operational resilience and privacy protection. | Canton 2.10: sub-transaction privacy, permissioned participants (no anonymous validators), and participant keys held outside the contract layer (HSM/KMS). Operational resilience depends on the network operator's deployment. | **Depends on deployment** |
+| **Criterion 4: Comprehensive AML / CFT** | Network participants and asset transfers are subject to full customer due diligence and sanctions screening. | `KycAttestation` and `SanctionsAttestation` with expiry; `AssetTransferRequest` requires compliance officer approval. The policies are not yet evaluated inside the transfer transaction itself (see KNOWN_LIMITATIONS §4). | **Partially supported** |
 
 ---
 
