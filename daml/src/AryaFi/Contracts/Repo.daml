@@ -15,7 +15,7 @@
 module AryaFi.Contracts.Repo where
 
 import AryaFi.Common.Types (Amount, Currency, Rate, DayCountConvention(..))
-import AryaFi.Common.Identifiers (ISIN, AccountId, ReferenceId, CorrelationId)
+import AryaFi.Common.Identifiers (ISIN(..), AccountId, ReferenceId, CorrelationId)
 import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
 import qualified DA.List as List
 
@@ -99,7 +99,7 @@ template RepoAgreement
       controller custodian
       do
         require (status == RepoPendingOpening) "Repo must be PendingOpening to execute opening leg"
-        requireNonEmpty settlementRef "Settlement reference must be provided"
+        requireNonEmpty settlementRef "settlementRef"
         create this with
           status = RepoActive
           openingSettlementRef = Some settlementRef
@@ -113,15 +113,16 @@ template RepoAgreement
       controller seller, buyer
       do
         require (status == RepoActive) "Repo must be Active to substitute collateral"
-        requireNonEmpty newIsin "New ISIN must not be empty"
-        requirePositive newQuantity "New collateral quantity must be positive"
+        require (newIsin /= ISIN "") "newIsin must not be empty"
+        requirePositive newQuantity "newQuantity"
         require (newHaircut >= 0.0 && newHaircut < 1.0) "New haircut must be between 0 and 1"
         create this with
           isin = newIsin
           collateralQuantity = newQuantity
           haircut = newHaircut
 
-    -- | Initiate closing leg upon reaching maturity.
+    -- | Seller initiates the closing (repurchase) leg, at maturity or as an
+    -- early repurchase at the agreed repurchase price.
     choice InitiateClosingLeg : ContractId RepoAgreement
       controller seller
       do
@@ -130,14 +131,17 @@ template RepoAgreement
           status = RepoPendingClosing
 
     -- | Custodian confirms completion of closing leg repurchase settlement.
+    -- Allowed once the seller has initiated closing, or at/after maturity.
+    -- The custodian cannot terminate an active repo early on its own.
     choice ExecuteClosingLeg : ContractId RepoAgreement
       with
         settlementRef : ReferenceId
       controller custodian
       do
-        require (status == RepoPendingClosing || status == RepoActive)
-          "Repo must be Active or PendingClosing to execute closing leg"
-        requireNonEmpty settlementRef "Settlement reference must be provided"
+        now <- getTime
+        require (status == RepoPendingClosing || (status == RepoActive && now >= endDate))
+          "Closing leg requires seller initiation (PendingClosing) or a matured Active repo"
+        requireNonEmpty settlementRef "settlementRef"
         create this with
           status = RepoSettled
           closingSettlementRef = Some settlementRef
@@ -151,6 +155,7 @@ template RepoAgreement
       controller seller, buyer
       do
         require (status == RepoActive) "Repo must be Active to roll"
+        require (newEndDate > endDate) "Rolled end date must be after the current end date"
         require (newRepurchasePrice >= purchasePrice) "New repurchase price must not be below purchase price"
         require (newRepoRate >= 0.0) "New repo rate must be non-negative"
         create this with
@@ -169,15 +174,16 @@ template RepoAgreement
           "Only seller or buyer can declare repo default"
         require (status == RepoActive || status == RepoPendingOpening || status == RepoPendingClosing)
           "Repo must be non-terminal to declare default"
-        requireNonEmpty reason "Default reason must be specified"
+        requireNonEmpty reason "reason"
         create this with
           status = RepoDefaulted reason
 
     -- | Add an authorized observer (e.g. regulator, central clearing counterparty).
+    -- Both counterparties must consent to disclosing the trade.
     choice AddRepoObserver : ContractId RepoAgreement
       with
         newObserver : Party
-      controller buyer
+      controller seller, buyer
       do
         require (not (newObserver `elem` observers)) "Observer already registered on repo"
         create this with
