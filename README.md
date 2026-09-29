@@ -1,8 +1,10 @@
 # AryaFi Core (`aryafi-core`)
 
 [![Daml](https://img.shields.io/badge/Daml-2.10.0-blue.svg)](https://daml.com)
-[![Canton](https://img.shields.io/badge/Canton-Protocol_v30-green.svg)](https://canton.network)
-[![Release](https://img.shields.io/badge/Release-v1.0.0--rc1-purple.svg)](CHANGELOG.md)
+[![Canton](https://img.shields.io/badge/Canton-2.10_(protocol_5)-green.svg)](deploy/canton/canton.conf)
+[![Release](https://img.shields.io/badge/Release-v1.0.2--unreleased-purple.svg)](CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/daml_test-289_passing-brightgreen.svg)](daml/src/AryaFi/Test)
+[![Status](https://img.shields.io/badge/Status-Beta_/_Experimental-orange.svg)](docs/KNOWN_LIMITATIONS.md)
 [![Vercel Deployment](https://img.shields.io/badge/Vercel-Live_Terminal-black.svg?logo=vercel)](https://aryafi-core.vercel.app)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
@@ -10,13 +12,15 @@
 📖 **Comprehensive User & Operator Guide**: **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)**  
 📐 **Platform & Smart Contract Specification**: **[docs/PLATFORM_SPECIFICATION.md](docs/PLATFORM_SPECIFICATION.md)**  
 
-**AryaFi Core** is an institutional-grade, privacy-aware smart contract library engineered in **Daml** for the **Canton Network Protocol v30**. It turns complex wholesale capital markets, central bank money, and institutional treasury operations into composable, mathematically verified, and legally sound financial contracts.
+**AryaFi Core** is a privacy-aware smart contract library written in **Daml 2.10** for **Canton 2.10**. It models wholesale capital markets, tokenized cash, and institutional treasury workflows as Daml contracts with explicit signatories, controllers, and observers.
+
+> **Status.** Core primitives and atomic DvP settlement are **Beta**; financing contracts and compliance policies are **Experimental**. The library has **not** had an independent security review. Read [Known Limitations](docs/KNOWN_LIMITATIONS.md) before building on it, and [Improvement Plan](docs/IMPROVEMENT_PLAN.md) for what comes next.
 
 ---
 
 ## Interactive Institutional Web Terminal (Live on Vercel)
 
-The live web terminal at **[https://aryafi-core.vercel.app](https://aryafi-core.vercel.app)** allows institutional counterparties, risk officers, and auditors to inspect the Canton network and simulate complex financial workflows in real time.
+The web terminal at **[https://aryafi-core.vercel.app](https://aryafi-core.vercel.app)** explains the library's topology and replays its test scenarios step by step. It is a **scripted simulation**: it does not connect to a ledger. Its code viewer loads the real Daml source from this repository.
 
 ```
 +-----------------------------------------------------------------------------------------+
@@ -24,24 +28,24 @@ The live web terminal at **[https://aryafi-core.vercel.app](https://aryafi-core.
 |  [ Topology ] [ Simulator ] [ Contracts & Math ] [ ISO 20022 Hub ] [ Security ] [ Code ]|
 +-----------------------------------------------------------------------------------------+
 |  • Canton Network Topology: Interactive SVG map of 5 segregated participant nodes       |
-|  • Scenario Simulator: Step-by-step & automated execution of DvP, Repo, & Lending       |
-|  • Lemma 1 Invariant Calculator: Algebraic proof of value conservation (Δ = 0.00)       |
-|  • ISO 20022 Hub: Bidirectional SWIFT MX XML ↔ Daml Ledger API JSON payload translation  |
-|  • Security & Rules: STRIDE threat model mitigations, OCC/Fed/FDIC capital neutrality   |
-|  • Daml Code Dossier: Live interactive smart contract source code viewer                |
+|  • Scenario Simulator: Scripted replay of the DvP, Securities Lending & Treasury tests   |
+|  • Split Calculator: SplitCash value conservation in exact 10-dp Decimal arithmetic     |
+|  • ISO 20022 Hub: MX messages mapped to Daml JSON API requests, with real field checks  |
+|  • Security & Rules: STRIDE threat model, regulatory mapping (not independently audited)|
+|  • Daml Code Dossier: Loads the actual module source from this repository              |
 |  • Institutional Themes: Crisp Light Mode (default) & White-on-Black Dark Mode toggle   |
 +-----------------------------------------------------------------------------------------+
 ```
 
 ### Key Terminal Features:
-1. **Canton Multi-Participant Topology Visualizer**: Inspect cryptographic node boundaries, participant segregation, gRPC/JSON endpoints, hosted parties, and sub-transaction privacy rules for Federal Reserve Bank, Global Custodian, Primary Dealer A (Goldman Sachs), Primary Dealer B (Morgan Stanley), and SEC / Supervisory Observer.
-2. **Multi-Party Lifecycle Simulator**: Execute end-to-end multi-signatory contract lifecycles with live streaming transaction logs:
-   * **Tokenized US Treasury + Cash DvP** (with automated SEC CAT audit report emission)
+1. **Canton Multi-Participant Topology Visualizer**: The five-participant reference topology from [`deploy/`](deploy/canton/canton.conf): Cash Settlement Bank, Global Custodian / Settlement Agent, Dealer Bank A, Dealer Bank B, and Supervisory Authority, with each node's hosted party, endpoint, and privacy boundary.
+2. **Multi-Party Lifecycle Simulator**: Step through scripted replays of the library's scenario tests:
+   * **Tokenized US Treasury + Cash DvP** (both legs locked to the settlement agent and delivered atomically, followed by a regulatory report record)
    * **Institutional Securities Lending** (102% cash collateral pledge, Act/360 fee accrual, mark-to-market revaluations, and recalls)
    * **Treasury Cash Mobility & Zero-Balance Sweeps** (surplus identification, concentration pool consolidation, and SWIFT UETR payment tracing)
-3. **Lemma 1 Invariant Proof Calculator**: Real-time verification that $\sum \text{Outputs} \equiv \sum \text{Inputs}$ with zero token inflation or rounding leakage ($\Delta = 0.00$) across arbitrary deposit amounts. Includes one-click quick presets ($1M, $25M, $100M).
-4. **ISO 20022 Financial Messaging Hub**: Side-by-side inspection and 1-click clipboard copying for `pacs.008` (Customer Credit Transfer), `sese.023` (DvP Settlement), `camt.053` (Bank Statement), and `semt.002` (Custody Holding Statement).
-5. **Daml Smart Contract Source Dossier**: Review production Daml contract code (`Cash.daml`, `Security.daml`, `Collateral.daml`, `Loan.daml`, `Repo.daml`, `TransferRestrictions.daml`) with syntax highlighting and 1-click source copying.
+3. **Split Conservation Calculator**: Illustrates `SplitCash` using the same exact 10-decimal-place arithmetic as Daml `Decimal` (JavaScript floats would drift). The on-ledger behaviour is covered by the Daml tests.
+4. **ISO 20022 Financial Messaging Hub**: `pacs.008`, `sese.023`, `camt.053`, and `semt.002` messages side by side with the Daml JSON API request each maps to. The validator runs real checks: XML well-formedness, required elements, ISIN (ISO 6166) and LEI (ISO 17442) check digits, UETR format, currency codes, and XML/JSON consistency.
+5. **Daml Source Viewer**: Loads `Cash.daml`, `Security.daml`, `Settlement.daml`, `Collateral.daml`, `Loan.daml`, `Repo.daml`, and `TransferRestrictions.daml` directly from this repository, so it always shows the current code.
 
 ---
 
@@ -95,21 +99,24 @@ aryafi-core/
 │   │       ├── Finance/           # Cash, Security, Account, Collateral, Settlement, Payment
 │   │       ├── Contracts/         # Loan, Repo, SecuritiesLending, Margin, Subscription, Redemption
 │   │       ├── Compliance/        # KYC, Sanctions, Eligibility, TransferRestrictions
-│   │       └── Test/              # Complete Hardened Test Suite
-│   │           ├── Unit/          # 11 Unit test suites across all primitives & contracts
-│   │           ├── Scenarios/     # 8 End-to-end multi-party lifecycle scenarios
+│   │       └── Test/              # Daml Script test suite (289 scripts, run by `daml test`)
+│   │           ├── Unit/          # 11 unit suites across primitives, contracts & compliance
+│   │           ├── Scenarios/     # 9 end-to-end multi-party lifecycle scenarios
 │   │           ├── Negative/      # Unauthorized access, violation & invalid transition tests
-│   │           ├── Privacy/       # Canton sub-transaction privacy & observer visibility tests
-│   │           ├── Authorization/ # Multi-signatory bilateral & tri-party consent tests
-│   │           └── Integration/   # Canton node integration test runners
-│   └── test/                      # Standalone test scaffolds & integration documentation
+│   │           ├── Privacy/       # Observer visibility tests
+│   │           ├── Authorization/ # Multi-signatory consent tests
+│   │           └── Integration/   # Cross-module workflow tests (single ledger)
+├── scripts/
+│   └── gen_authorization_matrix.py # Regenerates docs/security/AUTHORIZATION_MATRIX.md from source
 ├── deploy/
 │   ├── canton/canton.conf         # Multi-participant Canton topology (5 nodes)
 │   └── docker/                    # Containerized multi-node Canton testing sandbox
 ├── docs/
 │   ├── USER_GUIDE.md              # Complete Web Terminal & Operator User Guide
 │   ├── PLATFORM_SPECIFICATION.md  # Mathematical formulas, contract matrix & architecture
-│   ├── ROADMAP.md                 # Production candidate roadmap tracking matrix
+│   ├── KNOWN_LIMITATIONS.md       # What the library does not do yet (read first)
+│   ├── IMPROVEMENT_PLAN.md        # Next-level product and engineering plan
+│   ├── ROADMAP.md                 # Original v1.0.0 delivery roadmap
 │   ├── architecture/              # Component decomposition, privacy & security assurance
 │   ├── integration/               # ISO 20022 mappings, Ledger API client, rail adapters
 │   ├── deployment/                # Node operations, KMS key management & HA runbooks
@@ -128,48 +135,52 @@ aryafi-core/
 ### 1. Finance Primitives (`AryaFi.Finance`)
 - **`Party`**: Institutional profiles and LEI identities.
 - **`Account`**: Custody, omnibus, and settlement accounts with administrative freeze controls.
-- **`Cash`**: High-precision tokenized deposit positions with atomic `SplitCash`, `MergeCash`, `TransferCash`, `LockCash`, and `UnlockCash`.
-- **`Security`**: Tokenized fixed-income, equity, and US Treasury safekeeping with encumbrance tracking.
+- **`Cash`**: Tokenized deposit positions with `SplitCash`, `MergeCash`, receiver-authorized `TransferCash`, and locks held by a named lock holder (`LockCash`, `UnlockCash`, `SettleLockedCash`).
+- **`Security`**: Tokenized fixed-income and equity safekeeping with the same lock-holder model (`LockSecurity`, `SettleLockedSecurity`).
 - **`Collateral`**: Haircut valuation ($V = M \times (1 - h)$), mark-to-market revaluation, substitution, and default liquidation.
-- **`Settlement`**: Atomic Delivery-versus-Payment (`DvpInstruction`) with BIS CPSS Model 1 finality.
+- **`Settlement`**: Atomic Delivery-versus-Payment. `ExecuteDvpSettlement` validates both locked legs and delivers the security and the cash in a single transaction (BIS Model 1).
 - **`Payment`**: Tri-party payment separation with SWIFT UETR and Fedwire IMAD network reference tracking.
 
 ### 2. Financial Contracts (`AryaFi.Contracts`)
-- **`Loan`**: Secured institutional credit facilities and term loan agreements with interest waterfalls and auto-close logic.
+- **`Loan`**: Credit facilities with interest computed from rate, day count, and ledger time; repayments are confirmed by the lender.
 - **`Repo` & `ReverseRepo`**: Repurchase agreements, DvP settlement legs, mark-to-market valuation, and closeout.
-- **`SecuritiesLending`**: Institutional stock loans, Act/360 borrow fee accruals, cash collateral rebates, and recall notices.
-- **`Margin`**: Initial and variation margin call workflows with dispute arbitration.
+- **`SecuritiesLending`**: Stock loans with jointly agreed fees, recalls that persist until satisfied, and pro-rata-capped collateral release.
+- **`Margin`**: Initial and variation margin calls: the payer submits, the caller confirms receipt; default only after the deadline.
 - **`Subscription` & `Redemption`**: Institutional private credit fund commitments, capital calls, liquidity gates, and NAV redemptions.
 - **`Transfer`, `Pledge` & `Escrow`**: Compliance-gated transfers, tri-party collateral perfection (UCC Article 8/12), and conditional holding.
 
 ### 3. Compliance & Policy Engine (`AryaFi.Compliance`)
 - **`KYC` & `Sanctions`**: Privacy-preserving institutional attestations with automatic expiry enforcement.
 - **`Eligibility`**: Dynamic collateral and counterparty validation rules.
-- **`TransferRestrictions` & `OwnershipRestrictions`**: Programmatic enforcement of Reg D 506(c), Reg S, and Rule 144A holding periods.
-- **`RegulatoryReporting`**: Automated event audit trails for SEC CAT, FINRA TRACE, and EMIR reporting.
+- **`TransferRestrictions` & `OwnershipRestrictions`**: `EvaluateTransfer` checks lockup, holding period, whitelist, and Reg D / Reg S / Rule 144A investor category, reporting every failed rule.
+- **`RegulatoryReporting`**: Report records and regulator acknowledgement for SEC CAT, FINRA TRACE, EMIR, and MiFIR.
 
 ---
 
 ## Getting Started
 
 ### Prerequisites
-- [Daml SDK](https://docs.daml.com/) (Version 2.10.0 or later)
-- Git & Docker (for Canton multi-node testing)
+- [Daml SDK](https://docs.daml.com/) 2.10.0 (pinned in `daml.yaml`)
+- Java 11 or 17 (used by `daml test`)
+- Docker (optional, for the multi-participant Canton topology)
 
 ### Build and Test
 ```bash
 # Build the Daml Archive (DAR)
 daml build
 
-# Run the comprehensive test suite (Unit, Scenarios, Negative, Privacy, Authorization)
-daml test
+# Run the test suite (289 scripts) with choice coverage
+daml test --show-coverage
 ```
 
-### Run Local Multi-Node Canton Sandbox
+### Run Local Multi-Node Canton Topology
 ```bash
-# Launch 5 participant nodes with local sequencer
+# Build the DAR first; the container uploads every .dar in .daml/dist
+daml build
+
+# Launch 5 in-memory Canton 2.10 participants and a domain
 cd deploy/docker
-docker compose up -d
+docker compose up -d --build
 
 # Check participant health
 docker compose ps
@@ -182,7 +193,9 @@ docker compose ps
 | Category | Guide | Description |
 |:---|:---|:---|
 | **User & Operations** | **[User Guide](docs/USER_GUIDE.md)** | Step-by-step user guide for the live Vercel web terminal & simulator |
-| | **[Platform Specification](docs/PLATFORM_SPECIFICATION.md)** | Complete mathematical formulas, contract matrix & architecture manual |
+| | **[Known Limitations](docs/KNOWN_LIMITATIONS.md)** | Maturity status and what the library does not do yet |
+| | **[Improvement Plan](docs/IMPROVEMENT_PLAN.md)** | Next-level product and engineering plan |
+| | **[Platform Specification](docs/PLATFORM_SPECIFICATION.md)** | Formulas, contract matrix & architecture manual |
 | | [Operations Guide](docs/deployment/OPERATIONS_GUIDE.md) | HSM/KMS key management, active-passive HA, backup/PITR runbooks |
 | **Architecture** | [Architecture Guide](docs/architecture/ARCHITECTURE.md) | High-level component decomposition and Canton transaction flows |
 | | [Privacy Model](docs/architecture/PRIVACY_MODEL.md) | Canton sub-transaction privacy guarantees and observer models |
@@ -194,10 +207,10 @@ docker compose ps
 | **Deployment & Ops** | [Canton Topology](deploy/canton/canton.conf) | Multi-participant Canton node configuration (Bank, Custodian, Dealers) |
 | | [Docker Sandbox](deploy/docker/docker-compose.yml) | Local multi-node Canton container environment with auto-bootstrap |
 | **Security & Audit** | [STRIDE Threat Model](docs/security/THREAT_MODEL.md) | Formal STRIDE security evaluation across all contract modules |
-| | [Authorization Matrix](docs/security/AUTHORIZATION_MATRIX.md) | Exhaustive template choice, controller, and signatory reference |
-| | [Audit Dossier](docs/security/AUDIT_DOSSIER.md) | Invariant proofs, test breakdown, and external auditor runbook |
+| | [Authorization Matrix](docs/security/AUTHORIZATION_MATRIX.md) | Signatories, observers, choices & controllers, generated from source |
+| | [Audit Dossier](docs/security/AUDIT_DOSSIER.md) | Invariant arguments, test breakdown, and briefing for an external review |
 | | [Regulatory Alignment](docs/compliance/REGULATORY_ALIGNMENT.md) | US OCC/Fed/FDIC capital neutrality and SEC tokenization guidance |
-| **Governance** | [Roadmap Tracking](docs/ROADMAP.md) | v1.0.0 Production Candidate roadmap tracking matrix |
+| **Governance** | [Roadmap Tracking](docs/ROADMAP.md) | Original v1.0.0 delivery roadmap |
 | | [Versioning Policy](docs/governance/VERSIONING_AND_RELEASE.md) | Semantic versioning policy and module maturity labels |
 | | [Migration Guide](docs/governance/MIGRATION_GUIDE.md) | Contract upgrade strategies, batch migrations, and verification |
 | | [Changelog](CHANGELOG.md) | Comprehensive record of milestones and release notes |
