@@ -2,82 +2,237 @@
 
 ## 1. Overview & Security Model
 
-In Daml and Canton, contract security is governed by three primary primitives:
-1. **Signatories**: Parties whose explicit cryptographic authorization is required to create or modify a contract. Signatories bear legal and economic liability for the contract state.
-2. **Controllers**: Parties empowered to exercise specific contract choices, initiating state transitions, balance movements, or archival.
-3. **Observers**: Parties granted read-only visibility into the contract state, transaction tree, and events.
+In Daml and Canton, contract security is governed by three primitives:
+1. **Signatories**: Parties whose authorization is required to create or archive a contract. Signatories are bound by the contract's terms.
+2. **Controllers**: Parties who may exercise a choice. A choice body runs with the authority of the contract's signatories plus the choice's controllers.
+3. **Observers**: Parties with read-only visibility of the contract and the transactions that use it.
 
-This document provides the exhaustive, auditable **Authorization Matrix** across all core modules in the AryaFi contract library.
-
----
-
-## 2. Finance Primitives Authorization Matrix
-
-| Template | Signatories | Choice Name | Controller(s) | Observers | Preconditions & Security Invariants | Resulting State Transition |
-|:---|:---|:---|:---|:---|:---|:---|
-| **`Account`** | `custodian`, `owner` | `FreezeAccount` | `custodian` | `observers` | `not isFrozen` | Updates `isFrozen = True` |
-| | | `UnfreezeAccount` | `custodian` | `observers` | `isFrozen` | Updates `isFrozen = False` |
-| | | `AddAccountObserver` | `owner` | `observers` | `newObserver notElem observers` | Adds party to observer list |
-| **`CashPosition`** | `bank`, `owner` | `SplitCash` | `owner` | `observers` | `not isLocked`, `splitAmount > 0.0`, `splitAmount < amount` | Archives self; creates 2 new positions ($A_1 + A_2 = A_{\text{total}}$) |
-| | | `MergeCash` | `owner` | `observers` | `not isLocked`, matching `bank, owner, accountId, currency` | Archives other CID; updates `amount = amount + other.amount` |
-| | | `TransferCash` | `owner`, `bank` | `observers` | `not isLocked`, `newOwner /= owner` | Re-assigns ownership & account at same bank |
-| | | `LockCash` | `owner`, `bank` | `observers` | `not isLocked`, `lockRef /= ""` | Encumbers position (`isLocked = True`) |
-| | | `UnlockCash` | `owner`, `bank` | `observers` | `isLocked` | Releases encumbrance (`isLocked = False`) |
-| **`SecurityPosition`** | `custodian`, `owner` | `SplitSecurity` | `owner` | `observers` | `not isLocked`, `splitQty > 0.0`, `splitQty < quantity` | Conserves total units ($Q_1 + Q_2 = Q_{\text{total}}$) |
-| | | `MergeSecurity` | `owner` | `observers` | `not isLocked`, matching `custodian, owner, accountId, isin` | Consolidates security units |
-| | | `TransferSecurity`| `owner`, `custodian` | `observers` | `not isLocked`, `newOwner /= owner` | Updates legal ownership at custodian |
-| | | `LockSecurity` | `owner`, `custodian` | `observers` | `not isLocked`, non-empty `lockRef` | Blocks position from transfer or settlement |
-| | | `UnlockSecurity` | `owner`, `custodian` | `observers` | `isLocked` | Restores position to available status |
-| **`PaymentInstruction`**| `payer`, `payee`, `settlementAgent` | `ConfirmPaymentSettlement` | `settlementAgent` | `observers` | `status == PendingSettlement` | Transitions `status = Settled` |
-| | | `RejectPaymentSettlement` | `settlementAgent` | `observers` | `status == PendingSettlement`, non-empty `reason` | Transitions `status = Failed reason` |
-| | | `CancelPayment` | `payer` | `observers` | `status == PendingSettlement`, non-empty `reason` | Transitions `status = Cancelled reason` |
-| | | `AttachNetworkRef` | `settlementAgent` | `observers` | `status == PendingSettlement` | Attaches SWIFT UETR / Fedwire IMAD |
-| **`DvpInstruction`** | `seller`, `buyer`, `settlementAgent` | `ExecuteDvp` | `settlementAgent` | `observers` | `status == PendingDvp`, both cash & security locked | Atomically swaps cash & security; marks `DvpSettled` |
-| | | `CancelDvp` | `seller`, `buyer` | `observers` | `status == PendingDvp` | Cancels trade; triggers unlock of underlying assets |
+The tables below list every template in the production modules (`daml/src/AryaFi/{Common,Finance,Contracts,Compliance}`) with its signatories, observers, choices, and controllers. They are **generated from the Daml source** by `scripts/gen_authorization_matrix.py`, so they describe what the code enforces rather than intended behaviour.
 
 ---
 
-## 3. Financial Contracts Authorization Matrix
+## 2. Authorization Matrix (generated from source)
 
-| Template | Signatories | Choice Name | Controller(s) | Observers | Preconditions & Invariants | Resulting State Transition |
-|:---|:---|:---|:---|:---|:---|:---|
-| **`InstitutionalLoan`**| `lender`, `borrower` | `DrawdownLoan` | `borrower` | `custodian`, `observers` | `status == LoanActive`, drawdown amount $\le$ available facility limit | Accrues principal; emits drawdown funding instruction |
-| | | `AccrueInterest` | `lender` | `observers` | `status == LoanActive`, valid elapsed time & day count | Updates `accruedInterest` based on Act360 / Act365 |
-| | | `RepayLoan` | `borrower` | `observers` | `repaymentAmount > 0.0` | Reduces outstanding principal; auto-closes if zero |
-| | | `DeclareDefault` | `lender` | `observers` | Delinquent payment breach or covenant violation | Transitions `status = LoanDefaulted`; triggers pledge enforcement |
-| **`RepoAgreement`** | `seller`, `buyer`, `custodian` | `RevalueRepoCollateral`| `seller`, `buyer` | `observers` | Active repo status, updated market price feed | Updates mark-to-market valuation & margin surplus/deficit |
-| | | `ExecuteClosingLeg` | `seller`, `buyer`, `custodian` | `observers` | Maturity date reached, repurchase price funded | Repurchases collateral; marks repo `RepoClosed` |
-| | | `DefaultRepo` | `buyer` (or `seller`) | `observers` | Failure to repurchase or satisfy margin call | Liquidates collateral to satisfy cash obligation |
-| **`SecuritiesLendingAgreement`**| `lender`, `borrower`, `custodian` | `AccrueLendingFee` | `lender` | `observers` | `status == LendingActive` | Accrues borrow fee ($Qty \times Rate \times Days/360$) |
-| | | `RecallSecurities` | `lender` | `observers` | `recallQuantity <= borrowedQuantity` | Transitions `status = LendingRecalled` with deadline |
-| | | `ReturnSecurities` | `borrower` | `observers` | `returnQuantity <= borrowedQuantity` | Releases pro-rata collateral; auto-closes if zero |
-| | | `DeclareDefault` | `lender` | `observers` | Recall deadline expired without return | Transitions `status = LendingDefaulted`; seizes collateral |
-| **`AssetPledge`** | `pledgor`, `pledgee`, `custodian` | `ReleasePledge` | `pledgee` | `observers` | Underlying obligation certified as discharged | Releases lien; returns unencumbered asset to pledgor |
-| | | `EnforcePledge` | `pledgee` | `observers` | Verified default on secured loan or repo | Transfers pledged collateral ownership to pledgee |
-| **`EscrowAgreement`** | `depositor`, `beneficiary`, `escrowAgent` | `ReleaseEscrow` | `escrowAgent` | `observers` | Release conditions satisfied (time, milestone, or joint consent) | Disburses escrowed assets to beneficiary |
-| | | `RefundEscrow` | `escrowAgent` | `observers` | Expiration of escrow period without milestone | Returns escrowed assets to depositor |
-| **`FundSubscription`**| `investor`, `fundManager` | `IssueCapitalCall` | `fundManager` | `observers` | Called amount $\le$ uncalled commitment | Creates capital call payment obligation |
-| | | `FundCapitalCall` | `investor` | `observers` | Capital call payment verified | Converts commitment to funded fund share units |
-| **`AssetRedemption`** | `investor`, `fundManager` | `ApproveRedemption` | `fundManager` | `observers` | NAV calculated, liquidity gate verified | Tranches cash payout to investor |
+### Common (Audit Events)
+
+| Template | Signatories | Observers | Choice | Controller(s) | Effect |
+|:---|:---|:---|:---|:---|:---|
+| **`AuditLog`** (Events.daml) | `operator` | `parties` | — | — | No choices: append-only record |
+
+### Finance Primitives
+
+| Template | Signatories | Observers | Choice | Controller(s) | Effect |
+|:---|:---|:---|:---|:---|:---|
+| **`Account`** (Account.daml) | `custodian, owner` | `observers` | `FreezeAccount` | `custodian` | Freeze this account, preventing any asset movements in or out |
+|  |  |  | `UnfreezeAccount` | `custodian` | Unfreeze a previously frozen account |
+|  |  |  | `UpdateDescription` | `owner` | Update the account description |
+|  |  |  | `AddObserver` | `owner` | Add a new observer to this account |
+|  |  |  | `RemoveObserver` | `owner` | Remove an existing observer from this account |
+|  |  |  | `IsAvailableForSettlement` *(read-only)* | `custodian` | Nonconsuming check: verify if this account is available for asset movements |
+| **`AssetHolding`** (Asset.daml) | `issuer, custodian, owner` | `observers, lockHolder (while locked)` | `LockAsset` | `owner, custodian` | Lock this asset, preventing transfer or further encumbrance |
+|  |  |  | `UnlockAsset` | `lockHolder` | Unlock a previously locked asset, making it freely transferable again |
+|  |  |  | `TransferAsset` | `owner, custodian, newOwner` | Transfer ownership of this asset to a new owner and account |
+|  |  |  | `UpdateExternalRef` | `custodian` | Update the external custody or CSD system reference |
+|  |  |  | `AddObserver` | `owner` | Add an observer to this holding (e.g. collateral receiver, tri-party agent) |
+|  |  |  | `IsTransferable` *(read-only)* | `custodian` | Nonconsuming check: verify if this asset can be freely transferred |
+| **`CashPosition`** (Cash.daml) | `bank, owner` | `observers, lockHolder (while locked)` | `SplitCash` | `owner` | Split this position into two positions, preserving total amount |
+|  |  |  | `MergeCash` | `owner` | Merge another cash position into this one, producing a single combined position |
+|  |  |  | `TransferCash` | `owner, bank, newOwner` | Transfer this cash position to a new owner and account at the same bank |
+|  |  |  | `LockCash` | `owner, bank` | Lock this cash position to a lock holder, preventing split, merge, or transfer |
+|  |  |  | `UnlockCash` | `lockHolder` | Release the lock |
+|  |  |  | `SettleLockedCash` | `lockHolder, newOwner` | Deliver a locked position to a counterparty as part of a settlement (e.g. the cash leg of a DvP) |
+|  |  |  | `AddCashObserver` | `owner` | Add an observer to this cash position |
+|  |  |  | `RemoveCashObserver` | `owner` | Remove an observer from this cash position |
+|  |  |  | `IsAvailable` *(read-only)* | `bank` | Nonconsuming check: verify if this position is available for movement |
+| **`CollateralPosition`** (Collateral.daml) | `collateralProvider, collateralReceiver, custodian` | `observers` | `GetCollateralValue` *(read-only)* | `custodian` | Compute the post-haircut collateral value |
+|  |  |  | `RevalueCollateral` | `custodian` | Revalue the collateral position to reflect current market prices |
+|  |  |  | `SubstituteCollateral` | `collateralProvider, collateralReceiver` | Substitute the collateral with a different eligible asset |
+|  |  |  | `ActivateCollateral` | `custodian` | Activate collateral after the underlying asset has been confirmed locked |
+|  |  |  | `ReleaseCollateral` | `collateralProvider, collateralReceiver` | Release this collateral position |
+|  |  |  | `LiquidateCollateral` | `collateralReceiver` | Liquidate collateral following an event of default |
+|  |  |  | `RaiseValuationDispute` | `collateralProvider` | Raise a valuation dispute on this collateral position |
+|  |  |  | `ResolveDispute` | `collateralProvider, collateralReceiver` | Resolve a valuation dispute and return collateral to Active with agreed market value |
+|  |  |  | `AddCollateralObserver` | `collateralProvider, collateralReceiver` | Add an observer (e.g. tri-party agent, regulator, trade repository) |
+| **`FinancialObligation`** (Obligation.daml) | `obligor, obligee` | `agentObserver (if set)` | `DischargeObligation` | `obligee` | Record full discharge of this obligation |
+|  |  |  | `PartialDischarge` | `obligee` | Record a partial payment against this obligation |
+|  |  |  | `DeclareObligationDefault` | `obligee` | Declare this obligation in default |
+|  |  |  | `CancelObligation` | `obligor, obligee` | Cancel this obligation by mutual agreement before any payment is made |
+|  |  |  | `AmendObligation` | `obligor, obligee` | Amend the obligation amount or due date by mutual agreement |
+|  |  |  | `IsOverdue` *(read-only)* | `obligee` | Nonconsuming check: is this obligation currently overdue? Returns True if current time is past due date and it is still outstanding |
+|  |  |  | `IsOutstanding` *(read-only)* | `obligee` | Nonconsuming check: is this obligation still outstanding? |
+| **`InstitutionalParty`** (Party.daml) | `operator, party` | `observers` | `UpdateProfile` | `party` | Update the display name and jurisdiction of this party record |
+|  |  |  | `AddRole` | `operator` | Add a role to this party |
+|  |  |  | `RemoveRole` | `operator` | Remove a role from this party |
+|  |  |  | `SetPartyStatus` | `operator` | Activate or deactivate this party |
+|  |  |  | `AddObserver` | `party` | Add an observer (e.g. a counterparty doing due diligence) |
+|  |  |  | `RemoveObserver` | `party` | Remove an observer from this party record |
+|  |  |  | `HasRole` *(read-only)* | `operator` | Nonconsuming check: verify if this party has a specific role |
+| **`PaymentInstruction`** (Payment.daml) | `payer, payee, settlementAgent` | `observers` | `ConfirmPaymentSettlement` | `settlementAgent` | Confirm that payment has been successfully settled |
+|  |  |  | `RejectPaymentSettlement` | `settlementAgent` | Reject the payment instruction, providing a reason |
+|  |  |  | `CancelPayment` | `payer` | Cancel the payment instruction before it is executed |
+|  |  |  | `AttachNetworkRef` | `settlementAgent` | Attach a payment network reference after submission to a payment network |
+|  |  |  | `AddPaymentObserver` | `payer` | Add an observer (e.g. compliance officer, regulator, auditor) |
+|  |  |  | `IsCompleted` *(read-only)* | `settlementAgent` | Nonconsuming check: has this payment reached a final status (settled, failed, or cancelled)? |
+| **`SecurityPosition`** (Security.daml) | `custodian, owner` | `observers, lockHolder (while locked)` | `SplitSecurity` | `owner` | Split this position into two positions, preserving total quantity |
+|  |  |  | `TransferSecurity` | `owner, custodian, newOwner` | Transfer ownership of this security to a new owner and account |
+|  |  |  | `LockSecurity` | `owner, custodian` | Lock this security, preventing split, transfer, or further encumbrance |
+|  |  |  | `UnlockSecurity` | `lockHolder` | Release the lock |
+|  |  |  | `SettleLockedSecurity` | `lockHolder, newOwner` | Deliver a locked position to a counterparty as part of a settlement (e.g. the securities leg of a DvP) |
+|  |  |  | `UpdateCsdRef` | `custodian` | Update the CSD system reference for this holding |
+|  |  |  | `AddSecurityObserver` | `owner` | Add an observer (e.g. settlement agent, tri-party repo agent, regulator) |
+|  |  |  | `RemoveSecurityObserver` | `owner` | Remove an observer from this security position |
+|  |  |  | `IsTransferable` *(read-only)* | `custodian` | Nonconsuming query: can this position be transferred or pledged? |
+|  |  |  | `IsFixedIncome` *(read-only)* | `custodian` | Nonconsuming query: is this a fixed-income instrument? |
+| **`DvpInstruction`** (Settlement.daml) | `settlementAgent, seller, buyer` | `observers` | `ExecuteDvpSettlement` | `settlementAgent` | Execute the DvP settlement atomically: deliver the locked security to the buyer and the locked cash to the seller in one transaction |
+|  |  |  | `FailDvpSettlement` | `settlementAgent` | Fail the settlement with a specific reason |
+|  |  |  | `CancelDvpSettlement` | `seller, buyer` | Cancel the DvP instruction by mutual agreement |
+|  |  |  | `RetrySettlement` | `settlementAgent, seller, buyer` | Retry a failed settlement instruction |
+|  |  |  | `AddDvpObserver` | `settlementAgent` | Add an observer to this DvP instruction |
+|  |  |  | `IsFinalized` *(read-only)* | `settlementAgent` | Nonconsuming query: has this instruction been finalized (settled, failed, or cancelled)? |
+
+### Financial Contracts
+
+| Template | Signatories | Observers | Choice | Controller(s) | Effect |
+|:---|:---|:---|:---|:---|:---|
+| **`ConditionalEscrow`** (Escrow.daml) | `escrowAgent, depositor` | `beneficiary, observers` | `ReleaseEscrow` | `escrowAgent, beneficiary` | Release escrowed assets to beneficiary (both agent and beneficiary must agree) |
+|  |  |  | `RefundEscrow` | `escrowAgent, depositor` | Refund escrowed assets to depositor (both agent and depositor must agree) |
+|  |  |  | `ExpireEscrow` | `escrowAgent` | Expire the escrow after the expiry time has passed |
+|  |  |  | `DisputeEscrow` | `escrowAgent` | Raise a dispute on this escrow (freezes it pending agent resolution) |
+|  |  |  | `ResolveDispute` | `escrowAgent` | Escrow agent resolves an active dispute, deciding whether to release or refund |
+|  |  |  | `AddEscrowObserver` | `escrowAgent` | Add an observer to this escrow (e.g. regulator, auditor) |
+|  |  |  | `IsEscrowTerminal` *(read-only)* | `escrowAgent` | Nonconsuming query: has this escrow reached a terminal state? |
+| **`InstitutionalLoan`** (Loan.daml) | `lender, borrower` | `observers, agentBank (if set)` | `DrawdownPrincipal` | `borrower` | Borrower executes a drawdown against the remaining facility limit |
+|  |  |  | `AccrueInterest` | `lender` | Accrue interest on the drawn principal from interestAccruedThrough to the current ledger time, using the contractual rate and day count |
+|  |  |  | `PayAccruedInterest` | `lender` | Lender records receipt of an interest payment from the borrower |
+|  |  |  | `PayDownPrincipal` | `lender` | Lender records receipt of a principal repayment from the borrower |
+|  |  |  | `LinkCollateralPledge` | `borrower` | Link an active AssetPledge collateral reference to secure the loan |
+|  |  |  | `UnlinkCollateralPledge` | `lender` | Unlink collateral pledge once loan obligations are discharged |
+|  |  |  | `DeclareLoanDefault` | `lender` | Lender declares default upon non-payment or covenant breach |
+|  |  |  | `CureLoanDefault` | `lender` | Lender acknowledges default cure following borrower rectification |
+|  |  |  | `CloseLoan` | `lender` | Formally close out the facility once all principal and interest are paid |
+|  |  |  | `AddLoanObserver` | `lender, borrower` | Add an authorized observer (e.g. regulator, auditor) to the loan |
+|  |  |  | `IsLoanActive` *(read-only)* | `lender` | Nonconsuming query to check if the loan is active and operational |
+| **`MarginCall`** (Margin.daml) | `caller, payer` | `custodian, observers` | `SatisfyWithCash` | `payer` | Payer submits a cash payment against the margin call |
+|  |  |  | `SatisfyWithPledge` | `payer` | Payer submits an AssetPledge collateral perfection against the call |
+|  |  |  | `ConfirmMarginReceipt` | `caller` | Caller confirms receipt of the submitted cash or pledge |
+|  |  |  | `RejectMarginFulfilment` | `caller` | Caller rejects a submitted fulfilment (e.g. payment not received); the call returns to Issued |
+|  |  |  | `DisputeMarginCall` | `payer` | Payer formally disputes the margin call calculation within deadline |
+|  |  |  | `ResolveMarginDispute` | `caller, payer` | Counterparties agree on resolved margin requirement following dispute |
+|  |  |  | `DeclareMarginDefault` | `caller` | Caller declares default if margin is unpaid past deadline |
+|  |  |  | `CancelMarginCall` | `caller` | Caller cancels the margin call prior to fulfillment |
+|  |  |  | `AddMarginObserver` | `caller, payer` | Add an authorized observer (e.g. tri-party agent) |
+|  |  |  | `IsMarginSatisfied` *(read-only)* | `caller` | Nonconsuming query to check if the margin call has been met |
+| **`AssetPledge`** (Pledge.daml) | `pledgor, pledgee, custodian` | `observers` | `ReleasePledge` | `pledgee` | Pledgee releases the security interest voluntarily (e.g. after loan repayment) |
+|  |  |  | `EnforcePledge` | `pledgee` | Pledgee enforces the security interest following an event of default |
+|  |  |  | `SubstitutePledge` | `pledgor, pledgee, custodian` | Substitute the pledged asset with an equivalent eligible asset |
+|  |  |  | `UpdatePerfectionRef` | `custodian` | Update the legal perfection reference (e.g. amended UCC-1 filing number) |
+|  |  |  | `AddPledgeObserver` | `pledgor, pledgee` | Add an observer to this pledge (e.g. tri-party collateral agent, regulator) |
+|  |  |  | `IsPledgeActive` *(read-only)* | `pledgee` | Nonconsuming query: is this pledge currently active and enforceable? |
+| **`AssetRedemption`** (Redemption.daml) | `fundManager, investor` | `custodian, observers` | `ApproveRedemption` | `fundManager` | Fund Manager approves redemption request and strikes official NAV pricing |
+|  |  |  | `ApplyLiquidityGate` | `fundManager` | Fund Manager applies liquidity gate to redemption request |
+|  |  |  | `ReleaseLiquidityGate` | `fundManager` | Fund Manager releases liquidity gate, returning request to active evaluation |
+|  |  |  | `RejectRedemption` | `fundManager` | Fund Manager rejects redemption request |
+|  |  |  | `ExecuteRedemptionSettlement` | `custodian` | Custodian executes cash payout and finalizes redemption settlement |
+|  |  |  | `CancelRedemption` | `investor` | Investor cancels redemption request prior to manager approval |
+|  |  |  | `AddRedemptionObserver` | `fundManager` | Add authorized observer (e.g. transfer agent) |
+|  |  |  | `IsRedemptionSettled` *(read-only)* | `fundManager` | Nonconsuming query to check if redemption is settled |
+| **`RepoAgreement`** (Repo.daml) | `seller, buyer, custodian` | `observers, tripartyAgent (if set)` | `ExecuteOpeningLeg` | `custodian` | Custodian confirms completion of opening leg DvP settlement |
+|  |  |  | `SubstituteCollateral` | `seller, buyer` | Collateral substitution: replace active collateral with equivalent eligible collateral |
+|  |  |  | `InitiateClosingLeg` | `seller` | Seller initiates the closing (repurchase) leg, at maturity or as an early repurchase at the agreed repurchase price |
+|  |  |  | `ExecuteClosingLeg` | `custodian` | Custodian confirms completion of closing leg repurchase settlement |
+|  |  |  | `RollRepo` | `seller, buyer` | Roll / extend the repo term with updated rate and maturity date |
+|  |  |  | `DeclareRepoDefault` | `declaringParty` | Declare default upon failure to settle closing repurchase or post margin |
+|  |  |  | `AddRepoObserver` | `seller, buyer` | Add an authorized observer (e.g. regulator, central clearing counterparty) |
+|  |  |  | `IsRepoActive` *(read-only)* | `buyer` | Nonconsuming query to check if repo is currently active and encumbering collateral |
+| **`ReverseRepoPosition`** (ReverseRepo.daml) | `buyer` | `seller, custodian, observers` | `UpdateMarkToMarket` | `buyer` | Buyer or valuation agent updates mark-to-market valuation |
+|  |  |  | `CloseReverseRepo` | `buyer` | Close the position upon final repurchase settlement |
+|  |  |  | `AddReverseRepoObserver` | `buyer` | Add observer to reverse repo position |
+|  |  |  | `CalculateMarginDeficit` *(read-only)* | `buyer` | Nonconsuming query to calculate margin deficit given a minimum required haircut ratio |
+| **`SecuritiesLendingAgreement`** (SecuritiesLending.daml) | `lender, borrower, custodian` | `observers` | `AccrueLendingFee` | `lender, borrower` | Record borrow fees for an elapsed period |
+|  |  |  | `PayLendingFee` | `lender` | Lender confirms receipt of a lending fee payment from the borrower |
+|  |  |  | `RecallSecurities` | `lender` | Lender issues a formal recall for partial or full lent securities |
+|  |  |  | `ReturnSecurities` | `borrower` | Borrower returns securities, releasing collateral |
+|  |  |  | `RevalueCollateral` | `lender, borrower` | Mark-to-market collateral adjustment agreed between counterparties |
+|  |  |  | `DeclareSecLendingDefault` | `lender` | Lender declares default upon failure to satisfy recall deadline |
+|  |  |  | `AddSecLendingObserver` | `lender, borrower` | Add authorized observer |
+|  |  |  | `IsLendingActive` *(read-only)* | `lender` | Nonconsuming query to check if agreement is active |
+| **`FundSubscription`** (Subscription.daml) | `fundManager, investor` | `custodian, observers` | `ApproveSubscription` | `fundManager` | Fund Manager approves investor subscription |
+|  |  |  | `RejectSubscription` | `fundManager` | Fund Manager rejects subscription with stated reason |
+|  |  |  | `IssueCapitalCall` | `fundManager` | Fund Manager issues an incremental capital call against uncalled commitment |
+|  |  |  | `ConfirmCapitalFunding` | `custodian` | Custodian confirms settlement of called capital and allocates units |
+|  |  |  | `CancelSubscription` | `investor` | Investor cancels request prior to manager approval |
+|  |  |  | `CloseSubscription` | `fundManager` | Fund Manager formally closes subscription upon end of fund commitment period |
+|  |  |  | `AddSubscriptionObserver` | `fundManager` | Add authorized observer (e.g. transfer agent) |
+|  |  |  | `IsSubscriptionActive` *(read-only)* | `fundManager` | Nonconsuming query to check if commitment remains active |
+| **`AssetTransferRequest`** (Transfer.daml) | `sender, custodian` | `receiver, complianceOfficer, observers` | `ApproveTransfer` | `complianceOfficer` | Compliance officer approves the transfer, allowing custodian to proceed |
+|  |  |  | `RejectTransfer` | `complianceOfficer` | Compliance officer rejects the transfer with a mandatory reason |
+|  |  |  | `CompleteTransfer` | `custodian` | Custodian completes an approved transfer |
+|  |  |  | `CancelTransfer` | `sender` | Sender cancels the transfer while it is still pending compliance review |
+|  |  |  | `AddTransferObserver` | `custodian` | Add an observer (e.g. regulator, auditor, external custodian) |
+
+### Compliance Policies
+
+| Template | Signatories | Observers | Choice | Controller(s) | Effect |
+|:---|:---|:---|:---|:---|:---|
+| **`EligibilityPolicy`** (Eligibility.daml) | `policyManager` | `—` | `EvaluateEligibility` *(read-only)* | `policyManager` | Evaluate whether a given jurisdiction and asset class combination is eligible |
+|  |  |  | `ActivatePolicy` | `policyManager` | Activate this eligibility policy |
+|  |  |  | `DeactivatePolicy` | `policyManager` | Deactivate this policy (e.g. during review or update cycle) |
+|  |  |  | `AddAllowedJurisdiction` | `policyManager` | Add a jurisdiction to the allowed list |
+|  |  |  | `RemoveAllowedJurisdiction` | `policyManager` | Remove a jurisdiction from the allowed list |
+|  |  |  | `AddAllowedAssetClass` | `policyManager` | Add an asset class to the allowed list |
+|  |  |  | `RemoveAllowedAssetClass` | `policyManager` | Remove an asset class from the allowed list |
+| **`JurisdictionProfile`** (Jurisdiction.daml) | `regulator, institution` | `—` | `SetJurisdictionActive` | `regulator` | Activate or deactivate this jurisdiction profile |
+|  |  |  | `AddPermittedAssetClass` | `regulator` | Add a permitted asset class to this profile |
+|  |  |  | `RemovePermittedAssetClass` | `regulator` | Remove a permitted asset class from this profile |
+|  |  |  | `UpdateRegulatoryFramework` | `regulator` | Update the regulatory framework reference (e.g. after a regulatory change) |
+|  |  |  | `IsAssetClassPermitted` *(read-only)* | `regulator` | Nonconsuming query: is the given asset class permitted in this active profile? |
+| **`KycAttestation`** (KYC.daml) | `authority` | `subjectParty, observers` | `UpdateKycStatus` | `authority` | Update the KYC status and extend the validity window |
+|  |  |  | `RevokeKyc` | `authority` | Revoke this KYC attestation (e.g. AML alert, watchlist match, data quality failure) |
+|  |  |  | `UpdateProviderRef` | `authority` | Link an external KYC provider reference to this attestation |
+|  |  |  | `AddKycObserver` | `authority` | Grant read-only visibility to an additional party (e.g. custodian, clearing member) |
+|  |  |  | `IsKycValid` *(read-only)* | `authority` | Nonconsuming query: is this attestation currently valid? Returns True only when status is KycVerified and ledger time has not passed expiryTimestamp |
+| **`OwnershipRestriction`** (OwnershipRestrictions.daml) | `regulator` | `—` | `UpdateCaps` | `regulator` | Update the ownership caps |
+|  |  |  | `AddDisallowedJurisdiction` | `regulator` | Add a jurisdiction to the disallowed list |
+|  |  |  | `RemoveDisallowedJurisdiction` | `regulator` | Remove a jurisdiction from the disallowed list |
+|  |  |  | `SetRestrictionActive` | `regulator` | Activate or deactivate this restriction |
+|  |  |  | `CheckOwnershipLimit` *(read-only)* | `regulator` | Nonconsuming query: does the proposed holding violate this restriction? Returns Approved if within all limits, Rejected with reason if any limit is exceeded |
+| **`RegulatoryReportRecord`** (RegulatoryReporting.daml) | `reportingParty` | `regulator` | `AcknowledgeReport` | `regulator` | Regulator acknowledges receipt and validation of this report |
+|  |  |  | `RejectReport` | `regulator` | Regulator rejects this report (e.g. failed validation, missing required fields) |
+|  |  |  | `SubmitAmendment` | `reportingParty` | Reporting party submits an amendment (corrected report) |
+| **`SanctionsAttestation`** (Sanctions.daml) | `screeningAuthority` | `subjectParty, observers` | `UpdateSanctionsStatus` | `screeningAuthority` | Update the sanctions status and extend validity |
+|  |  |  | `BlockParty` | `screeningAuthority` | Block a party following a confirmed sanctions hit |
+|  |  |  | `ClearParty` | `screeningAuthority` | Clear a previously flagged or blocked party following compliance resolution |
+|  |  |  | `AddSanctionsObserver` | `screeningAuthority` | Add an observer (e.g. custodian, prime broker, regulator) |
+|  |  |  | `IsSanctionsClear` *(read-only)* | `screeningAuthority` | Nonconsuming query: is this party currently sanctions-clear and within validity? Returns True only when status is SanctionsClear and attestation has not expired |
+| **`TransferRestrictionRule`** (TransferRestrictions.daml) | `complianceOfficer` | `—` | `UpdateRestriction` | `complianceOfficer` | Update the regulatory category and lockup configuration |
+|  |  |  | `ActivateRule` | `complianceOfficer` | Activate this restriction rule |
+|  |  |  | `DeactivateRule` | `complianceOfficer` | Deactivate this restriction rule (e.g. after restriction period ends) |
+|  |  |  | `UpdateHoldingPeriod` | `complianceOfficer` | Update the holding period requirement |
+|  |  |  | `SetWhitelistRequired` | `complianceOfficer` | Update the whitelist requirement |
+|  |  |  | `AddToWhitelist` | `complianceOfficer` | Add a party to the approved-transferee whitelist |
+|  |  |  | `RemoveFromWhitelist` | `complianceOfficer` | Remove a party from the approved-transferee whitelist |
+|  |  |  | `EvaluateTransfer` *(read-only)* | `complianceOfficer` | Nonconsuming evaluation of a proposed transfer at the current ledger time |
 
 ---
 
-## 4. Compliance & Policy Engine Authorization Matrix
+## 3. Trust Boundary Principles
 
-| Template | Signatories | Choice Name | Controller(s) | Observers | Preconditions & Invariants | Resulting State Transition |
-|:---|:---|:---|:---|:---|:---|:---|
-| **`KYCAttestation`** | `authority` | `RenewKYC` | `authority` | `party`, `complianceOfficers` | Verified institutional identity documentation | Extends expiration timestamp |
-| | | `RevokeKYC` | `authority` | `party`, `complianceOfficers` | Non-empty revocation reason | Immediately invalidates attestation |
-| **`SanctionsScreening`**| `screeningProvider` | `UpdateSanctionsStatus`| `screeningProvider` | `regulators`, `auditors` | Timestamped OFAC/EU/UN screening run | Flags party if matched against sanctions list |
-| **`AssetTransferRequest`**| `sender`, `custodian` | `ApproveTransfer` | `complianceOfficer` | `receiver`, `observers` | Active KYC verified; no active sanctions hit | Transitions `status = TransferApproved` |
-| | | `RejectTransfer` | `complianceOfficer` | `receiver`, `observers` | Compliance or eligibility policy failure | Transitions `status = TransferRejected reason` |
-| | | `CompleteTransfer` | `custodian` | `receiver`, `observers` | `status == TransferApproved` | Executes physical custody transfer; marks `TransferCompleted` |
-| | | `CancelTransfer` | `sender` | `receiver`, `observers` | `status == TransferPendingCompliance` | Transitions `status = TransferCancelled reason` |
+These principles hold for the current code and are covered by the negative and authorization tests in `daml/src/AryaFi/Test`:
 
----
+1. **No position is imposed on a party without its consent.** `TransferCash`, `TransferSecurity`, and `TransferAsset` require the current owner, the holding institution (bank or custodian), and the receiving owner. The receiver becomes a signatory of the new position, so its authority is required.
+2. **Locks bind to a named lock holder.** `LockCash` / `LockSecurity` / `LockAsset` are authorized by owner and bank/custodian and name a lock holder. Only the lock holder can release the lock, or deliver the position to a receiver who co-authorizes (`SettleLockedCash` / `SettleLockedSecurity`). Neither owner nor custodian can withdraw a leg from an agreed settlement.
+3. **Atomic DvP.** `ExecuteDvpSettlement` validates both locked legs against the instruction (owner, account, ISIN, quantity, currency, amount, lock holder, lock reference) and delivers both in one transaction. The settlement agent cannot change economic terms; the instruction is signed by seller and buyer.
+4. **No party reduces its own obligation.** Loan repayments and interest payments are recorded by the lender; loan interest is computed from rate, day count, and ledger time; securities-lending fees need both counterparties to accrue and the lender to confirm payment; margin fulfilment needs the caller to confirm receipt; collateral release on a securities return is capped pro rata.
+5. **Disclosure of bilateral agreements needs both counterparties.** Adding an observer to a loan, repo, securities loan, margin call, pledge, or collateral position requires both principals.
+6. **Timestamps come from the ledger.** KYC verification, sanctions screening, pledge enforcement, redemption settlement, and report amendments record ledger time rather than a caller-supplied value.
+7. **Compliance officers cannot move value.** Their choices only approve, reject, or evaluate; they hold no controller rights over positions.
 
-## 5. Trust Boundary Principles
+## 4. Known Gaps (see `docs/KNOWN_LIMITATIONS.md`)
 
-1. **No Unilateral Asset Movement**: Asset positions (`CashPosition`, `SecurityPosition`) always require the joint signature of the legal owner and the holding institution. No custodian can unilaterally seize assets, and no owner can move assets without custodian verification.
-2. **Separation of Economic Claim and Compliance Review**: The `complianceOfficer` cannot alter loan balances or seize cash; their authority is strictly bounded to approving or rejecting transfer workflows (`TransferStatus`).
-3. **Settlement Independence**: The `settlementAgent` orchestrates atomic exchange (`ExecuteDvp`, `ConfirmPaymentSettlement`) but cannot alter economic terms (prices, quantities, interest rates) agreed upon by counterparties.
+- Multi-signatory contracts are created with multi-party submission. Across separate Canton participants this requires propose/accept workflows, which the library does not provide yet.
+- Policy evaluation choices (`IsKycValid`, `IsSanctionsClear`, `EvaluateEligibility`, `EvaluateTransfer`, `CheckOwnershipLimit`) are controlled by the policy owner only, so business workflows cannot call them inside their own transactions.
+- Loans, repos, pledges, collateral, and margin calls reference assets and payments by text reference rather than contract ID, so the ledger does not prevent one asset being referenced by several agreements.
+
+## 5. Regenerating This Matrix
+
+Update the choice doc comments in the Daml source, then run `python3 scripts/gen_authorization_matrix.py`. Do not edit the tables by hand.
