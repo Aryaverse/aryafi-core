@@ -118,7 +118,7 @@ template ConditionalEscrow
       do
         require (status == EscrowHeld)
           "Escrow must be Held to raise a dispute"
-        requireNonEmpty reason "dispute reason"
+        requireNonEmpty reason "reason"
         create this with
           status = EscrowDisputed
           disputeReason = Some reason

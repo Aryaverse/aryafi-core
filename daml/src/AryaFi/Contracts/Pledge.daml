@@ -63,16 +63,16 @@ template AssetPledge
         create this with status = Closed
 
     -- | Pledgee enforces the security interest following an event of default.
+    -- The enforcement timestamp is the current ledger time (cannot be backdated).
     choice EnforcePledge : ContractId AssetPledge
-      with
-        enforceTs : Time
       controller pledgee
       do
         require (status == Active)
           "Pledge must be Active to enforce"
+        now <- getTime
         create this with
           status = Defaulted
-          enforceTimestamp = Some enforceTs
+          enforceTimestamp = Some now
 
     -- | Substitute the pledged asset with an equivalent eligible asset.
     -- Requires unanimous tri-party consent (pledgor, pledgee, custodian).
@@ -101,14 +101,15 @@ template AssetPledge
         newRef : Text
       controller custodian
       do
-        requireNonEmpty newRef "perfection reference"
+        requireNonEmpty newRef "newRef"
         create this with perfectionReference = newRef
 
     -- | Add an observer to this pledge (e.g. tri-party collateral agent, regulator).
+    -- Both pledgor and pledgee must consent to disclosure.
     choice AddPledgeObserver : ContractId AssetPledge
       with
         newObserver : Party
-      controller pledgee
+      controller pledgor, pledgee
       do
         require (newObserver `notElem` observers) "Party is already an observer"
         create this with observers = newObserver :: observers
