@@ -9,7 +9,7 @@ import AryaFi.Contracts.Repo
 import AryaFi.Contracts.ReverseRepo
 import AryaFi.Contracts.Margin
 import AryaFi.Common.Types (DayCountConvention(..), LifecycleStatus(..))
-import AryaFi.Common.Identifiers (AccountId(..), CorrelationId(..))
+import AryaFi.Common.Identifiers (AccountId(..), CorrelationId(..), ISIN(..))
 import DA.Date (date, Month(..))
 import DA.Time (time)
 
@@ -22,11 +22,11 @@ setupParties = do
   regulator <- allocateParty "SEC"
   pure (seller, buyer, custodian, triparty, regulator)
 
-startDate : Time
-startDate = time (date 2026 Sep 1) 10 0 0
+baseStartDate : Time
+baseStartDate = time (date 2026 Sep 1) 10 0 0
 
-endDate : Time
-endDate = time (date 2026 Sep 8) 10 0 0
+baseEndDate : Time
+baseEndDate = time (date 2026 Sep 8) 10 0 0
 
 rollEndDate : Time
 rollEndDate = time (date 2026 Sep 15) 10 0 0
@@ -50,7 +50,7 @@ testRepoFullLifecycle = script do
       buyer = buyer
       tripartyAgent = Some triparty
       custodian = custodian
-      isin = "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       collateralQuantity = 5000000.0
       collateralAccountId = AccountId "ACC-COLLAT-001"
       haircut = 0.02
@@ -59,8 +59,8 @@ testRepoFullLifecycle = script do
       repurchasePrice = 5005152.78
       repoRate = 0.053
       dayCountConvention = Act360
-      startDate = startDate
-      endDate = endDate
+      startDate = baseStartDate
+      endDate = baseEndDate
       status = RepoPendingOpening
       openingSettlementRef = None
       closingSettlementRef = None
@@ -84,12 +84,12 @@ testRepoFullLifecycle = script do
   -- Substitute collateral to equivalent Treasury note
   repoCidSubstituted <- submitMulti [seller, buyer] [] do
     exerciseCmd repoCidActive SubstituteCollateral with
-      newIsin = "US912828XG34"
+      newIsin = ISIN "US912828XG01"
       newQuantity = 5100000.0
       newHaircut = 0.025
 
   Some subRepo <- queryContractId seller repoCidSubstituted
-  assertMsg "ISIN must be updated" (subRepo.isin == "US912828XG34")
+  assertMsg "ISIN must be updated" (subRepo.isin == ISIN "US912828XG01")
   assertMsg "Quantity must be updated" (subRepo.collateralQuantity == 5100000.0)
   assertMsg "Haircut must be updated" (subRepo.haircut == 0.025)
 
@@ -137,14 +137,14 @@ testReverseRepoValuationAndMarginDeficit = script do
       seller = seller
       custodian = custodian
       repoId = "REPO-2026-001"
-      isin = "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       collateralQuantity = 5000000.0
       currency = "USD"
       purchasePrice = 5000000.0
       repurchasePrice = 5005152.78
       repoRate = 0.053
-      startDate = startDate
-      endDate = endDate
+      startDate = baseStartDate
+      endDate = baseEndDate
       currentMarketValue = 5100000.0
       status = Active
       correlationId = CorrelationId "CORR-REV-001"
@@ -190,10 +190,17 @@ testMarginCallCashFulfillment = script do
       correlationId = CorrelationId "CORR-MC-001"
       observers = []
 
-  -- Satisfy with cash payment
-  callCidSatisfied <- submit seller do
+  -- Payer submits a cash payment; the caller then confirms receipt
+  callCidSubmitted <- submit seller do
     exerciseCmd callCid SatisfyWithCash with
       paymentRef = "PAY-WIRE-FED-001"
+
+  notYet <- submit buyer do
+    exerciseCmd callCidSubmitted IsMarginSatisfied
+  assertMsg "Call is not satisfied before the caller confirms receipt" (not notYet)
+
+  callCidSatisfied <- submit buyer do
+    exerciseCmd callCidSubmitted ConfirmMarginReceipt
 
   Some satisfiedCall <- queryContractId buyer callCidSatisfied
   case satisfiedCall.status of
@@ -227,10 +234,17 @@ testMarginCallPledgeFulfillment = script do
       correlationId = CorrelationId "CORR-MC-002"
       observers = []
 
-  -- Satisfy with pledge
-  callCidSatisfied <- submit seller do
+  -- Payer submits a pledge; the caller confirms receipt
+  callCidSubmitted <- submit seller do
     exerciseCmd callCid SatisfyWithPledge with
       pledgeRef = "PLEDGE-MARGIN-UST-001"
+
+  -- The payer cannot confirm its own fulfilment
+  submitMustFail seller do
+    exerciseCmd callCidSubmitted ConfirmMarginReceipt
+
+  callCidSatisfied <- submit buyer do
+    exerciseCmd callCidSubmitted ConfirmMarginReceipt
 
   Some satisfiedCall <- queryContractId buyer callCidSatisfied
   case satisfiedCall.status of
@@ -298,7 +312,7 @@ testUnauthorizedOpeningExecutionFails = script do
       buyer = buyer
       tripartyAgent = Some triparty
       custodian = custodian
-      isin = "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       collateralQuantity = 1000000.0
       collateralAccountId = AccountId "ACC-001"
       haircut = 0.02
@@ -307,8 +321,8 @@ testUnauthorizedOpeningExecutionFails = script do
       repurchasePrice = 1001000.0
       repoRate = 0.05
       dayCountConvention = Act360
-      startDate = startDate
-      endDate = endDate
+      startDate = baseStartDate
+      endDate = baseEndDate
       status = RepoPendingOpening
       openingSettlementRef = None
       closingSettlementRef = None
@@ -331,7 +345,7 @@ testInvalidHaircutSubstitutionFails = script do
       buyer = buyer
       tripartyAgent = None
       custodian = custodian
-      isin = "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       collateralQuantity = 1000000.0
       collateralAccountId = AccountId "ACC-001"
       haircut = 0.02
@@ -340,16 +354,54 @@ testInvalidHaircutSubstitutionFails = script do
       repurchasePrice = 1001000.0
       repoRate = 0.05
       dayCountConvention = Act360
-      startDate = startDate
-      endDate = endDate
+      startDate = baseStartDate
+      endDate = baseEndDate
       status = RepoActive
       openingSettlementRef = Some "SETTLE-001"
       closingSettlementRef = None
       correlationId = CorrelationId "CORR-FAIL-002"
       observers = []
 
-  submitMustFailMulti [seller, buyer] [] do
+  submitMultiMustFail [seller, buyer] [] do
     exerciseCmd repoCid SubstituteCollateral with
-      newIsin = "US912828XG34"
+      newIsin = ISIN "US912828XG01"
       newQuantity = 1000000.0
       newHaircut = 1.05 -- Invalid >= 1.0
+
+-- | Negative: a margin default cannot be declared before the deadline, and a
+-- rejected fulfilment returns the call to Issued.
+testMarginDeadlineAndRejection : Script ()
+testMarginDeadlineAndRejection = script do
+  (seller, buyer, custodian, _, _) <- setupParties
+  setTime baseStartDate
+
+  callCid <- submitMulti [buyer, seller] [] do
+    createCmd MarginCall with
+      marginCallId = "MC-2026-DEADLINE"
+      caller = buyer
+      payer = seller
+      custodian = custodian
+      marginType = VariationMargin
+      relatedAgreementRef = "REPO-2026-001"
+      currency = "USD"
+      requiredAmount = 100000.0
+      deadline = deadlineTime
+      status = MarginCallIssued
+      correlationId = CorrelationId "CORR-MC-DL"
+      observers = []
+
+  submitMustFail buyer do
+    exerciseCmd callCid DeclareMarginDefault with reason = "Early default attempt"
+
+  submittedCid <- submit seller do
+    exerciseCmd callCid SatisfyWithCash with paymentRef = "PAY-NEVER-ARRIVED"
+  rejectedCid <- submit buyer do
+    exerciseCmd submittedCid RejectMarginFulfilment with reason = "Funds not received"
+  Some rejected <- queryContractId buyer rejectedCid
+  assertMsg "Rejected fulfilment returns the call to Issued" (rejected.status == MarginCallIssued)
+
+  setTime (time (date 2026 Sep 3) 9 0 0)
+  defaultedCid <- submit buyer do
+    exerciseCmd rejectedCid DeclareMarginDefault with reason = "Margin unpaid after deadline"
+  Some defaulted <- queryContractId buyer defaultedCid
+  assertMsg "Default declared after the deadline" (defaulted.status == MarginCallDefaulted "Margin unpaid after deadline")
