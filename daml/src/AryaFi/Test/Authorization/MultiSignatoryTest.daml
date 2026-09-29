@@ -20,7 +20,6 @@ import AryaFi.Finance.Obligation
 import AryaFi.Finance.Cash
 import AryaFi.Finance.Security
 import AryaFi.Contracts.Repo
-import AryaFi.Contracts.Loan
 import AryaFi.Contracts.Margin
 import AryaFi.Common.Types
 import AryaFi.Common.Identifiers
@@ -65,7 +64,7 @@ multiSignatoryObligationTest = script do
       externalRef = None
 
   -- Discharge obligation by obligee
-  dischargedCid <- submit obligeeParty do
+  _dischargedCid <- submit obligeeParty do
     exerciseCmd oblCid DischargeObligation
 
   pure ()
@@ -104,7 +103,7 @@ multiSignatoryObligationCancellation = script do
       cancellationReason = "Unilateral cancel attempt"
 
   -- Both parties together can cancel
-  cancelledCid <- submitMulti [obligor, obligee] [] do
+  _cancelledCid <- submitMulti [obligor, obligee] [] do
     exerciseCmd oblCid CancelObligation with
       cancellationReason = "Mutual agreement to cancel trade"
 
@@ -130,6 +129,7 @@ multiSignatoryCashTransfer = script do
       amount = 1000000.0
       isLocked = False
       lockReference = None
+      lockHolder = None
       observers = []
 
   -- Owner alone cannot transfer (requires bank co-auth)
@@ -146,8 +146,15 @@ multiSignatoryCashTransfer = script do
       newAccountId = AccountId "ACC-BOB-USD"
       correlationId = CorrelationId "CORR-XFR-001"
 
-  -- Both together succeed
-  transferredCid <- submitMulti [alice, bank] [] do
+  -- Owner and bank cannot impose a position on the receiver without its consent
+  submitMultiMustFail [alice, bank] [] do
+    exerciseCmd cashCid TransferCash with
+      newOwner = bob
+      newAccountId = AccountId "ACC-BOB-USD"
+      correlationId = CorrelationId "CORR-XFR-001"
+
+  -- Owner, bank, and receiver together succeed
+  _transferredCid <- submitMulti [alice, bank, bob] [] do
     exerciseCmd cashCid TransferCash with
       newOwner = bob
       newAccountId = AccountId "ACC-BOB-USD"
@@ -170,7 +177,7 @@ multiSignatorySecurityLock = script do
       custodian = custodian
       owner = alice
       accountId = acc
-      isin = "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       cusip = None
       instrumentName = "US Treasury 4.25% Nov 2026"
       instrumentType = GovernmentBond
@@ -182,27 +189,28 @@ multiSignatorySecurityLock = script do
       seniority = Some Senior
       isLocked = False
       lockReference = None
+      lockHolder = None
       csdRef = None
       observers = []
 
   -- Owner alone cannot lock
   submitMustFail alice do
-    exerciseCmd secCid LockSecurity with lockRef = "REPO-COLL-001"
+    exerciseCmd secCid LockSecurity with lockRef = "REPO-COLL-001"; holder = custodian
 
   -- Custodian alone cannot lock
   submitMustFail custodian do
-    exerciseCmd secCid LockSecurity with lockRef = "REPO-COLL-001"
+    exerciseCmd secCid LockSecurity with lockRef = "REPO-COLL-001"; holder = custodian
 
   -- Both together can lock
   lockedCid <- submitMulti [alice, custodian] [] do
-    exerciseCmd secCid LockSecurity with lockRef = "REPO-COLL-001"
+    exerciseCmd secCid LockSecurity with lockRef = "REPO-COLL-001"; holder = custodian
 
   -- Owner alone cannot unlock
   submitMustFail alice do
     exerciseCmd lockedCid UnlockSecurity
 
   -- Both together can unlock
-  unlockedCid <- submitMulti [alice, custodian] [] do
+  _unlockedCid <- submitMulti [alice, custodian] [] do
     exerciseCmd lockedCid UnlockSecurity
 
   pure ()
@@ -226,7 +234,7 @@ multiSignatoryRepoCreation = script do
         buyer = buyer
         tripartyAgent = None
         custodian = custodian
-        isin = "US912828ZM24"
+        isin = ISIN "US912828ZM50"
         collateralQuantity = 5000000.0
         collateralAccountId = AccountId "ACC-TRI-AUTH"
         haircut = 0.02
@@ -250,7 +258,7 @@ multiSignatoryRepoCreation = script do
   submitMultiMustFail [seller, custodian] [] do createCmd repoFields
 
   -- All three together succeed
-  repoCid <- submitMulti [seller, buyer, custodian] [] do
+  _repoCid <- submitMulti [seller, buyer, custodian] [] do
     createCmd repoFields
 
   pure ()
@@ -275,7 +283,7 @@ multiSignatoryRepoSubstitution = script do
       buyer = buyer
       tripartyAgent = None
       custodian = custodian
-      isin = "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       collateralQuantity = 10000000.0
       collateralAccountId = AccountId "ACC-TRI-AUTH-002"
       haircut = 0.02
@@ -295,14 +303,14 @@ multiSignatoryRepoSubstitution = script do
   -- Seller alone cannot substitute collateral
   submitMustFail seller do
     exerciseCmd repoCid SubstituteCollateral with
-      newIsin = "US912828XG34"
+      newIsin = ISIN "US912828XG01"
       newQuantity = 10200000.0
       newHaircut = 0.025
 
   -- Both seller+buyer together succeed
-  substitutedCid <- submitMulti [seller, buyer] [] do
+  _substitutedCid <- submitMulti [seller, buyer] [] do
     exerciseCmd repoCid SubstituteCollateral with
-      newIsin = "US912828XG34"
+      newIsin = ISIN "US912828XG01"
       newQuantity = 10200000.0
       newHaircut = 0.025
 
@@ -349,7 +357,7 @@ multiSignatoryMarginResolution = script do
     exerciseCmd disputedCid ResolveMarginDispute with adjustedAmount = 350000.0
 
   -- Both together can resolve
-  resolvedCid <- submitMulti [caller, payer] [] do
+  _resolvedCid <- submitMulti [caller, payer] [] do
     exerciseCmd disputedCid ResolveMarginDispute with adjustedAmount = 350000.0
 
   pure ()

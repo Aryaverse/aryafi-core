@@ -14,17 +14,23 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Set up Java (required by the Daml Script test runner)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # Exact-version cache key only: restoring a different SDK version would
+      # silently build against the wrong compiler.
       - name: Cache Daml SDK
         uses: actions/cache@v4
         with:
           path: ~/.daml
-          key: daml-sdk-2.10.0
-          restore-keys: |
-            daml-sdk-
+          key: daml-sdk-${{ runner.os }}-2.10.0
 
       - name: Install Daml SDK
         run: |
-          if [ ! -d "$HOME/.daml/bin" ]; then
+          if ! "$HOME/.daml/bin/daml" version 2>/dev/null | grep -q "2.10.0"; then
             curl -sSL https://get.daml.com/ | sh -s 2.10.0
           fi
           echo "$HOME/.daml/bin" >> $GITHUB_PATH
@@ -43,4 +49,11 @@ jobs:
           daml damlc inspect-dar "$DAR_FILE"
 
       - name: Execute Full Test Suite
-        run: daml test
+        run: daml test --show-coverage --junit test-results.xml
+
+      - name: Upload Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daml-test-results
+          path: test-results.xml

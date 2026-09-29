@@ -105,7 +105,7 @@ template AssetTransferRequest
       do
         require (status == TransferPendingCompliance)
           "Transfer must be in PendingCompliance status to reject"
-        requireNonEmpty reason "rejection reason"
+        requireNonEmpty reason "reason"
         create this with
           status = TransferRejected reason
           complianceNote = Some reason
@@ -126,7 +126,7 @@ template AssetTransferRequest
       do
         require (status == TransferPendingCompliance)
           "Transfer can only be cancelled while pending compliance"
-        requireNonEmpty reason "cancellation reason"
+        requireNonEmpty reason "reason"
         create this with
           status = TransferCancelled reason
 

@@ -14,6 +14,7 @@ module AryaFi.Finance.Security where
 import AryaFi.Common.Identifiers (AccountId, ISIN, CUSIP, ExternalRef, CorrelationId)
 import AryaFi.Common.Types (Amount, Rate, DayCountConvention(..))
 import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
+import DA.Optional (fromOptional, optionalToList)
 
 -- ---------------------------------------------------------------------------
 -- Instrument Metadata
@@ -67,12 +68,14 @@ data SeniorityRank
 --
 -- Authorization:
 --   - SplitSecurity — owner only (administrative split, e.g. for partial settlement).
---   - TransferSecurity — owner + custodian (operational control + economic consent).
---   - LockSecurity / UnlockSecurity — owner + custodian (bilateral encumbrance).
+--   - TransferSecurity — owner + custodian + receiving owner.
+--   - LockSecurity — owner + custodian, naming a lock holder.
+--   - UnlockSecurity / SettleLockedSecurity — the lock holder (with the receiver
+--     for settlement); owner and custodian consented when creating the lock.
 --   - UpdateCsdRef — custodian only (operational reference management).
 --
--- Privacy: custodian and owner always see this. Settlement agents and
--- tri-party collateral agents are added as observers before referencing the position.
+-- Privacy: custodian, owner, and the current lock holder see this position.
+-- Observers are cleared whenever ownership changes.
 template SecurityPosition
   with
     custodian : Party
@@ -105,15 +108,18 @@ template SecurityPosition
     -- ^ Whether this position is encumbered (pledged, in settlement, lent).
     lockReference : Optional Text
     -- ^ Contract reference holding this position (e.g. repo agreement ID).
+    lockHolder : Optional Party
+    -- ^ Party holding the lock (e.g. DvP settlement agent, tri-party agent).
+    --   Only this party can unlock the position or settle it while locked.
     csdRef : Optional ExternalRef
     -- ^ CSD (Euroclear, DTC, Clearstream) system reference for this holding.
     observers : [Party]
     -- ^ Parties with read visibility (settlement agents, tri-party agents, auditors).
   where
     signatory custodian, owner
-    observer observers
+    observer observers, optionalToList lockHolder
 
-    ensure quantity > 0.0
+    ensure quantity > 0.0 && isLocked == (lockHolder /= None)
 
     -- | Split this position into two positions, preserving total quantity.
     -- Used for: staging partial settlement, partial repo collateral.
@@ -127,18 +133,19 @@ template SecurityPosition
         requirePositive splitQuantity "splitQuantity"
         require (splitQuantity < quantity)
           ("Split quantity " <> show splitQuantity <> " must be less than total " <> show quantity)
-        s1 <- create this with quantity = splitQuantity; isLocked = False; lockReference = None
-        s2 <- create this with quantity = quantity - splitQuantity; isLocked = False; lockReference = None
+        s1 <- create this with quantity = splitQuantity
+        s2 <- create this with quantity = quantity - splitQuantity
         pure (s1, s2)
 
     -- | Transfer ownership of this security to a new owner and account.
-    -- Position must not be locked. Requires joint authorization.
+    -- Position must not be locked. Requires joint authorization of owner,
+    -- custodian, and the receiver (who becomes a signatory of the new position).
     choice TransferSecurity : ContractId SecurityPosition
       with
         newOwner : Party
         newAccountId : AccountId
         correlationId : CorrelationId
-      controller owner, custodian
+      controller owner, custodian, newOwner
       do
         require (not isLocked) "Cannot transfer a locked security position"
         require (newOwner /= owner) "New owner must be different from current owner"
@@ -150,9 +157,12 @@ template SecurityPosition
     -- | Lock this security, preventing split, transfer, or further encumbrance.
     -- Used when pledging as collateral, initiating a repo opening leg,
     -- or lending the security under a securities lending agreement.
+    -- From this point only the lock holder can release or settle the position.
     choice LockSecurity : ContractId SecurityPosition
       with
         lockRef : Text
+        holder : Party
+        -- ^ Party that will hold the lock (e.g. the DvP settlement agent).
       controller owner, custodian
       do
         require (not isLocked) "Security position is already locked"
@@ -160,16 +170,36 @@ template SecurityPosition
         create this with
           isLocked = True
           lockReference = Some lockRef
+          lockHolder = Some holder
 
-    -- | Unlock a previously locked security position.
+    -- | Release the lock. Only the lock holder can do this.
     -- Used upon repo closing leg settlement, pledge release, or securities return.
     choice UnlockSecurity : ContractId SecurityPosition
-      controller owner, custodian
+      controller fromOptional owner lockHolder
       do
         require isLocked "Security position is not currently locked"
         create this with
           isLocked = False
           lockReference = None
+          lockHolder = None
+
+    -- | Deliver a locked position to a counterparty as part of a settlement
+    -- (e.g. the securities leg of a DvP). Exercised by the lock holder together
+    -- with the receiver; owner and custodian consented when creating the lock.
+    choice SettleLockedSecurity : ContractId SecurityPosition
+      with
+        newOwner : Party
+        newAccountId : AccountId
+      controller fromOptional owner lockHolder, newOwner
+      do
+        require isLocked "Only a locked position can be settled by its lock holder"
+        create this with
+          owner = newOwner
+          accountId = newAccountId
+          isLocked = False
+          lockReference = None
+          lockHolder = None
+          observers = []
 
     -- | Update the CSD system reference for this holding.
     -- Only the custodian can update operational references.

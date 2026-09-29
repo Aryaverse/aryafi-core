@@ -29,7 +29,7 @@ testRequirePositiveAccepts = script do
 
 testRequireNonEmptyAccepts : Script ()
 testRequireNonEmptyAccepts = script do
-  requireNonEmpty "ISIN-US912828ZM24" "isin"
+  requireNonEmpty "ISIN-US912828ZM50" "isin"
   pure ()
 
 testRequireNonEmptyListAccepts : Script ()
@@ -237,7 +237,7 @@ testMkStatusChangeEvent = script do
 expectFailure : Text -> Script a -> Script ()
 expectFailure msg action = do
   try do
-    action
+    _ <- action
     abort ("Expected failure but succeeded: " <> msg)
   catch
     (_ : AnyException) -> pure ()

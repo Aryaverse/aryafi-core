@@ -1,5 +1,7 @@
 # AryaFi Core: Production Roadmap (v1.0.0)
 
+> **Status note (2026-09-29, v1.0.2).** This is the original delivery roadmap, kept for history. The "completed" status below was recorded before the project had been built or tested: at that point `daml build` failed and the test suite had never compiled. v1.0.2 fixed the build, the tests (289 passing), atomic DvP, and the authorization defects; see [CHANGELOG.md](../CHANGELOG.md). Current maturity is in [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md); the forward plan is [IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md).
+
 ## Executive Summary
 
 AryaFi Core is an institutional-grade smart contract library built in **Daml** for **Canton Network**. It provides modular, composable, and privacy-preserving primitives for digital assets, tokenized cash, custody accounts, bilateral and tri-party financing, and regulatory compliance.

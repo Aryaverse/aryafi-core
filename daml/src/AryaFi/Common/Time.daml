@@ -7,6 +7,7 @@
 module AryaFi.Common.Time where
 
 import AryaFi.Common.Types (DayCountConvention(..), Rate, Amount)
+import DA.Date (Month(..), date, fromMonth, isLeapYear, subDate, toDateUTC, toGregorian)
 import DA.Time (convertRelTimeToMicroseconds, subTime)
 
 -- ---------------------------------------------------------------------------
@@ -39,24 +40,47 @@ daysBetween start end =
 -- day count convention. The year fraction is the denominator factor
 -- used in all interest, coupon, and rate accrual calculations.
 --
--- This function follows ISDA Definitions and market-standard conventions:
+-- This function follows ISDA 2006 Definitions §4.16:
 --
---   Act/360      — numerator = actual days; denominator = 360
---   Act/365 Fixed — numerator = actual days; denominator = 365
---   Act/Act ISDA — numerator = actual days; denominator = 365.25 (simplified)
---   30/360       — standard 30-day months; denominator = 360
+--   Act/360       — actual days / 360
+--   Act/365 Fixed — actual days / 365
+--   Act/Act ISDA  — days falling in a leap year / 366 + days in a non-leap year / 365
+--   30/360        — 30/360 US Bond Basis date adjustment, / 360
 --
--- NOTE: The Thirty360 implementation here uses actual days / 360 as a
--- simplification. Production use should implement the full 30/360 date
--- adjustment algorithm (see ISDA 2006 Definitions §4.16).
+-- Act/360 and Act/365F count elapsed 24-hour periods between the two
+-- timestamps; Act/Act ISDA and 30/360 operate on the UTC calendar dates.
 calcYearFraction : DayCountConvention -> Time -> Time -> Decimal
 calcYearFraction convention start end =
   let actualDays = intToDecimal (daysBetween start end)
   in case convention of
     Act360      -> actualDays / 360.0
     Act365Fixed -> actualDays / 365.0
-    ActActISDA  -> actualDays / 365.25
-    Thirty360   -> actualDays / 360.0
+    ActActISDA  -> actActIsdaYearFraction (toDateUTC start) (toDateUTC end)
+    Thirty360   -> intToDecimal (thirty360Days (toDateUTC start) (toDateUTC end)) / 360.0
+
+-- | Day count under 30/360 US Bond Basis (ISDA 2006 §4.16(f)):
+--   D1 = 30 if d1 is 31; D2 = 30 if d2 is 31 and D1 is 30 (or 31).
+thirty360Days : Date -> Date -> Int
+thirty360Days startDate endDate =
+  let (y1, m1, d1) = toGregorian startDate
+      (y2, m2, d2) = toGregorian endDate
+      dd1 = if d1 == 31 then 30 else d1
+      dd2 = if d2 == 31 && dd1 == 30 then 30 else d2
+  in 360 * (y2 - y1) + 30 * (fromMonth m2 - fromMonth m1) + (dd2 - dd1)
+
+-- | Act/Act ISDA year fraction: the portion of the period falling in each
+-- calendar year is divided by that year's length (365 or 366).
+actActIsdaYearFraction : Date -> Date -> Decimal
+actActIsdaYearFraction startDate endDate =
+  let (y1, _, _) = toGregorian startDate
+      (y2, _, _) = toGregorian endDate
+      yearLength : Int -> Decimal
+      yearLength y = if isLeapYear y then 366.0 else 365.0
+  in if endDate <= startDate then 0.0
+     else if y1 == y2 then intToDecimal (subDate endDate startDate) / yearLength y1
+     else intToDecimal (subDate (date (y1 + 1) Jan 1) startDate) / yearLength y1
+            + intToDecimal (y2 - y1 - 1)
+            + intToDecimal (subDate endDate (date y2 Jan 1)) / yearLength y2
 
 -- ---------------------------------------------------------------------------
 -- Interest Accrual

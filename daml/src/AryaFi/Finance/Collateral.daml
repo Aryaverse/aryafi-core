@@ -24,14 +24,16 @@ import AryaFi.Common.Errors (require, requirePositive, requireNonNegative)
 -- ---------------------------------------------------------------------------
 
 -- | Lifecycle state of a collateral position.
--- Transitions: Allocated → {Active → Substituted → Active} → Released | Liquidated
+-- Transitions: Allocated → Active ⇄ Substituted ⇄ InDispute → Released | Liquidated
+-- Active and Substituted are both "live" states (see isLiveCollateral).
 data CollateralStatus
   = Allocated
     -- ^ Collateral has been designated but the underlying asset is not yet locked.
   | Active
     -- ^ Collateral is locked, valued, and fulfilling its obligation.
   | Substituted
-    -- ^ Collateral has been replaced with a different eligible asset.
+    -- ^ Collateral is live and has been replaced at least once with a different
+    --   eligible asset. Behaves like Active for all further lifecycle actions.
   | Released
     -- ^ Collateral has been released; the underlying asset is unlocked.
   | Liquidated
@@ -39,6 +41,11 @@ data CollateralStatus
   | InDispute
     -- ^ A valuation dispute has been raised and is pending resolution.
   deriving (Eq, Ord, Show)
+
+-- | Whether collateral in this status is live (securing an obligation and
+-- open to revaluation, substitution, dispute, release, or liquidation).
+isLiveCollateral : CollateralStatus -> Bool
+isLiveCollateral s = s == Active || s == Substituted
 
 -- ---------------------------------------------------------------------------
 -- CollateralPosition Template
@@ -112,6 +119,8 @@ template CollateralPosition
         newQuantity : Amount
       controller custodian
       do
+        require (status == Allocated || isLiveCollateral status)
+          "Can only revalue Allocated, Active, or Substituted collateral"
         requirePositive newMarketValue "newMarketValue"
         requirePositive newQuantity "newQuantity"
         create this with
@@ -121,7 +130,8 @@ template CollateralPosition
     -- | Substitute the collateral with a different eligible asset.
     -- Both provider and receiver must authorize substitution to ensure the
     -- replacement asset satisfies eligibility criteria agreed in the schedule.
-    -- Status transitions to Substituted to record the event.
+    -- Status transitions to Substituted to record the event; the position
+    -- stays live and can be substituted, disputed, released, or liquidated again.
     choice SubstituteCollateral : ContractId CollateralPosition
       with
         newIsin : ISIN
@@ -132,7 +142,7 @@ template CollateralPosition
         newLockReference : Text
       controller collateralProvider, collateralReceiver
       do
-        require (status == Active) "Substitution only allowed on Active collateral"
+        require (isLiveCollateral status) "Substitution only allowed on Active or Substituted collateral"
         requirePositive newQuantity "newQuantity"
         requirePositive newMarketValue "newMarketValue"
         requireNonNegative newHaircut "newHaircut"
@@ -160,7 +170,7 @@ template CollateralPosition
     choice ReleaseCollateral : ContractId CollateralPosition
       controller collateralProvider, collateralReceiver
       do
-        require (status == Active || status == Substituted)
+        require (isLiveCollateral status)
           "Can only release Active or Substituted collateral"
         create this with status = Released
 
@@ -169,16 +179,17 @@ template CollateralPosition
     choice LiquidateCollateral : ContractId CollateralPosition
       controller collateralReceiver
       do
-        require (status == Active || status == Substituted)
+        require (isLiveCollateral status)
           "Can only liquidate Active or Substituted collateral"
         create this with status = Liquidated
 
     -- | Raise a valuation dispute on this collateral position.
-    -- Either party can raise a dispute. Moves status to InDispute.
+    -- Raised by the collateral provider against the custodian's valuation.
+    -- Moves status to InDispute.
     choice RaiseValuationDispute : ContractId CollateralPosition
       controller collateralProvider
       do
-        require (status == Active) "Can only raise dispute on Active collateral"
+        require (isLiveCollateral status) "Can only raise dispute on Active or Substituted collateral"
         create this with status = InDispute
 
     -- | Resolve a valuation dispute and return collateral to Active with
@@ -198,7 +209,7 @@ template CollateralPosition
     choice AddCollateralObserver : ContractId CollateralPosition
       with
         newObserver : Party
-      controller custodian
+      controller collateralProvider, collateralReceiver
       do
         require (newObserver `notElem` observers) "Party is already an observer"
         create this with observers = newObserver :: observers

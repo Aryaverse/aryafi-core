@@ -13,16 +13,16 @@ This reference application exercises every core layer of the AryaFi platform in 
 
 | Party | Role | Description |
 |:------|:-----|:------------|
-| FederalReserveBank | Cash Custodian | Issues and holds USD tokenized cash positions |
+| CentralBank | Cash Issuer | Issues USD tokenized cash positions |
 | GlobalCustodian | Securities Custodian | Holds US Treasury security positions in safekeeping |
 | KycAuthority | KYC Attestation Authority | Issues and validates KYC verifications for institutional counterparties |
 | ScreeningAuthority | Sanctions Screening Provider | Screens counterparties against OFAC, EU, and UN sanctions lists |
 | ComplianceOfficer | Compliance Gating | Reviews and approves asset transfers after verifying compliance attestations |
-| SECRegulator | Regulatory Authority | Receives and acknowledges CAT trade reports |
-| DTCCSettlementAgent | Settlement Agent | Executes atomic DvP settlement instructions |
+| SecuritiesRegulator | Regulatory Authority | Receives and acknowledges CAT trade reports |
+| SettlementAgent | Settlement Agent | Holds both locked legs and executes the atomic DvP |
 | DealerBankA (Seller) | Primary Dealer | Sells US Treasury bonds; submits regulatory reports |
 | DealerBankB (Buyer) | Primary Dealer | Buys US Treasury bonds with USD cash |
-| DTC | Central Securities Depository | Receives observer visibility into settled DvP instructions |
+| CentralSecuritiesDepository | Central Securities Depository | Receives observer visibility into DvP instructions |
 
 ## Workflow
 
@@ -97,7 +97,7 @@ sellerKycCid <- submit kycAuthority do
     jurisdiction = "US"
     riskTier = "STANDARD"
     providerRef = None
-    observers = [compliance, dtcc]
+    observers = [compliance, agent]
 
 -- Sanctions screening for both dealers
 sellerSanCid <- submit screening do
@@ -110,10 +110,10 @@ sellerSanCid <- submit screening do
     ...
 
 -- Eligibility policy for US Treasuries
-eligibilityCid <- submit dtcc do
+eligibilityCid <- submit agent do
   createCmd EligibilityPolicy with
-    policyManager = dtcc
-    policyName = "DTCC-US-Treasury-Eligible-Collateral"
+    policyManager = agent
+    policyName = "US-Treasury-Eligible-Collateral"
     allowedJurisdictions = ["US", "GB", "DE", "CH", "SG", "JP"]
     allowedAssetClasses = ["GovernmentSecurity", "AgencySecurity"]
     minCreditRating = "AA-"
@@ -129,17 +129,17 @@ sellerSecCid <- submitMulti [custodian, seller] [] do
     custodian = custodian
     owner = seller
     accountId = securityAccId
-    isin = ISIN "US912828ZM24"
-    cusip = Some (CUSIP "912828ZM2")
+    isin = ISIN "US912828ZM50"
+    cusip = Some (CUSIP "912828ZM5")
     instrumentName = "US Treasury 4.25% Nov 2026"
     instrumentType = GovernmentBond
     quantity = 5000000.0
     ...
 
--- Buyer creates USD cash position (5M) at Federal Reserve
-buyerCashCid <- submitMulti [fedReserve, buyer] [] do
+-- Buyer creates USD cash position (5M) at the central bank
+buyerCashCid <- submitMulti [cashBank, buyer] [] do
   createCmd CashPosition with
-    bank = fedReserve
+    bank = cashBank
     owner = buyer
     accountId = cashAccId
     currency = "USD"
@@ -148,32 +148,41 @@ buyerCashCid <- submitMulti [fedReserve, buyer] [] do
 ```
 
 ### Phase 3: DvP Settlement
-Atomic settlement requires pre-locking of both legs followed by three-party instruction creation:
+Both legs are locked to the settlement agent, which then delivers them in one transaction:
 ```daml
--- Lock security and cash for DvP
+-- Seller locks the bond; only the settlement agent can release or settle it from now on
 lockedSecCid <- submitMulti [seller, custodian] [] do
-  exerciseCmd sellerSecCid LockSecurity with lockRef = dvpLockRef
+  exerciseCmd sellerSecCid LockSecurity with lockRef = dvpLockRef; holder = agent
 
-lockedCashCid <- submitMulti [buyer, fedReserve] [] do
-  exerciseCmd buyerCashCid LockCash with lockRef = dvpLockRef
+-- Buyer carves out exactly the consideration (5M face x 99.5% = 4,975,000) and locks it
+(considerationCid, buyerRemainderCid) <- submit buyer do
+  exerciseCmd buyerCashCid SplitCash with splitAmount = 4975000.0
+lockedCashCid <- submitMulti [buyer, cashBank] [] do
+  exerciseCmd considerationCid LockCash with lockRef = dvpLockRef; holder = agent
 
 -- Create DvP instruction (all three parties sign)
-dvpCid <- submitMulti [dtcc, seller, buyer] [] do
+dvpCid <- submitMulti [agent, seller, buyer] [] do
   createCmd DvpInstruction with
-    settlementAgent = dtcc
+    settlementAgent = agent
     seller = seller
     buyer = buyer
     tradeId = TradeId "TRD-US-TREAS-4P25-NOV26-001"
-    isin = ISIN "US912828ZM24"
+    isin = ISIN "US912828ZM50"
     securityQuantity = 5000000.0
     cashAmount = 4975000.0  -- 99.5% of par
     dvpModel = DvpModel1
     status = PendingSettlement
     ...
 
--- Settlement agent executes atomically
-settledCid <- submit dtcc do
-  exerciseCmd dvpCid ExecuteDvpSettlement
+-- Settlement agent validates both legs and delivers them in a single transaction
+result <- submit agent do
+  exerciseCmd dvpCid ExecuteDvpSettlement with
+    sellerSecurityCid = lockedSecCid
+    buyerCashCid = lockedCashCid
+
+-- The buyer now owns the bond and the seller owns the cash
+Some bond <- queryContractId buyer result.deliveredSecurityCid
+Some cash <- queryContractId seller result.paidCashCid
 ```
 
 ### Phase 4: Regulatory Reporting
@@ -199,8 +208,9 @@ ackedReportCid <- submit sec do
 | Pattern | Description |
 |:--------|:------------|
 | **Multi-Signatory DvP** | Settlement requires 3-party co-sign (agent + seller + buyer) |
-| **Pre-Settlement Locking** | Positions are locked before settlement to prevent double-spend |
-| **Compliance Gating** | KYC + Sanctions + Eligibility must all clear before trading |
+| **Agent-Held Locks** | Both legs are locked to the settlement agent; neither owner nor custodian can withdraw them |
+| **Atomic Delivery** | `ExecuteDvpSettlement` validates both legs and moves them in one transaction, or nothing moves |
+| **Compliance Checks** | KYC, sanctions, and eligibility are checked by their authorities before the trade (not yet enforced inside the DvP transaction; see Known Limitations) |
 | **Sub-Transaction Privacy** | Only signatories and observers see contract data |
 | **Parallel Independence** | Multiple DvP instructions can settle without interference |
 | **Observer-Based Visibility** | CSD, regulators, and agent banks added as needed |
@@ -215,6 +225,6 @@ The reference application also includes a parallel DvP test demonstrating that t
 ## Scenario Verification
 To execute the complete multi-party test scenario:
 ```bash
-daml test --test-pattern TreasuryDvpScenario
+daml test --files daml/src/AryaFi/Test/Scenarios/TreasuryDvpScenario.daml
 ```
-*Implemented in [TreasuryDvpScenario.daml](file:///Users/pankaj/Desktop/DAML%20Projects/aryafi-core/daml/src/AryaFi/Test/Scenarios/TreasuryDvpScenario.daml).*
+*Implemented in [TreasuryDvpScenario.daml](../../daml/src/AryaFi/Test/Scenarios/TreasuryDvpScenario.daml).*

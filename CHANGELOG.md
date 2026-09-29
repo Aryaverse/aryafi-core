@@ -5,6 +5,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [1.0.2] - Unreleased
+
+This release makes the library build, makes its test suite run, and corrects the behaviour and documentation that did not match the code. **Breaking:** several choices changed controllers or arguments (listed under *Changed*); see [MIGRATION_GUIDE.md](docs/governance/MIGRATION_GUIDE.md) for upgrade notes.
+
+### Fixed
+- **Build.** `daml build` failed with 13 errors in 12 production modules (a `Text`/`ISIN` type error in `Repo.daml`, multi-field constructors in `SecuritiesLending.daml` and `Redemption.daml`, and `-Werror` warnings). It now builds with `-Wall -Werror`; only `-Wno-name-shadowing` is disabled, for the `maintainer key._1` idiom.
+- **Test suite.** The tests had never compiled: 91 further errors referenced APIs that did not exist (`KYCAttestation`, `SanctionsScreeningAttestation`, `ExecutePayment`, `asOf`, raw `Text` for `ISIN`/`LEI`/`CUSIP`). All 289 test scripts now compile and pass.
+- **DvP settlement did not move assets.** `ExecuteDvpSettlement` only set a status flag. It now takes the two locked legs, validates owner, account, ISIN, quantity, currency, amount, lock holder, and lock reference, and delivers the security and the cash in one transaction.
+- **Locks could be withdrawn mid-settlement.** Owner and custodian could unlock a leg after agreeing a DvP. Locks now name a lock holder, who alone can release or settle the position.
+- **Transfers failed at runtime.** `TransferCash`, `TransferSecurity`, and `TransferAsset` created a position for a receiver without its authority. They now require the receiver, and clear observers so the previous owner's viewers do not follow the asset.
+- **`SplitCash` always failed** with a unique-key violation: both halves shared the `CashPosition` contract key, which has been removed.
+- **Borrowers could erase their own debt.** `PayDownPrincipal` and `PayAccruedInterest` are now recorded by the lender. `AccrueInterest` computes interest from rate, day count, and ledger time instead of accepting an amount from the lender.
+- **Securities lending:** a full return left 0.01 phantom units on loan (now exactly zero); a partial return silently cancelled a recall (the recall now persists with the remaining quantity); the borrower could release all collateral while returning one share (release is capped pro rata); the borrower could confirm its own fee payment (now the lender); fees need both counterparties.
+- **Margin:** the payer could mark a call satisfied without paying. Fulfilment is now two-step (`ConfirmMarginReceipt` / `RejectMarginFulfilment`), and default can only be declared after the deadline.
+- **Dead-end states:** an amended `FinancialObligation` could never be paid or defaulted, and only one partial payment was possible; substituted `CollateralPosition`s could not be substituted, disputed, or revalued again. Both state machines are fixed.
+- **Repo:** the custodian could close an active repo early on its own; `RollRepo` accepted an earlier end date.
+- **`EvaluateTransfer`** (replaces `IsTransferAllowed`) now checks holding period, whitelist, and regulatory category, not just the lockup, and an inactive rule no longer blocks every transfer.
+- **Backdatable timestamps:** KYC, sanctions, pledge enforcement, redemption settlement, and report amendments now record ledger time instead of a caller-supplied value.
+- **Day counts:** Act/Act ISDA (was actual/365.25) and 30/360 (was actual/360) now follow ISDA 2006 §4.16.
+- **Disclosure:** adding an observer to a loan, repo, securities loan, margin call, pledge, or collateral position now requires both counterparties.
+- **Invalid identifiers:** the example ISINs (e.g. `US912828ZM24`) and CUSIP failed their check digits; replaced with valid ones throughout.
+- **Build and deploy configuration:** `init-script` pointed at a missing function; the Canton config used Canton 3 settings (protocol version 30) with a Daml 2.10 SDK and referenced a `canton-open-source:3.0.0` image that does not exist; the bootstrap script mixed shell commands into its Scala and uploaded a mis-named DAR. The topology now boots on Canton 2.10 and the DvP suites pass against it with `daml script`.
+- **CI:** the SDK cache could restore a different SDK version; the release workflow published DARs without running tests. Both fixed; CI also publishes JUnit results and coverage.
+
+### Changed
+- `LockCash` / `LockSecurity` take a `holder`; `LockAsset`'s `lockingParty` becomes the lock holder. `UnlockCash` / `UnlockSecurity` / `UnlockAsset` are controlled by the lock holder. New `SettleLockedCash` / `SettleLockedSecurity`.
+- `ExecuteDvpSettlement` takes `sellerSecurityCid` and `buyerCashCid` and returns `DvpSettlementResult`.
+- `InstitutionalLoan` gains `interestAccruedThrough`; `AccrueInterest` has no arguments.
+- `SecLendingStatus.LendingRecallIssued` and `RedemptionStatus.RedemptionSettled` use named fields.
+- `TransferRestrictionRule` gains `whitelist`, `AddToWhitelist`, `RemoveFromWhitelist`; `IsTransferAllowed` is replaced by `EvaluateTransfer`, which returns a `PolicyDecision`.
+- Timestamp arguments removed from `UpdateKycStatus`, `RevokeKyc`, `UpdateSanctionsStatus`, `BlockParty`, `ClearParty`, `EnforcePledge`, `ExecuteRedemptionSettlement`, and `SubmitAmendment`.
+- `CashPosition` no longer has a contract key.
+
+### Web Terminal
+- Removed simulated figures presented as live data: the random volume ticker, "BFT commit" latency, "Zero-Knowledge Proofs", and "PROVEN / COMPLIANT" export stamps. The simulator and exports are labelled as a scripted simulation.
+- The ISO 20022 "validator" always reported success; it now runs real checks (XML/JSON well-formedness, required elements, ISIN/LEI check digits, UETR, currency, XML/JSON consistency). Payloads are real Daml JSON API v1 bodies for the actual templates.
+- The code viewer showed hand-written code that did not exist in the repository (e.g. a different `Loan.daml`); it now loads the real source files.
+- Real institutions (Federal Reserve, Goldman Sachs, Morgan Stanley, DTCC, BNY, SEC) are no longer depicted as network participants.
+- The split calculator uses exact 10-decimal fixed-point arithmetic, like Daml `Decimal`, instead of floating point.
+
+### Documentation
+- Added [KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md) and [IMPROVEMENT_PLAN.md](docs/IMPROVEMENT_PLAN.md).
+- [AUTHORIZATION_MATRIX.md](docs/security/AUTHORIZATION_MATRIX.md) is now generated from the source by `scripts/gen_authorization_matrix.py`; the previous version listed choices and templates that did not exist.
+- Corrected claims that did not hold: "mathematically verified", "audited", "Production Candidate", Canton "Protocol v30", automated SEC CAT emission, the audit dossier's lock-exclusivity lemma (it did not prevent double-pledging), and Basel Group 1a criteria marked "MET".
+- Removed the unused `daml/test/` directory (duplicates outside the build).
+
+---
+
 ## [1.0.1] - 2026-09-25
 
 ### Added

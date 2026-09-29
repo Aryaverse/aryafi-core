@@ -36,9 +36,9 @@ repoCid <- submitMulti [seller, buyer, custodian] [] do
     buyer = buyer
     tripartyAgent = Some triparty
     custodian = custodian
-    isin = "US912828ZM24"
+    isin = "US912828ZM50"
     collateralQuantity = 10000000.0
-    collateralAccountId = AccountId "ACC-TRI-PARTY-BNY-01"
+    collateralAccountId = AccountId "ACC-TRI-PARTY-01"
     haircut = 0.02
     currency = "USD"
     purchasePrice = 9800000.0
@@ -56,7 +56,7 @@ repoCid <- submitMulti [seller, buyer, custodian] [] do
 -- Custodian executes opening leg
 repoCidActive <- submit custodian do
   exerciseCmd repoCid ExecuteOpeningLeg with
-    settlementRef = "SETTLE-OPEN-DVP-BNY-001"
+    settlementRef = "SETTLE-OPEN-DVP-001"
 ```
 
 ### 2. Mark-to-Market Valuation & Variation Margin Call
@@ -90,26 +90,34 @@ marginCallCid <- submitMulti [buyer, seller] [] do
 ```
 
 ### 3. Margin Fulfillment
-Seller satisfies the variation margin requirement with cash:
+The seller submits a cash payment; the call is only satisfied once the buyer (the caller) confirms receipt:
 ```daml
-marginCallSatisfiedCid <- submit seller do
+marginCallSubmittedCid <- submit seller do
   exerciseCmd marginCallCid SatisfyWithCash with
     paymentRef = "FEDWIRE-IMAD-20260908-001234"
+
+marginCallSatisfiedCid <- submit buyer do
+  exerciseCmd marginCallSubmittedCid ConfirmMarginReceipt
 ```
+If the funds never arrive, the buyer runs `RejectMarginFulfilment` instead, and can declare default only after the call's deadline.
 
 ### 4. Collateral Substitution & Maturity Closeout
 ```daml
 -- Counterparties execute collateral substitution
 repoCidSubstituted <- submitMulti [seller, buyer] [] do
   exerciseCmd repoCidActive SubstituteCollateral with
-    newIsin = "US912828XG34"
+    newIsin = ISIN "US912828XG01"
     newQuantity = 10100000.0
     newHaircut = 0.02
 
--- Maturity closing leg execution
+-- Seller initiates the closing leg; the custodian then confirms settlement.
+-- (The custodian alone can only close a repo that has reached its end date.)
+repoCidPendingClose <- submit seller do
+  exerciseCmd repoCidSubstituted InitiateClosingLeg
+
 repoCidSettled <- submit custodian do
-  exerciseCmd repoPendingClose ExecuteClosingLeg with
-    settlementRef = "SETTLE-CLOSE-DVP-BNY-001"
+  exerciseCmd repoCidPendingClose ExecuteClosingLeg with
+    settlementRef = "SETTLE-CLOSE-DVP-001"
 ```
 
 ---
@@ -117,6 +125,6 @@ repoCidSettled <- submit custodian do
 ## Scenario Verification
 To execute the complete multi-party test scenario:
 ```bash
-daml test --test-pattern RepoScenario
+daml test --files daml/src/AryaFi/Test/Scenarios/RepoScenario.daml
 ```
-*Implemented in [RepoScenario.daml](file:///Users/pankaj/Desktop/DAML%20Projects/aryafi-core/daml/src/AryaFi/Test/Scenarios/RepoScenario.daml).*
+*Implemented in [RepoScenario.daml](../../daml/src/AryaFi/Test/Scenarios/RepoScenario.daml).*

@@ -160,7 +160,7 @@ ReportId,AsOfDate,AccountId,AssetId,OnLedgerAmount,OffLedgerAmount,Delta,Encumbe
 RECON-20260918,2026-09-18,ACC-HQ-CONCENTRATION-01,USD,25000000.0000,25000000.0000,0.0000,0.0000,0.0000,MATCHED
 RECON-20260918,2026-09-18,ACC-SUB-US-01,USD,10000000.0000,10000000.0000,0.0000,0.0000,0.0000,MATCHED
 RECON-20260918,2026-09-18,ACC-SUB-EU-01,EUR,20000000.0000,20000000.0000,0.0000,0.0000,0.0000,MATCHED
-RECON-20260918,2026-09-18,ACC-CUSTODY-DTC-01,US912828ZM24,5000000.0000,5000000.0000,0.0000,5000000.0000,5000000.0000,MATCHED
+RECON-20260918,2026-09-18,ACC-CUSTODY-DTC-01,US912828ZM50,5000000.0000,5000000.0000,0.0000,5000000.0000,5000000.0000,MATCHED
 ```
 
 ---
@@ -171,4 +171,4 @@ At the close of each reconciliation cycle, the reconciliation engine computes a 
 
 $$\text{AuditDigest} = \text{SHA256}(\text{ACS\_Snapshot} \parallel \text{GL\_Snapshot} \parallel T_{\text{cutoff}})$$
 
-This digest is committed to the regulatory reporting stream via `RegulatoryReporting` contracts, providing banking regulators (Federal Reserve, OCC, BaFin) with mathematical proof of balance sheet integrity without revealing individual client commercial transactions.
+This digest is committed to the regulatory reporting stream via `RegulatoryReporting` contracts, giving supervisors (e.g. Federal Reserve, OCC, BaFin) a digest they can recompute from the retained snapshots to confirm the reconciliation inputs were not altered afterwards. The digest proves the inputs are unchanged, not that the balances are correct; that still depends on the reconciliation itself.

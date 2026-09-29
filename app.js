@@ -14,7 +14,6 @@ document.addEventListener('DOMContentLoaded', () => {
   initCollateralCalculator();
   initIsoConverter();
   initDamlViewer();
-  initTelemetryCounters();
   initCopyButtons();
   initKeyboardShortcuts();
 });
@@ -189,56 +188,59 @@ function initKeyboardShortcuts() {
 // 3. Canton Network Topology Explorer
 // ============================================================================
 
+// Mirrors deploy/canton/canton.conf and deploy/docker/bootstrap.sh: one
+// organization per participant node. Party namespaces are generated when the
+// topology is bootstrapped, so none are shown here.
 const PARTICIPANT_NODES = {
   bank: {
     id: "bank_node",
-    name: "Federal Reserve Bank (Cash Custodian)",
-    role: "Central Cash Authority & Settlement Agent",
+    name: "Cash Settlement Bank",
+    role: "Tokenized Deposit Issuer (CashPosition bank)",
     port: "10012",
-    hostedParties: ["FederalReserveBank", "USDCashAuthority"],
-    fingerprint: "1220a4b7f8c1992e401b972e3650aa1b01c38e",
-    activeContracts: 48,
-    privacyBoundary: "Maintains full read visibility over tokenized USD CashPosition contracts and inter-bank clearing legs. Blind to corporate equity and fund commitments."
+    hostedParties: ["CashSettlementBank"],
+    fingerprint: "Assigned at bootstrap",
+    stores: "CashPosition contracts it issued; PaymentInstructions where it is settlement agent",
+    privacyBoundary: "Stores only contracts where the bank is a stakeholder: the cash positions it issued. It does not see securities positions, loans, or repo agreements it is not party to."
   },
   custodian: {
     id: "custodian_node",
-    name: "Global Custodian (Safekeeping / CSD)",
-    role: "Securities Intermediary & Asset Safekeeping",
+    name: "Global Custodian / Settlement Agent",
+    role: "Securities Safekeeping & DvP Settlement Agent",
     port: "10022",
-    hostedParties: ["GlobalCustodian", "DTCDepository"],
-    fingerprint: "12207b39a12c8491ef2300b9831a29f847d01e",
-    activeContracts: 36,
-    privacyBoundary: "Custody safekeeping visibility over US Treasury security positions (CUSIP/ISIN) and AssetPledge encumbrances. Blind to non-pledged fiat deposit pools."
+    hostedParties: ["GlobalCustodian"],
+    fingerprint: "Assigned at bootstrap",
+    stores: "SecurityPositions in custody; DvpInstructions and positions locked to it for settlement",
+    privacyBoundary: "Sees security positions it safekeeps, plus cash positions only while they are locked to it as DvP lock holder. Visibility ends when the lock is released or settled."
   },
   dealerA: {
     id: "dealer_a_node",
-    name: "Primary Dealer A (Goldman Sachs)",
-    role: "Liquidity Provider & US Treasury Primary Dealer",
+    name: "Dealer Bank A",
+    role: "Seller of US Treasuries",
     port: "10032",
-    hostedParties: ["DealerBankA", "GS_TreasuryDesk"],
-    fingerprint: "122088f1c30291e0aa4719bb2345d901a83b4c",
-    activeContracts: 29,
-    privacyBoundary: "Observes only bilateral trades, loans, and repo positions where Dealer A is a signatory or buyer/seller. Zero visibility into Dealer B's balance sheet."
+    hostedParties: ["DealerBankA"],
+    fingerprint: "Assigned at bootstrap",
+    stores: "Its own positions and the bilateral agreements it signed",
+    privacyBoundary: "Sees only contracts where Dealer A is signatory or observer. It never sees Dealer B's cash position or the Treasury after delivery to Dealer B."
   },
   dealerB: {
     id: "dealer_b_node",
-    name: "Primary Dealer B (Morgan Stanley)",
-    role: "Institutional Counterparty & Borrower",
+    name: "Dealer Bank B",
+    role: "Buyer of US Treasuries",
     port: "10042",
-    hostedParties: ["DealerBankB", "MS_PrimeBrokerage"],
-    fingerprint: "12209d81e3a24b01aa5820cc9412f810b27e99",
-    activeContracts: 24,
-    privacyBoundary: "Strict cryptographic isolation: Dealer B cannot observe Dealer A's funding rates, cash positions, or internal sweeps. Only bilateral DvP trades are visible."
+    hostedParties: ["DealerBankB"],
+    fingerprint: "Assigned at bootstrap",
+    stores: "Its own positions and the bilateral agreements it signed",
+    privacyBoundary: "Sees only contracts where Dealer B is signatory or observer. It never sees Dealer A's security position or the cash after payment to Dealer A."
   },
   regulator: {
     id: "regulator_node",
-    name: "SEC & Supervisory Authority",
-    role: "Regulatory Audit & CAT Observer",
+    name: "Supervisory Authority",
+    role: "Regulatory Observer",
     port: "10052",
-    hostedParties: ["SECRegulator", "FINRA_Auditor"],
-    fingerprint: "12203e87b21a8849aa019283fbc0192847a901",
-    activeContracts: 142,
-    privacyBoundary: "Receives automated certified transaction audit events (SEC CAT / TRACE) and compliance attestations. Blind to unshared proprietary trading book strategies."
+    hostedParties: ["SupervisoryAuthority"],
+    fingerprint: "Assigned at bootstrap",
+    stores: "Only contracts it was explicitly added to as an observer, e.g. RegulatoryReportRecords",
+    privacyBoundary: "Has no default visibility. Sees a contract only when the counterparties add it as observer, which on bilateral agreements requires both counterparties' consent."
   }
 };
 
@@ -266,7 +268,7 @@ function updateNodeDetailsCard(data) {
   document.getElementById('node-detail-port').textContent = `localhost:${data.port} (gRPC / JSON)`;
   document.getElementById('node-detail-parties').textContent = data.hostedParties.join(', ');
   document.getElementById('node-detail-fp').textContent = data.fingerprint;
-  document.getElementById('node-detail-contracts').textContent = `${data.activeContracts} Active Contracts`;
+  document.getElementById('node-detail-contracts').textContent = data.stores;
   document.getElementById('node-detail-privacy').textContent = data.privacyBoundary;
 }
 
@@ -281,28 +283,28 @@ const SCENARIOS = {
     steps: [
       {
         title: "Compliance Onboarding & Pre-Gating",
-        desc: "Dealer A & Dealer B pass automated KYC Attestation and OFAC Sanctions screening. Eligibility policy gates trade.",
-        log: "2026-09-24T10:00:01Z [COMPLIANCE] KYCAttestation verified for DealerBankA & DealerBankB (Status: Verified, Expiry: 2027-09-01). SanctionsCheck clean."
+        desc: "The KYC authority and sanctions screener attest Dealer A and Dealer B; each attesting authority checks validity at ledger time. The eligibility policy approves the asset.",
+        log: "2026-09-24T10:00:01Z [COMPLIANCE] KycAttestation IsKycValid = True for DealerBankA & DealerBankB (expiry 2027-09-01). SanctionsAttestation IsSanctionsClear = True. EligibilityPolicy -> Approved."
       },
       {
         title: "Dual Position Lockup & Escrow Staging",
-        desc: "Seller locks 5M US Treasury 4.25% 2034; Buyer locks $5,000,000 USD tokenized cash with Global Custodian & Federal Reserve Bank.",
-        log: "2026-09-24T10:00:03Z [LEDGER] Exercise LockSecurity on SecurityPosition(US912828ZM24, Qty: 5,000,000). Exercise LockCash on CashPosition(USD, Amt: 5,000,000.00)."
+        desc: "Seller locks the 5M face US Treasury; buyer splits out exactly $4,975,000 and locks it. Both locks are held by the settlement agent, so neither leg can be withdrawn.",
+        log: "2026-09-24T10:00:03Z [LEDGER] LockSecurity(US912828ZM50, Qty 5,000,000, holder: SettlementAgent). SplitCash 5,000,000 -> 4,975,000 + 25,000. LockCash(USD 4,975,000.00, holder: SettlementAgent)."
       },
       {
         title: "DvpInstruction Tri-Party Co-Signature",
-        desc: "Seller, Buyer, and Settlement Agent co-sign atomic DvpInstruction with unique CorrelationId and settlement deadline.",
-        log: "2026-09-24T10:00:05Z [CANTON] submitMulti [DealerBankA, DealerBankB, DTCCSettlementAgent] -> Created DvpInstruction(#001:2, Status: PendingDvp)."
+        desc: "Seller, buyer, and settlement agent co-sign the DvpInstruction naming the ISIN, quantity, consideration, accounts, and lock references.",
+        log: "2026-09-24T10:00:05Z [LEDGER] Created DvpInstruction(TRD-US-TREAS-4P25-NOV26-001, Model 1, Status: PendingSettlement) signed by DealerBankA, DealerBankB, SettlementAgent."
       },
       {
         title: "Atomic DvP Execution & Ownership Transfer",
-        desc: "Settlement Agent triggers ExecuteDvp: Security transfers to Buyer, Cash transfers to Seller atomically in a single Canton transaction commit.",
-        log: "2026-09-24T10:00:07Z [SETTLEMENT] ExecuteDvp committed! SecurityPosition transferred to DealerBankB; CashPosition transferred to DealerBankA. Zero delivery risk."
+        desc: "ExecuteDvpSettlement validates both locked legs against the instruction, then delivers the Treasury to the buyer and the cash to the seller in one transaction. Any mismatch aborts both legs.",
+        log: "2026-09-24T10:00:07Z [SETTLEMENT] ExecuteDvpSettlement: legs validated (owner, account, ISIN, qty, amount, lock holder, lock ref). SettleLockedSecurity -> DealerBankB; SettleLockedCash -> DealerBankA. Committed atomically."
       },
       {
-        title: "SEC CAT Regulatory Report Emission",
-        desc: "Regulatory reporting engine generates CAT trade audit report; SECRegulator node acknowledges transaction.",
-        log: "2026-09-24T10:00:09Z [REGULATOR] SEC CAT Trade Report submitted to SECRegulator node. Acknowledged: CAT-ACK-2026-US912828ZM24-001. Lifecycle Closed."
+        title: "Regulatory Report Submission",
+        desc: "The seller records a RegulatoryReportRecord under the SEC CAT regime; the regulator, an observer on that record only, acknowledges it.",
+        log: "2026-09-24T10:00:09Z [REGULATOR] RegulatoryReportRecord(SEC_CAT) created by DealerBankA. AcknowledgeReport by SupervisoryAuthority. isAcknowledged = True."
       }
     ]
   },
@@ -317,8 +319,8 @@ const SCENARIOS = {
       },
       {
         title: "Periodic Borrow Fee Accrual (Act360)",
-        desc: "Lender accrues lending fees for 30 elapsed days ($5,000,000 × 0.75% × 30/360 = $3,125.00).",
-        log: "2026-09-24T10:00:03Z [FINANCE] Exercise AccrueLendingFee. Accrued Fee: $3,125.00 USD. Borrower executes PayLendingFee via CashPosition transfer."
+        desc: "Lender and borrower jointly agree the 30-day fee ($5,000,000 × 0.75% × 30/360 = $3,125.00); the lender confirms receipt of payment.",
+        log: "2026-09-24T10:00:03Z [FINANCE] AccrueLendingFee (lender + borrower): $3,125.00 USD. PayLendingFee confirmed by lender. Accrued fee balance: $0.00."
       },
       {
         title: "Mark-to-Market Collateral Revaluation",
@@ -327,13 +329,13 @@ const SCENARIOS = {
       },
       {
         title: "Recall Issuance & Pro-Rata Return",
-        desc: "Lender issues formal recall for 2.5M securities; Borrower returns securities and Custodian releases $2.575M cash collateral.",
-        log: "2026-09-24T10:00:07Z [RECALL] Exercise RecallSecurities (Qty: 2,500,000). ReturnSecurities executed -> Collateral released pro-rata."
+        desc: "Lender recalls 2.5M securities; the borrower returns them and releases at most the pro-rata share of collateral ($2.5755M of $5.151M).",
+        log: "2026-09-24T10:00:07Z [RECALL] RecallSecurities (Qty 2,500,000). ReturnSecurities 2,500,000 with collateral release 2,575,500 (pro-rata cap enforced). Recall satisfied."
       },
       {
         title: "Final Return & Agreement Closeout",
         desc: "Borrower returns remaining balance; SecuritiesLendingAgreement transitions to LendingClosed; full lien discharged.",
-        log: "2026-09-24T10:00:09Z [CLOSEOUT] Final securities returned. Status transitioned to LendingClosed. AssetPledge permanently archived."
+        log: "2026-09-24T10:00:09Z [CLOSEOUT] Final securities returned (borrowed quantity 0). Status transitioned to LendingClosed. AssetPledge released (status Closed)."
       }
     ]
   },
@@ -343,8 +345,8 @@ const SCENARIOS = {
     steps: [
       {
         title: "Multi-Entity Cash Account Setup",
-        desc: "Operating accounts created at Global Bank for US Subsidiary ($25M USD) and EU Subsidiary (20M EUR). Master Pool initialized.",
-        log: "2026-09-24T10:00:01Z [TREASURY] Created Account ACC-US-OPS ($25M USD), ACC-EU-OPS (20M EUR), and ACC-HQ-CONCENTRATION ($10M USD)."
+        desc: "Global Bank issues cash positions to the US Subsidiary ($25M USD), the EU Subsidiary (20M EUR), and the HQ concentration account ($10M USD).",
+        log: "2026-09-24T10:00:01Z [TREASURY] Created CashPosition ACC-SUB-US-01 ($25M USD), ACC-SUB-EU-01 (20M EUR), ACC-HQ-CONCENTRATION-01 ($10M USD)."
       },
       {
         title: "Surplus Identification via SplitCash",
@@ -353,18 +355,18 @@ const SCENARIOS = {
       },
       {
         title: "Concentration Sweep & Pool Consolidation",
-        desc: "US Subsidiary transfers $15M to Treasury HQ concentration pool; HQ calls MergeCash to create $25M master liquidity pool.",
-        log: "2026-09-24T10:00:05Z [SWEEP] TransferCash to TreasuryHQ completed. MergeCash consolidated pool balance to $25,000,000.00 USD."
+        desc: "US Subsidiary, Global Bank, and Treasury HQ jointly authorize the $15M transfer; HQ merges it into a $25M master liquidity pool.",
+        log: "2026-09-24T10:00:05Z [SWEEP] TransferCash (owner + bank + receiver) to TreasuryHQ. Observers cleared. MergeCash pool balance: $25,000,000.00 USD."
       },
       {
         title: "Intercompany PaymentInstruction & SWIFT UETR Tracing",
-        desc: "Treasury HQ issues $8M funding payment instruction; Settlement Agent attaches SWIFT UETR tracking reference.",
+        desc: "Treasury HQ, the US Subsidiary, and Global Bank co-sign an $8M payment instruction; HQ locks $8M to Global Bank for the payment.",
         log: "2026-09-24T10:00:07Z [PAYMENT] PaymentInstruction created with IdempotencyKey IDEMP-2026-09-24-01. Attached UETR: e1a49f82-3d92-4f10-bf91-b3b281f9a12c."
       },
       {
         title: "Payment Clearing & Atomic Settlement",
-        desc: "Global Bank confirms clearing; funds are transferred atomically to beneficiary subsidiary with sub-transaction privacy.",
-        log: "2026-09-24T10:00:09Z [SETTLED] PaymentInstruction transitioned to Settled. EU Subsidiary and third-party competitors observe zero transaction details."
+        desc: "Global Bank, as lock holder, delivers the locked $8M to the US Subsidiary and confirms the payment instruction as settled.",
+        log: "2026-09-24T10:00:09Z [SETTLED] SettleLockedCash -> USSubsidiary ($8,000,000.00). ConfirmPaymentSettlement: Settled. EU Subsidiary sees none of these contracts."
       }
     ]
   }
@@ -478,9 +480,8 @@ function executeNextScenarioStep() {
   }
 
   const step = scenario.steps[currentStepIndex];
-  const latency = Math.floor(Math.random() * 8) + 38;
-  const latencyEl = document.getElementById('metric-latency');
-  if (latencyEl) latencyEl.textContent = `${latency} ms (BFT Commit)`;
+  const progressEl = document.getElementById('metric-latency');
+  if (progressEl) progressEl.textContent = `Step ${currentStepIndex + 1} of ${scenario.steps.length}`;
 
   appendTerminalLine(`Executing Phase ${currentStepIndex + 1}: ${step.title}...`, "cyan");
   appendTerminalLine(step.log, "green");
@@ -516,15 +517,15 @@ function exportScenarioAuditCsv() {
   const scenario = SCENARIOS[currentScenarioKey];
   if (!scenario) return;
 
-  let csv = 'Timestamp,Scenario,PhaseIndex,PhaseTitle,CantonLog,ValidationStatus\n';
+  let csv = 'ExportedAt,Scenario,PhaseIndex,PhaseTitle,SimulatedLedgerLog,SimulationStatus\n';
   scenario.steps.forEach((step, idx) => {
     const executed = idx < currentStepIndex;
     const logClean = step.log.replace(/"/g, '""');
-    csv += `"${new Date().toISOString()}","${scenario.title}","${idx + 1}","${step.title}","${logClean}","${executed ? 'EXECUTED_AND_PROVEN' : 'PENDING'}"\n`;
+    csv += `"${new Date().toISOString()}","${scenario.title}","${idx + 1}","${step.title}","${logClean}","${executed ? 'SIMULATED' : 'PENDING'}"\n`;
   });
 
   downloadFile(`aryafi_audit_${currentScenarioKey}_${Date.now()}.csv`, 'text/csv', csv);
-  appendTerminalLine(`Exported regulatory audit report: aryafi_audit_${currentScenarioKey}.csv`, "yellow");
+  appendTerminalLine(`Exported simulation log: aryafi_audit_${currentScenarioKey}.csv`, "yellow");
 }
 
 function exportScenarioAuditJson() {
@@ -533,29 +534,23 @@ function exportScenarioAuditJson() {
 
   const data = {
     exportDate: new Date().toISOString(),
-    network: "Canton Protocol v30",
-    domainId: "aryafi_domain::1220a4b7f8c1992e",
+    disclaimer: "Scripted simulation. Log lines describe the Daml choices the AryaFi library executes in its test scenarios; no ledger was contacted and nothing here is an audit record.",
+    platform: "Daml SDK 2.10.0 / Canton 2.10 (protocol version 5)",
     scenarioKey: currentScenarioKey,
     scenarioTitle: scenario.title,
     currentStepIndex: currentStepIndex,
     totalSteps: scenario.steps.length,
-    consensusEngine: "Canton BFT Sequencer",
-    invariants: {
-      lemma1_value_conservation: "PROVEN (Δ = 0.00)",
-      capitalAdequacyRule15c3_3: "COMPLIANT",
-      zeroLeakageACS: "VERIFIED"
-    },
     phases: scenario.steps.map((s, idx) => ({
       phaseNumber: idx + 1,
       title: s.title,
       description: s.desc,
       ledgerLog: s.log,
-      status: idx < currentStepIndex ? "EXECUTED" : "PENDING"
+      status: idx < currentStepIndex ? "SIMULATED" : "PENDING"
     }))
   };
 
   downloadFile(`aryafi_audit_${currentScenarioKey}_${Date.now()}.json`, 'application/json', JSON.stringify(data, null, 2));
-  appendTerminalLine(`Exported machine-readable ledger audit JSON: aryafi_audit_${currentScenarioKey}.json`, "yellow");
+  appendTerminalLine(`Exported simulation log (JSON): aryafi_audit_${currentScenarioKey}.json`, "yellow");
 }
 
 function downloadFile(filename, mimeType, content) {
@@ -585,15 +580,36 @@ function clearTerminal() {
   const terminal = document.getElementById('scenario-terminal-output');
   if (terminal) {
     terminal.innerHTML = `
-      <div class="terminal-line gray">> Canton Ledger API connected to aryafi_domain...</div>
+      <div class="terminal-line gray">> Scripted simulation of the library's Daml test scenarios (no ledger connection).</div>
       <div class="terminal-line green">> Ready. Select a scenario and click 'Next Phase' or 'Auto-Run' to begin execution.</div>
     `;
   }
 }
 
 // ============================================================================
-// 5. Mathematical Invariant Calculator (Cash Split & Merge)
+// 5. SplitCash Conservation Illustration (exact Daml Decimal arithmetic)
 // ============================================================================
+// Daml's Decimal is a fixed-point number with 10 decimal places, so a split is
+// exact. This mirrors that with BigInt arithmetic scaled by 10^10 (JavaScript
+// floats would not be exact). It illustrates the rule SplitCash enforces on
+// ledger; it does not inspect any ledger state.
+
+const DECIMAL_SCALE = 10;
+const DECIMAL_FACTOR = 10n ** BigInt(DECIMAL_SCALE);
+
+function parseDamlDecimal(text) {
+  const m = /^\s*(\d+)(?:\.(\d*))?\s*$/.exec(text || '');
+  if (!m) return null;
+  const frac = m[2] || '';
+  if (frac.length > DECIMAL_SCALE) return null;
+  return BigInt(m[1]) * DECIMAL_FACTOR + BigInt((frac + '0'.repeat(DECIMAL_SCALE)).slice(0, DECIMAL_SCALE));
+}
+
+function formatDamlDecimal(units) {
+  const whole = units / DECIMAL_FACTOR;
+  const cents = (units % DECIMAL_FACTOR) / (DECIMAL_FACTOR / 100n);
+  return `$${whole.toLocaleString('en-US')}.${cents.toString().padStart(2, '0')}`;
+}
 
 function initInvariantCalculator() {
   const totalInput = document.getElementById('calc-total-amount');
@@ -602,28 +618,33 @@ function initInvariantCalculator() {
   const presetBtns = document.querySelectorAll('.calc-preset-btn');
 
   function calculateAndDisplay() {
-    const total = parseFloat(totalInput.value);
-    const split = parseFloat(splitInput.value);
+    const total = parseDamlDecimal(totalInput.value);
+    const split = parseDamlDecimal(splitInput.value);
+    const statusEl = document.getElementById('calc-invariant-status');
 
-    if (isNaN(total) || isNaN(split) || total <= 0 || split <= 0 || split >= total) {
-      alert("Split amount must be strictly positive and strictly less than total position amount.");
+    if (total === null || split === null) {
+      statusEl.textContent = "REJECTED: amounts must be non-negative decimals with at most 10 decimal places";
+      statusEl.className = "calc-stat-val rose";
+      return;
+    }
+    if (split <= 0n || split >= total) {
+      statusEl.textContent = "REJECTED by SplitCash: split must be > 0 and < position amount";
+      statusEl.className = "calc-stat-val rose";
       return;
     }
 
     const remainder = total - split;
     const sum = split + remainder;
 
-    document.getElementById('calc-pos1-val').textContent = `$${split.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    document.getElementById('calc-pos2-val').textContent = `$${remainder.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    document.getElementById('calc-sum-val').textContent = `$${sum.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    
-    const delta = Math.abs(sum - total);
-    const statusEl = document.getElementById('calc-invariant-status');
-    if (delta < 0.0001) {
-      statusEl.textContent = "VERIFIED (Δ = 0.00)";
+    document.getElementById('calc-pos1-val').textContent = formatDamlDecimal(split);
+    document.getElementById('calc-pos2-val').textContent = formatDamlDecimal(remainder);
+    document.getElementById('calc-sum-val').textContent = formatDamlDecimal(sum);
+
+    if (sum === total) {
+      statusEl.textContent = "CONSERVED (exact, Δ = 0)";
       statusEl.className = "calc-stat-val emerald";
     } else {
-      statusEl.textContent = `LEAKAGE DETECTED (Δ = ${delta.toFixed(4)})`;
+      statusEl.textContent = "NOT CONSERVED";
       statusEl.className = "calc-stat-val rose";
     }
   }
@@ -673,7 +694,7 @@ function initCollateralCalculator() {
     if (reqColEl) reqColEl.textContent = `$${requiredCollateral.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     if (effHaircutEl) effHaircutEl.textContent = `$${haircutDeduction.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${(haircut * 100).toFixed(1)}%)`;
     if (thresholdEl) thresholdEl.textContent = `$${marginCallThreshold.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    if (lcrStatusEl) lcrStatusEl.textContent = `${hqla} (Compliant)`;
+    if (lcrStatusEl) lcrStatusEl.textContent = hqla;
   }
 
   if (calcBtn) calcBtn.addEventListener('click', updateMarginMatrix);
@@ -687,6 +708,11 @@ function initCollateralCalculator() {
 // ============================================================================
 // 6. ISO 20022 Financial Messaging Converter
 // ============================================================================
+// The right-hand pane is a Daml 2.10 HTTP JSON API (v1) request body against
+// the actual AryaFi templates: records for newtype identifiers (AccountId,
+// ISIN, ...), {tag, value} for variants, plain strings for enums. Party
+// fields show "<party-id:Name>" placeholders because Canton party IDs are
+// assigned when parties are allocated.
 
 const ISO_TEMPLATES = {
   pacs008: {
@@ -706,37 +732,32 @@ const ISO_TEMPLATES = {
         <UETR>e1a49f82-3d92-4f10-bf91-b3b281f9a12c</UETR>
       </PmtId>
       <IntrBkSttlmAmt Ccy="USD">12500000.00</IntrBkSttlmAmt>
-      <Dbtr><Nm>Goldman Sachs Primary Dealer</Nm></Dbtr>
-      <DbtrAcct><Id><Othr><Id>ACC-GS-USD-001</Id></Othr></Id></DbtrAcct>
-      <Cdtr><Nm>BNY Mellon Global Custody</Nm></Cdtr>
-      <CdtrAcct><Id><Othr><Id>ACC-BNY-CUSTODY-USD-001</Id></Othr></Id></CdtrAcct>
+      <Dbtr><Nm>Dealer Bank A</Nm><Id><OrgId><LEI>529900DEALERBANKA078</LEI></OrgId></Id></Dbtr>
+      <DbtrAcct><Id><Othr><Id>ACC-DLRA-USD-001</Id></Othr></Id></DbtrAcct>
+      <Cdtr><Nm>Global Custodian</Nm><Id><OrgId><LEI>529900GLOBALCUST0063</LEI></OrgId></Id></Cdtr>
+      <CdtrAcct><Id><Othr><Id>ACC-CUST-USD-001</Id></Othr></Id></CdtrAcct>
       <Purp><Cd>REPO</Cd></Purp>
     </CdtTrfTxInf>
   </FIToFICstmrCdtTrf>
 </Document>`,
     daml: `{
-  "commands": [
-    {
-      "create": {
-        "templateId": "AryaFi.Finance.Payment:PaymentInstruction",
-        "arguments": {
-          "payer": "GoldmanSachs_Participant",
-          "payee": "BnyMellon_Participant",
-          "settlementAgent": "DTCC_Participant",
-          "payerAccountId": "ACC-GS-USD-001",
-          "payeeAccountId": "ACC-BNY-CUSTODY-USD-001",
-          "currency": "USD",
-          "amount": "12500000.00",
-          "purpose": { "RepoOpeningLeg": {} },
-          "obligationRef": "REPO-REF-2026-GS-BNY-001",
-          "correlationId": "CORR-REPO-2026-8831",
-          "idempotencyKey": "IDEMP-2026-09-24-0042",
-          "networkRef": "SWIFT-UETR-e1a49f82-3d92-4f10-bf91-b3b281f9a12c",
-          "status": { "PendingSettlement": {} }
-        }
-      }
-    }
-  ]
+  "templateId": "AryaFi.Finance.Payment:PaymentInstruction",
+  "payload": {
+    "payer": "<party-id:DealerBankA>",
+    "payee": "<party-id:GlobalCustodian>",
+    "settlementAgent": "<party-id:CashSettlementBank>",
+    "payerAccountId": { "unAccountId": "ACC-DLRA-USD-001" },
+    "payeeAccountId": { "unAccountId": "ACC-CUST-USD-001" },
+    "currency": "USD",
+    "amount": "12500000.00",
+    "purpose": { "tag": "RepoOpeningLeg", "value": {} },
+    "obligationRef": "REPO-REF-2026-001",
+    "correlationId": { "unCorrelationId": "CORR-REPO-2026-8831" },
+    "idempotencyKey": { "unIdempotencyKey": "IDEMP-2026-09-24-0042" },
+    "networkRef": { "unPaymentNetworkRef": "e1a49f82-3d92-4f10-bf91-b3b281f9a12c" },
+    "status": { "tag": "PendingSettlement", "value": {} },
+    "observers": []
+  }
 }`
   },
   sese023: {
@@ -746,35 +767,41 @@ const ISO_TEMPLATES = {
   <SctiesSttlmTxInstr>
     <TxDtls>
       <SttlmTxId>DVP-2026-TREAS-001</SttlmTxId>
-      <FinInstrmId><ISIN>US912828ZM24</ISIN></FinInstrmId>
+      <FinInstrmId><ISIN>US912828ZM50</ISIN></FinInstrmId>
       <SttlmQty><Qty><Unit>5000000.00</Unit></Qty></SttlmQty>
-      <SttlmAmt Ccy="USD">5000000.00</SttlmAmt>
+      <SttlmAmt Ccy="USD">4975000.00</SttlmAmt>
       <SttlmPties>
-        <DlvgPty><FinInstnId><LEI>5493006MHB84DD0ZWV18</LEI></FinInstnId></DlvgPty>
-        <RcvgPty><FinInstnId><LEI>W22LROWP2IHZNBB6K528</LEI></FinInstnId></RcvgPty>
+        <DlvgPty><FinInstnId><LEI>529900DEALERBANKA078</LEI></FinInstnId></DlvgPty>
+        <RcvgPty><FinInstnId><LEI>529900DEALERBANKB048</LEI></FinInstnId></RcvgPty>
       </SttlmPties>
     </TxDtls>
   </SctiesSttlmTxInstr>
 </Document>`,
     daml: `{
-  "commands": [
-    {
-      "create": {
-        "templateId": "AryaFi.Finance.Settlement:DvpInstruction",
-        "arguments": {
-          "dvpId": "DVP-2026-TREAS-001",
-          "seller": "DealerBankA",
-          "buyer": "DealerBankB",
-          "settlementAgent": "DTCCSettlementAgent",
-          "isin": "US912828ZM24",
-          "securityQuantity": "5000000.00",
-          "cashAmount": "5000000.00",
-          "currency": "USD",
-          "status": { "PendingDvp": {} }
-        }
-      }
-    }
-  ]
+  "templateId": "AryaFi.Finance.Settlement:DvpInstruction",
+  "payload": {
+    "settlementAgent": "<party-id:GlobalCustodian>",
+    "seller": "<party-id:DealerBankA>",
+    "buyer": "<party-id:DealerBankB>",
+    "tradeId": { "unTradeId": "DVP-2026-TREAS-001" },
+    "isin": { "unISIN": "US912828ZM50" },
+    "securityQuantity": "5000000.00",
+    "sellerSecurityAccount": { "unAccountId": "ACC-DLRA-SEC-001" },
+    "buyerSecurityAccount": { "unAccountId": "ACC-DLRB-SEC-001" },
+    "currency": "USD",
+    "cashAmount": "4975000.00",
+    "sellerCashAccount": { "unAccountId": "ACC-DLRA-USD-001" },
+    "buyerCashAccount": { "unAccountId": "ACC-DLRB-USD-001" },
+    "dvpModel": "DvpModel1",
+    "settlementDate": "2026-09-26T00:00:00Z",
+    "correlationId": { "unCorrelationId": "CORR-DVP-2026-TREAS-001" },
+    "idempotencyKey": { "unIdempotencyKey": "IDEMP-DVP-2026-TREAS-001" },
+    "sellerSecurityLockRef": "DVP-2026-TREAS-001",
+    "buyerCashLockRef": "DVP-2026-TREAS-001",
+    "status": { "tag": "PendingSettlement", "value": {} },
+    "failureReason": null,
+    "observers": []
+  }
 }`
   },
   camt053: {
@@ -784,8 +811,8 @@ const ISO_TEMPLATES = {
   <BkToCstmrStmt>
     <GrpHdr><MsgId>STMT-2026-09-24-001</MsgId><CreDtTm>2026-09-24T18:00:00Z</CreDtTm></GrpHdr>
     <Stmt>
-      <Id>STMT-EOD-FED-01</Id>
-      <Acct><Id><Othr><Id>ACC-US-OPS-001</Id></Othr></Id><Ccy>USD</Ccy></Acct>
+      <Id>STMT-EOD-BANK-01</Id>
+      <Acct><Id><Othr><Id>ACC-SUB-US-01</Id></Othr></Id><Ccy>USD</Ccy></Acct>
       <Bal>
         <Tp><CdOrPrtry><Cd>CLBD</Cd></CdOrPrtry></Tp>
         <Amt Ccy="USD">25000000.00</Amt>
@@ -796,13 +823,10 @@ const ISO_TEMPLATES = {
   </BkToCstmrStmt>
 </Document>`,
     daml: `{
+  "templateIds": ["AryaFi.Finance.Cash:CashPosition"],
   "query": {
-    "templateId": "AryaFi.Finance.Cash:CashPosition",
-    "predicate": {
-      "accountId": "ACC-US-OPS-001",
-      "currency": "USD",
-      "expectedClosingBalance": "25000000.00"
-    }
+    "accountId": { "unAccountId": "ACC-SUB-US-01" },
+    "currency": "USD"
   }
 }`
   },
@@ -813,7 +837,7 @@ const ISO_TEMPLATES = {
   <SctiesBalAcctgRpt>
     <StmtGnlDtls><StmtId>CUST-EOD-2026-09-24</StmtId></StmtGnlDtls>
     <FinInstrmDtls>
-      <Id><ISIN>US912828ZM24</ISIN></Id>
+      <Id><ISIN>US912828ZM50</ISIN></Id>
       <AggrtBal>
         <Qty><Unit>10000000.00</Unit></Qty>
         <HldgSts><Cd>AVLB</Cd></HldgSts>
@@ -822,45 +846,106 @@ const ISO_TEMPLATES = {
   </SctiesBalAcctgRpt>
 </Document>`,
     daml: `{
+  "templateIds": ["AryaFi.Finance.Security:SecurityPosition"],
   "query": {
-    "templateId": "AryaFi.Finance.Security:SecurityPosition",
-    "predicate": {
-      "isin": "US912828ZM24",
-      "isLocked": false,
-      "expectedSafekeepingUnits": "10000000.00"
-    }
+    "isin": { "unISIN": "US912828ZM50" },
+    "isLocked": false
   }
 }`
   }
 };
 
+// How each ISO element maps to the Daml payload. The "rule" column states the
+// reconciliation or ledger rule that applies; it is documentation, not a check.
 const ISO_MAPPINGS = {
   pacs008: [
-    { xml: "MsgId", path: "GrpHdr / MsgId", json: "idempotencyKey", spec: "Text (Unique Idempotency Digest)", rule: "Strict 1-time execution proof" },
-    { xml: "EndToEndId", path: "PmtId / EndToEndId", json: "correlationId", spec: "CorrelationId (Contract Linkage)", rule: "Full audit trail reconciliation" },
-    { xml: "IntrBkSttlmAmt", path: "CdtTrfTxInf / IntrBkSttlmAmt", json: "amount & currency", spec: "Decimal & Currency ('USD')", rule: "Positive non-zero check" },
-    { xml: "DbtrAcct", path: "CdtTrfTxInf / DbtrAcct / Id", json: "payerAccountId", spec: "AccountId ('ACC-GS-USD-001')", rule: "Signatory signature authorization" },
-    { xml: "CdtrAcct", path: "CdtTrfTxInf / CdtrAcct / Id", json: "payeeAccountId", spec: "AccountId ('ACC-BNY-CUSTODY-USD-001')", rule: "Sub-transaction privacy enforced" }
+    { xml: "MsgId", path: "GrpHdr / MsgId", json: "idempotencyKey", spec: "IdempotencyKey", rule: "Also used as the Ledger API command ID for deduplication" },
+    { xml: "EndToEndId", path: "PmtId / EndToEndId", json: "correlationId", spec: "CorrelationId", rule: "Links payment, obligation, and settlement records" },
+    { xml: "UETR", path: "PmtId / UETR", json: "networkRef", spec: "PaymentNetworkRef", rule: "Attached by settlement agent (AttachNetworkRef)" },
+    { xml: "IntrBkSttlmAmt", path: "CdtTrfTxInf / IntrBkSttlmAmt", json: "amount & currency", spec: "Decimal & ISO 4217 code", rule: "Template ensure: amount > 0" },
+    { xml: "DbtrAcct", path: "CdtTrfTxInf / DbtrAcct / Id", json: "payerAccountId", spec: "AccountId", rule: "Payer is a signatory of the instruction" },
+    { xml: "CdtrAcct", path: "CdtTrfTxInf / CdtrAcct / Id", json: "payeeAccountId", spec: "AccountId", rule: "Payee is a signatory of the instruction" }
   ],
   sese023: [
-    { xml: "SttlmTxId", path: "TxDtls / SttlmTxId", json: "settlementId", spec: "Text ('DVP-2026-TREAS-001')", rule: "Unique trade matching handle" },
-    { xml: "ISIN", path: "FinInstrmId / ISIN", json: "isin", spec: "ISIN ('US912828ZM24')", rule: "ISO 6166 checksum validated" },
-    { xml: "SttlmQty", path: "TxDtls / SttlmQty / Unit", json: "quantity", spec: "Amount (5,000,000.00 par)", rule: "Physical/tokenized equivalence" },
-    { xml: "SttlmAmt", path: "TxDtls / SttlmAmt", json: "cashAmount", spec: "Amount ($5,000,000.00 USD)", rule: "Gross settlement matching" },
-    { xml: "DlvgPty / RcvgPty", path: "SttlmPties / LEI", json: "seller & buyer", spec: "Party co-signatories", rule: "BIS Model 1 simultaneous finality" }
+    { xml: "SttlmTxId", path: "TxDtls / SttlmTxId", json: "tradeId, lock refs", spec: "TradeId / Text", rule: "Both legs must be locked under this reference" },
+    { xml: "ISIN", path: "FinInstrmId / ISIN", json: "isin", spec: "ISIN", rule: "Must equal the locked SecurityPosition's ISIN" },
+    { xml: "SttlmQty", path: "TxDtls / SttlmQty / Unit", json: "securityQuantity", spec: "Decimal", rule: "Must equal the locked position's quantity exactly" },
+    { xml: "SttlmAmt", path: "TxDtls / SttlmAmt", json: "cashAmount & currency", spec: "Decimal & ISO 4217 code", rule: "Must equal the locked CashPosition exactly" },
+    { xml: "DlvgPty / RcvgPty", path: "SttlmPties / LEI", json: "seller & buyer", spec: "Party (via LEI directory)", rule: "Both sign the instruction; legs settle in one transaction" }
   ],
   camt053: [
-    { xml: "MsgId", path: "GrpHdr / MsgId", json: "statementId", spec: "Text ('STMT-2026-09-24-001')", rule: "Statement chronological sequence" },
-    { xml: "Acct / Id", path: "Stmt / Acct / Id", json: "accountId", spec: "AccountId ('ACC-HQ-CONCENTRATION')", rule: "Account must exist on ACS" },
-    { xml: "Bal / Amt", path: "Stmt / Bal / Amt", json: "reconciledBalance", spec: "Amount ($10,000,000.00 USD)", rule: "Lemma 1 value invariant: Δ = 0.00" },
-    { xml: "CdtDbtInd", path: "Stmt / Bal / CdtDbtInd", json: "creditDebitIndicator", spec: "CRDT / DBIT", rule: "Zero balance sweep proof" }
+    { xml: "Acct / Id", path: "Stmt / Acct / Id", json: "query.accountId", spec: "AccountId", rule: "Select the bank's CashPositions for the account" },
+    { xml: "Acct / Ccy", path: "Stmt / Acct / Ccy", json: "query.currency", spec: "ISO 4217 code", rule: "Filter by currency" },
+    { xml: "Bal / Amt", path: "Stmt / Bal / Amt", json: "sum of amount", spec: "Decimal", rule: "Closing balance must equal the sum of matching positions" }
   ],
   semt002: [
-    { xml: "StmtId", path: "StmtGnlDtls / StmtId", json: "auditRef", spec: "Text ('CUSTODY-HOLDING-AUDIT-2026-09')", rule: "Regulator audit trail reference" },
-    { xml: "ISIN", path: "FinInstrmId / ISIN", json: "isin", spec: "ISIN ('US912828ZM24')", rule: "CSD safekeeping registry match" },
-    { xml: "AggtQty", path: "Bal / AggtQty", json: "expectedSafekeepingUnits", spec: "Amount (10,000,000.00 units)", rule: "100% reserve segregation" }
+    { xml: "ISIN", path: "FinInstrmDtls / Id / ISIN", json: "query.isin", spec: "ISIN", rule: "Select custody positions in the instrument" },
+    { xml: "HldgSts = AVLB", path: "AggrtBal / HldgSts", json: "query.isLocked = false", spec: "Bool", rule: "Available holdings exclude locked positions" },
+    { xml: "AggrtBal / Qty", path: "AggrtBal / Qty / Unit", json: "sum of quantity", spec: "Decimal", rule: "Aggregate balance must equal the sum of matching positions" }
   ]
 };
+
+// --- Real validation of the displayed payloads -------------------------------
+
+function isValidIsin(isin) {
+  if (!/^[A-Z]{2}[A-Z0-9]{9}[0-9]$/.test(isin)) return false;
+  const digits = isin.slice(0, 11).split('').map(c => parseInt(c, 36).toString()).join('');
+  let sum = 0;
+  for (let i = 0; i < digits.length; i++) {
+    let n = Number(digits[digits.length - 1 - i]);
+    if (i % 2 === 0) { n *= 2; if (n > 9) n -= 9; }
+    sum += n;
+  }
+  return (10 - (sum % 10)) % 10 === Number(isin[11]);
+}
+
+function isValidLei(lei) {
+  if (!/^[A-Z0-9]{18}[0-9]{2}$/.test(lei)) return false;
+  const digits = lei.split('').map(c => parseInt(c, 36).toString()).join('');
+  return BigInt(digits) % 97n === 1n;
+}
+
+function validateIsoPayloads(key, xmlText, jsonText) {
+  const results = [];
+  const check = (name, ok) => results.push({ name, ok });
+
+  const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+  const xmlOk = !doc.getElementsByTagName('parsererror').length;
+  check('XML is well-formed', xmlOk);
+
+  let json = null;
+  try { json = JSON.parse(jsonText); } catch (e) { json = null; }
+  check('JSON API body parses', json !== null);
+
+  if (xmlOk) {
+    const byName = name => Array.from(doc.getElementsByTagNameNS('*', name));
+    (ISO_MAPPINGS[key] || []).forEach(row => {
+      row.xml.split('/').map(p => p.trim().split(' ')[0]).forEach(el => {
+        check(`<${el}> present`, byName(el).length > 0);
+      });
+    });
+    byName('ISIN').forEach(e => check(`ISIN ${e.textContent} check digit (ISO 6166)`, isValidIsin(e.textContent.trim())));
+    byName('LEI').forEach(e => check(`LEI ${e.textContent} checksum (ISO 17442)`, isValidLei(e.textContent.trim())));
+    byName('UETR').forEach(e => check('UETR is a UUID v4', /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(e.textContent.trim())));
+    Array.from(doc.getElementsByTagName('*')).filter(e => e.hasAttribute('Ccy')).forEach(e => {
+      check(`<${e.localName}> has ISO 4217 currency`, /^[A-Z]{3}$/.test(e.getAttribute('Ccy')));
+      check(`<${e.localName}> amount is positive`, Number(e.textContent) > 0);
+    });
+  }
+
+  if (json && json.payload && key === 'sese023' && xmlOk) {
+    const text = n => (doc.getElementsByTagNameNS('*', n)[0] || {}).textContent;
+    check('ISIN matches between XML and JSON', json.payload.isin.unISIN === text('ISIN'));
+    check('Cash amount matches between XML and JSON', Number(json.payload.cashAmount) === Number(text('SttlmAmt')));
+    check('Quantity matches between XML and JSON', Number(json.payload.securityQuantity) === Number(text('Unit')));
+  }
+  if (json && json.payload && key === 'pacs008' && xmlOk) {
+    const text = n => (doc.getElementsByTagNameNS('*', n)[0] || {}).textContent;
+    check('Amount matches between XML and JSON', Number(json.payload.amount) === Number(text('IntrBkSttlmAmt')));
+    check('Idempotency key matches MsgId', json.payload.idempotencyKey.unIdempotencyKey === text('MsgId'));
+  }
+  return results;
+}
 
 function initIsoConverter() {
   const select = document.getElementById('iso-msg-select');
@@ -878,6 +963,13 @@ function initIsoConverter() {
 
   if (!select || !xmlDisplay || !damlDisplay) return;
 
+  function resetBadge() {
+    if (statusBadge) {
+      statusBadge.textContent = "Not yet validated";
+      statusBadge.style.color = "var(--text-secondary)";
+    }
+  }
+
   function render(key) {
     const template = ISO_TEMPLATES[key];
     if (template) {
@@ -889,16 +981,17 @@ function initIsoConverter() {
       tbody.innerHTML = '';
       ISO_MAPPINGS[key].forEach(row => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td><code>&lt;${row.xml}&gt;</code></td>
-          <td style="color: var(--text-secondary);">${row.path}</td>
-          <td><strong>${row.json}</strong></td>
-          <td style="color: var(--text-secondary);">${row.spec}</td>
-          <td style="color: var(--accent-emerald); font-weight: 600;">✓ ${row.rule}</td>
-        `;
+        [`<${row.xml}>`, row.path, row.json, row.spec, row.rule].forEach((val, i) => {
+          const td = document.createElement('td');
+          if (i === 0) { const code = document.createElement('code'); code.textContent = val; td.appendChild(code); }
+          else if (i === 2) { const strong = document.createElement('strong'); strong.textContent = val; td.appendChild(strong); }
+          else { td.textContent = val; td.style.color = 'var(--text-secondary)'; }
+          tr.appendChild(td);
+        });
         tbody.appendChild(tr);
       });
     }
+    resetBadge();
   }
 
   select.addEventListener('change', () => {
@@ -909,31 +1002,31 @@ function initIsoConverter() {
     toggleDirBtn.addEventListener('click', () => {
       isXmlToDaml = !isXmlToDaml;
       if (dirText) {
-        dirText.textContent = isXmlToDaml 
-          ? "SWIFT MX (XML) → Canton Daml JSON" 
-          : "Canton Daml JSON → SWIFT MX (XML)";
+        dirText.textContent = isXmlToDaml
+          ? "SWIFT MX (XML) → Daml JSON API request"
+          : "Daml ledger data → SWIFT MX (XML)";
       }
       if (leftTitle && rightTitle) {
-        leftTitle.textContent = isXmlToDaml 
-          ? "INCOMING ISO 20022 MX (XML PAYLOAD)" 
-          : "OUTGOING ISO 20022 MX (SYNTHESIZED XML)";
-        rightTitle.textContent = isXmlToDaml 
-          ? "CANTON LEDGER API COMMAND (JSON RPC)" 
-          : "ORIGINATING CANTON DAML LEDGER EVENT (JSON)";
+        leftTitle.textContent = isXmlToDaml
+          ? "INCOMING ISO 20022 MX (XML PAYLOAD)"
+          : "OUTGOING ISO 20022 MX (GENERATED XML)";
+        rightTitle.textContent = isXmlToDaml
+          ? "DAML JSON API v1 REQUEST BODY"
+          : "SOURCE DAML LEDGER DATA (JSON API)";
       }
-      if (statusBadge) {
-        statusBadge.textContent = isXmlToDaml 
-          ? "✓ Ingestion Schema Validated" 
-          : "✓ Outbound Serialization Validated";
-      }
+      resetBadge();
     });
   }
 
   if (validateBtn) {
     validateBtn.addEventListener('click', () => {
+      const results = validateIsoPayloads(select.value, xmlDisplay.textContent, damlDisplay.textContent);
+      const failed = results.filter(r => !r.ok);
       if (statusBadge) {
-        statusBadge.textContent = "✓ ISO 20022 Schema & Daml Invariants 100% Validated (0 Errors)";
-        statusBadge.style.color = "var(--accent-emerald)";
+        statusBadge.textContent = failed.length === 0
+          ? `✓ ${results.length} checks passed`
+          : `✗ ${failed.length} of ${results.length} checks failed: ${failed.map(r => r.name).join('; ')}`;
+        statusBadge.style.color = failed.length === 0 ? "var(--accent-emerald)" : "var(--accent-rose)";
       }
     });
   }
@@ -945,256 +1038,19 @@ function initIsoConverter() {
 // 7. Daml Code Dossier Interactive Viewer
 // ============================================================================
 
+// The viewer loads the real module source from the repository (served as
+// static files on the deployed site), so it can never drift from the code.
+const DAML_SOURCE_BASE = "daml/src/AryaFi/";
+const DAML_REPO_URL = "https://github.com/Aryaverse/aryafi-core/blob/main/";
+
 const DAML_MODULES = {
-  cash: {
-    title: "AryaFi/Finance/Cash.daml (Tokenized Cash Primitive)",
-    code: `module AryaFi.Finance.Cash where
-
-import AryaFi.Common.Identifiers (AccountId, CorrelationId)
-import AryaFi.Common.Types (Amount, Currency)
-import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
-
-template CashPosition
-  with
-    bank          : Party
-    owner         : Party
-    accountId     : AccountId
-    currency      : Currency
-    amount        : Amount
-    isLocked      : Bool
-    lockReference : Optional Text
-    observers     : [Party]
-  where
-    signatory bank, owner
-    observer observers
-
-    ensure amount > 0.0
-
-    key (bank, accountId, currency) : (Party, AccountId, Currency)
-    maintainer key._1
-
-    choice SplitCash : (ContractId CashPosition, ContractId CashPosition)
-      with
-        splitAmount : Amount
-      controller owner
-      do
-        require (not isLocked) "Cannot split a locked cash position"
-        requirePositive splitAmount "splitAmount"
-        require (splitAmount < amount) ("Split amount must be strictly less than total " <> show amount)
-        c1 <- create this with amount = splitAmount
-        c2 <- create this with amount = amount - splitAmount
-        pure (c1, c2)
-
-    choice MergeCash : ContractId CashPosition
-      with
-        otherCid : ContractId CashPosition
-      controller owner
-      do
-        require (not isLocked) "Cannot merge: this position is locked"
-        other <- fetch otherCid
-        require (other.bank == bank) "Bank mismatch"
-        require (other.owner == owner) "Owner mismatch"
-        require (other.currency == currency) "Currency mismatch"
-        archive otherCid
-        create this with amount = amount + other.amount`
-  },
-  security: {
-    title: "AryaFi/Finance/Security.daml (Safekeeping & Encumbrance)",
-    code: `module AryaFi.Finance.Security where
-
-import AryaFi.Common.Identifiers (AccountId, ISIN, CUSIP)
-import AryaFi.Common.Types (Amount, Rate)
-import AryaFi.Common.Errors (require, requirePositive)
-
-template SecurityPosition
-  with
-    custodian         : Party
-    issuer            : Party
-    owner             : Party
-    accountId         : AccountId
-    isin              : ISIN
-    cusip             : Optional CUSIP
-    instrumentName    : Text
-    quantity          : Amount
-    couponRate        : Optional Rate
-    maturityTimestamp : Optional Time
-    isLocked          : Bool
-    lockReference     : Optional Text
-    observers         : [Party]
-  where
-    signatory custodian, owner
-    observer observers
-
-    ensure quantity > 0.0
-
-    key (custodian, accountId, isin) : (Party, AccountId, ISIN)
-    maintainer key._1
-
-    choice LockSecurity : ContractId SecurityPosition
-      with
-        lockRef       : Text
-        lockingParty  : Party
-      controller owner, custodian
-      do
-        require (not isLocked) "Security is already locked"
-        create this with isLocked = True, lockReference = Some lockRef`
-  },
-  collateral: {
-    title: "AryaFi/Finance/Collateral.daml (Haircut & Margin Revaluation)",
-    code: `module AryaFi.Finance.Collateral where
-
-import AryaFi.Common.Types (Amount, Rate, Currency, AssetClass)
-import AryaFi.Common.Identifiers (AccountId, ISIN, ExternalRef)
-import AryaFi.Common.Errors (require, requirePositive, requireNonNegative)
-
-data CollateralStatus
-  = Allocated | Active | Substituted | Released | Liquidated | InDispute
-  deriving (Eq, Ord, Show)
-
-template CollateralPosition
-  with
-    collateralProvider : Party
-    collateralReceiver : Party
-    custodian          : Party
-    accountId          : AccountId
-    assetClass         : AssetClass
-    isin               : ISIN
-    quantity           : Amount
-    marketValue        : Amount
-    haircut            : Rate
-    settlementCurrency : Currency
-    obligationRef      : Text
-    lockReference      : Text
-    status             : CollateralStatus
-    externalRef        : Optional ExternalRef
-    observers          : [Party]
-  where
-    signatory collateralProvider, collateralReceiver, custodian
-    observer observers
-
-    ensure quantity > 0.0 && marketValue > 0.0 && haircut >= 0.0 && haircut < 1.0
-
-    nonconsuming choice GetCollateralValue : Amount
-      controller custodian
-      do pure (marketValue * (1.0 - haircut))
-
-    choice RevalueCollateral : ContractId CollateralPosition
-      with
-        newMarketValue : Amount
-        newQuantity    : Amount
-      controller custodian
-      do
-        requirePositive newMarketValue "newMarketValue"
-        create this with marketValue = newMarketValue, quantity = newQuantity`
-  },
-  loan: {
-    title: "AryaFi/Contracts/Loan.daml (Institutional Credit Facility)",
-    code: `module AryaFi.Contracts.Loan where
-
-import AryaFi.Common.Types (Amount, Rate, Currency, DayCountConvention(..))
-import AryaFi.Common.Time (calcYearFraction)
-import AryaFi.Common.Errors (require, requirePositive)
-
-data LoanStatus = LoanActive | LoanDefaulted | LoanClosed
-  deriving (Eq, Show)
-
-template InstitutionalLoan
-  with
-    facilityId         : Text
-    lender             : Party
-    borrower           : Party
-    creditLimit        : Amount
-    outstandingBalance : Amount
-    accruedInterest    : Amount
-    interestRate       : Rate
-    dayCountConvention : DayCountConvention
-    lastAccrualTime    : Time
-    currency           : Currency
-    status             : LoanStatus
-    collateralPledgeId : Optional Text
-    observers          : [Party]
-  where
-    signatory lender, borrower
-    observer observers
-
-    choice Drawdown : ContractId InstitutionalLoan
-      with
-        drawAmount : Amount
-      controller borrower
-      do
-        require (status == LoanActive) "Loan is not active"
-        require (outstandingBalance + drawAmount <= creditLimit) "Facility limit exceeded"
-        create this with outstandingBalance = outstandingBalance + drawAmount`
-  },
-  repo: {
-    title: "AryaFi/Contracts/Repo.daml (Repurchase Agreement)",
-    code: `module AryaFi.Contracts.Repo where
-
-import AryaFi.Common.Types (Amount, Rate, Currency)
-import AryaFi.Common.Identifiers (ISIN)
-import AryaFi.Common.Errors (require, requirePositive)
-
-data RepoStatus = RepoInitiated | RepoActive | RepoSettled | RepoDefaulted
-  deriving (Eq, Show)
-
-template RepoAgreement
-  with
-    repoId             : Text
-    seller             : Party
-    buyer              : Party
-    tripartyAgent      : Optional Party
-    isin               : ISIN
-    collateralQuantity : Amount
-    currency           : Currency
-    purchasePrice      : Amount
-    repurchasePrice    : Amount
-    repoRate           : Rate
-    startDate          : Time
-    endDate            : Time
-    status             : RepoStatus
-  where
-    signatory seller, buyer
-
-    choice CloseoutRepo : ()
-      controller seller, buyer
-      do pure ()`
-  },
-  transfer: {
-    title: "AryaFi/Compliance/TransferRestrictions.daml (Reg D, Reg S, Rule 144A)",
-    code: `module AryaFi.Compliance.TransferRestrictions where
-
-import AryaFi.Common.Identifiers (ISIN)
-import AryaFi.Common.Errors (require)
-
-data RegulatoryCategory
-  = RegD_506c | RegS | Rule144A | QualifiedPurchaserOnly | RetailUnrestricted
-  deriving (Eq, Show)
-
-template TransferRestrictionRule
-  with
-    complianceOfficer  : Party
-    isin               : ISIN
-    regulatoryCategory : RegulatoryCategory
-    holdingPeriodDays  : Int
-    whitelistRequired  : Bool
-    lockupExpiry       : Optional Time
-    isActive           : Bool
-  where
-    signatory complianceOfficer
-
-    key (complianceOfficer, isin) : (Party, ISIN)
-    maintainer key._1
-
-    nonconsuming choice IsTransferAllowed : Bool
-      controller complianceOfficer
-      do
-        if not isActive then pure False
-        else case lockupExpiry of
-          None   -> pure True
-          Some t -> do
-            now <- getTime
-            pure (now >= t)`
-  }
+  cash: { title: "AryaFi/Finance/Cash.daml (Tokenized Cash Primitive)", path: "Finance/Cash.daml" },
+  security: { title: "AryaFi/Finance/Security.daml (Securities Safekeeping)", path: "Finance/Security.daml" },
+  settlement: { title: "AryaFi/Finance/Settlement.daml (Atomic DvP)", path: "Finance/Settlement.daml" },
+  collateral: { title: "AryaFi/Finance/Collateral.daml (Haircut & Valuation)", path: "Finance/Collateral.daml" },
+  loan: { title: "AryaFi/Contracts/Loan.daml (Credit Facility)", path: "Contracts/Loan.daml" },
+  repo: { title: "AryaFi/Contracts/Repo.daml (Repurchase Agreement)", path: "Contracts/Repo.daml" },
+  transfer: { title: "AryaFi/Compliance/TransferRestrictions.daml (Reg D / Reg S / 144A)", path: "Compliance/TransferRestrictions.daml" }
 };
 
 function initDamlViewer() {
@@ -1204,11 +1060,23 @@ function initDamlViewer() {
 
   if (!select || !title || !content) return;
 
-  function render(key) {
+  async function render(key) {
     const mod = DAML_MODULES[key];
-    if (mod) {
-      title.textContent = mod.title;
-      content.textContent = mod.code;
+    if (!mod) return;
+    const path = DAML_SOURCE_BASE + mod.path;
+    title.textContent = mod.title;
+    content.textContent = `Loading ${path} ...`;
+    try {
+      const res = await fetch(path, { cache: 'no-cache' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      if (select.value === key) content.textContent = text;
+    } catch (err) {
+      if (select.value === key) {
+        content.textContent = `Could not load ${path} (${err.message}).\n\n` +
+          `Open the page through a web server (e.g. the deployed site or "python3 -m http.server"),\n` +
+          `or read the source on GitHub:\n${DAML_REPO_URL}${path}`;
+      }
     }
   }
 
@@ -1248,20 +1116,4 @@ function initCopyButtons() {
   handleCopy('btn-copy-daml', 'iso-daml-display');
   handleCopy('btn-copy-source', 'daml-viewer-content');
   handleCopy('btn-copy-log', 'scenario-terminal-output');
-}
-
-// ============================================================================
-// 9. Live Telemetry Tickers
-// ============================================================================
-
-function initTelemetryCounters() {
-  let volume = 85000000;
-  const volEl = document.getElementById('ticker-volume');
-
-  setInterval(() => {
-    volume += Math.floor(Math.random() * 25000);
-    if (volEl) {
-      volEl.textContent = `$${(volume / 1000000).toFixed(2)}M`;
-    }
-  }, 4000);
 }

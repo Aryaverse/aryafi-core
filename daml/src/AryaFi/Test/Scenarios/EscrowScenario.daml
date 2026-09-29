@@ -12,6 +12,7 @@ import AryaFi.Contracts.Escrow
 import AryaFi.Contracts.Pledge
 import AryaFi.Common.Identifiers
 import AryaFi.Common.Types
+import DA.Time (addRelTime, days)
 
 -- ---------------------------------------------------------------------------
 -- Escrow Helpers
@@ -21,7 +22,7 @@ mkEscrow
   : Party -> Party -> Party -> Time
   -> Script (ContractId ConditionalEscrow)
 mkEscrow agent depositor beneficiary expiry = do
-  now <- getTime
+  _now <- getTime
   submitMulti [agent, depositor] [] do
     createCmd ConditionalEscrow with
       escrowId = "ESC-SPA-2026-001"
@@ -204,7 +205,7 @@ testPledgeEnforce = script do
 
   -- Pledgee enforces following default
   enforcedCid <- submit pledgee do
-    exerciseCmd pledgeCid EnforcePledge with enforceTs = now
+    exerciseCmd pledgeCid EnforcePledge
 
   enforcedData <- queryContractId pledgor enforcedCid
   case enforcedData of
@@ -264,7 +265,11 @@ testPledgeAddObserver = script do
 
   pledgeCid <- mkPledge pledgor pledgee custodian
 
-  pledgeWithAgentCid <- submit pledgee do
+  -- Pledgee alone cannot disclose the pledge
+  submitMustFail pledgee do
+    exerciseCmd pledgeCid AddPledgeObserver with newObserver = triAgent
+
+  pledgeWithAgentCid <- submitMulti [pledgor, pledgee] [] do
     exerciseCmd pledgeCid AddPledgeObserver with newObserver = triAgent
 
   agentView <- queryContractId triAgent pledgeWithAgentCid

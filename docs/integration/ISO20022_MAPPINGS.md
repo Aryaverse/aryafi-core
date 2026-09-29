@@ -113,13 +113,13 @@ The `semt.002.001.07` (*Custody Statement of Holdings*) reports institutional po
 
 ## 6. Mapping: `DvpInstruction` $\longleftrightarrow$ `sese.023` / `sese.025`
 
-The `sese.023.001.10` (*Securities Settlement Transaction Instruction*) triggers Delivery-versus-Payment settlement. Upon atomic execution on Canton, a `sese.025.001.10` (*Settlement Transaction Confirmation*) is emitted to both counterparties.
+The `sese.023.001.10` (*Securities Settlement Transaction Instruction*) maps to a `DvpInstruction`. After `ExecuteDvpSettlement` commits, an integration adapter reading the transaction stream can generate a `sese.025.001.10` (*Settlement Transaction Confirmation*) for both counterparties; the ledger itself does not send ISO messages.
 
 ### 6.1 Field-by-Field Mapping Table
 
 | AryaFi Field (`DvpInstruction`) | ISO 20022 Element Path (`sese.023` / `sese.025`) | Transformation / Description |
 |:---|:---|:---|
-| `dvpId` | `TxDtls/SttlmTxId` | Unique DvP transaction reference identifier. |
+| `tradeId`, `sellerSecurityLockRef`, `buyerCashLockRef` | `TxDtls/SttlmTxId` | Trade reference; both legs are locked under it. |
 | `seller` | `TxDtls/SttlmPties/DlvgPty/FinInstnId/LEI` | Delivering party (transferring security, receiving cash). |
 | `buyer` | `TxDtls/SttlmPties/RcvgPty/FinInstnId/LEI` | Receiving party (receiving security, delivering cash). |
 | `settlementAgent` | `TxDtls/SttlmPties/SttlmPty/FinInstnId/BICFI` | Central settlement agency orchestrating atomic exchange. |
@@ -127,7 +127,7 @@ The `sese.023.001.10` (*Securities Settlement Transaction Instruction*) triggers
 | `securityQuantity` | `TxDtls/SttlmQty/Qty/Unit` | Total units of security transferred upon execution. |
 | `cashAmount` | `TxDtls/SttlmAmt/Amt` | Cash consideration transferred upon delivery. |
 | `currency` | `TxDtls/SttlmAmt/Amt/@Ccy` | Currency of payment consideration. |
-| `status` | `TxDtls/Sts/Sttld` | Status transition: `PendingDvp` $\to$ `DvpSettled`. |
+| `status` | `TxDtls/Sts/Sttld` | Status transition: `PendingSettlement` $\to$ `Settled`. |
 
 ---
 
@@ -153,22 +153,22 @@ The `sese.023.001.10` (*Securities Settlement Transaction Instruction*) triggers
       </PmtId>
       <IntrBkSttlmAmt Ccy="USD">12500000.00</IntrBkSttlmAmt>
       <Dbtr>
-        <Nm>Goldman Sachs Primary Dealer</Nm>
+        <Nm>Dealer Bank A</Nm>
       </Dbtr>
       <DbtrAcct>
         <Id>
           <Othr>
-            <Id>ACC-GS-USD-001</Id>
+            <Id>ACC-DLRA-USD-001</Id>
           </Othr>
         </Id>
       </DbtrAcct>
       <Cdtr>
-        <Nm>BNY Mellon Global Custody</Nm>
+        <Nm>Global Custodian</Nm>
       </Cdtr>
       <CdtrAcct>
         <Id>
           <Othr>
-            <Id>ACC-BNY-CUSTODY-USD-001</Id>
+            <Id>ACC-CUST-USD-001</Id>
           </Othr>
         </Id>
       </CdtrAcct>
@@ -180,31 +180,28 @@ The `sese.023.001.10` (*Securities Settlement Transaction Instruction*) triggers
 </Document>
 ```
 
-### 7.2 Resulting Daml Command (JSON Ledger API Format)
+### 7.2 Resulting Daml Command (HTTP JSON API v1, `POST /v1/create`)
+Newtype identifiers (`AccountId`, `CorrelationId`, ...) are encoded as records, variants as `{"tag", "value"}`, and parties as full party IDs (shown as placeholders). The same payload appears in the web terminal's ISO 20022 Hub, where it passes the built-in validation checks.
 ```json
 {
-  "commands": [
-    {
-      "create": {
-        "templateId": "AryaFi.Finance.Payment:PaymentInstruction",
-        "arguments": {
-          "payer": "GoldmanSachs_Participant",
-          "payee": "BnyMellon_Participant",
-          "settlementAgent": "DTCC_Participant",
-          "payerAccountId": "ACC-GS-USD-001",
-          "payeeAccountId": "ACC-BNY-CUSTODY-USD-001",
-          "currency": "USD",
-          "amount": "12500000.0",
-          "purpose": { "RepoOpeningLeg": {} },
-          "obligationRef": "REPO-REF-2026-GS-BNY-001",
-          "correlationId": "CORR-REPO-2026-8831",
-          "idempotencyKey": "IDEMP-2026-09-18-0042",
-          "networkRef": "SWIFT-UETR-e1a49f82-3d92-4f10-bf91-b3b281f9a12c",
-          "status": { "PendingSettlement": {} },
-          "observers": ["FederalReserve_Participant"]
-        }
-      }
-    }
-  ]
+  "templateId": "AryaFi.Finance.Payment:PaymentInstruction",
+  "payload": {
+    "payer": "<party-id:DealerBankA>",
+    "payee": "<party-id:GlobalCustodian>",
+    "settlementAgent": "<party-id:CashSettlementBank>",
+    "payerAccountId": { "unAccountId": "ACC-DLRA-USD-001" },
+    "payeeAccountId": { "unAccountId": "ACC-CUST-USD-001" },
+    "currency": "USD",
+    "amount": "12500000.00",
+    "purpose": { "tag": "RepoOpeningLeg", "value": {} },
+    "obligationRef": "REPO-REF-2026-001",
+    "correlationId": { "unCorrelationId": "CORR-REPO-2026-8831" },
+    "idempotencyKey": { "unIdempotencyKey": "IDEMP-2026-09-18-0042" },
+    "networkRef": { "unPaymentNetworkRef": "e1a49f82-3d92-4f10-bf91-b3b281f9a12c" },
+    "status": { "tag": "PendingSettlement", "value": {} },
+    "observers": ["<party-id:SupervisoryAuthority>"]
+  },
+  "meta": { "commandId": "aryafi-pacs008-IDEMP-2026-09-18-0042" }
 }
 ```
+`PaymentInstruction` is signed by payer, payee, and settlement agent, so the submitting token must act as all three, or the instruction must be created through a propose/accept flow (not yet provided).

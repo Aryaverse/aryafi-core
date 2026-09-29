@@ -63,62 +63,67 @@ testInstitutionalRepoAndMarginWorkflow = script do
   let expiryDate = time (date 2027 Sep 1) 9 0 0
   let repoEndDate = time (date 2026 Sep 15) 15 0 0 -- 14-day repo
   let marginDeadline = time (date 2026 Sep 8) 17 0 0
+  setTime now
 
   -- =========================================================================
   -- Phase 1: Institutional Compliance Verification
   -- =========================================================================
   sellerKycCid <- submit kycAuth do
-    createCmd KYCAttestation with
-      attestationId = "KYC-SELLER-001"
-      party = seller
+    createCmd KycAttestation with
       authority = kycAuth
-      kycLevel = Tier3Institutional
-      riskScore = 10
-      validFrom = now
-      validTo = expiryDate
-      lei = Some "7845000ABCD1234EF56"
+      subjectParty = seller
+      lei = Some (LEI "7845000ABCD1234EF56")
+      status = KycVerified
+      verificationTimestamp = now
+      expiryTimestamp = expiryDate
       jurisdiction = "US"
+      riskTier = "Tier3Institutional (risk score 10)"
+      providerRef = Some (ExternalRef "KYC-SELLER-001")
       observers = [regulator]
 
   buyerKycCid <- submit kycAuth do
-    createCmd KYCAttestation with
-      attestationId = "KYC-BUYER-001"
-      party = buyer
+    createCmd KycAttestation with
       authority = kycAuth
-      kycLevel = Tier3Institutional
-      riskScore = 8
-      validFrom = now
-      validTo = expiryDate
-      lei = Some "5493000G7M5A0Z5F6S89"
+      subjectParty = buyer
+      lei = Some (LEI "5493000G7M5A0Z5F6S89")
+      status = KycVerified
+      verificationTimestamp = now
+      expiryTimestamp = expiryDate
       jurisdiction = "US"
+      riskTier = "Tier3Institutional (risk score 8)"
+      providerRef = Some (ExternalRef "KYC-BUYER-001")
       observers = [regulator]
 
   sellerSanctionsCid <- submit sanctionsAuth do
-    createCmd SanctionsScreeningAttestation with
-      screeningId = "SANC-SELLER-001"
-      party = seller
-      screener = sanctionsAuth
+    createCmd SanctionsAttestation with
+      screeningAuthority = sanctionsAuth
+      subjectParty = seller
+      lei = None
       status = SanctionsClear
-      listsChecked = ["OFAC_SDN", "EU_CONSOLIDATED"]
-      screenedAt = now
-      validUntil = expiryDate
-      screeningReference = "SANC-REF-GS-01"
+      screeningTimestamp = now
+      expiryTimestamp = expiryDate
+      screeningProviderRef = "SANC-REF-GS-01" <> " lists: " <> show (["OFAC_SDN", "EU_CONSOLIDATED"] : [Text])
+      providerRef = Some (ExternalRef "SANC-SELLER-001")
       observers = [regulator]
 
   buyerSanctionsCid <- submit sanctionsAuth do
-    createCmd SanctionsScreeningAttestation with
-      screeningId = "SANC-BUYER-001"
-      party = buyer
-      screener = sanctionsAuth
+    createCmd SanctionsAttestation with
+      screeningAuthority = sanctionsAuth
+      subjectParty = buyer
+      lei = None
       status = SanctionsClear
-      listsChecked = ["OFAC_SDN", "EU_CONSOLIDATED"]
-      screenedAt = now
-      validUntil = expiryDate
-      screeningReference = "SANC-REF-BLK-01"
+      screeningTimestamp = now
+      expiryTimestamp = expiryDate
+      screeningProviderRef = "SANC-REF-BLK-01" <> " lists: " <> show (["OFAC_SDN", "EU_CONSOLIDATED"] : [Text])
+      providerRef = Some (ExternalRef "SANC-BUYER-001")
       observers = [regulator]
 
-  isSellerClear <- submit seller do exerciseCmd sellerSanctionsCid IsSanctionsClear with asOf = now
-  isBuyerClear <- submit buyer do exerciseCmd buyerSanctionsCid IsSanctionsClear with asOf = now
+  isSellerKycValid <- submit kycAuth do exerciseCmd sellerKycCid IsKycValid
+  isBuyerKycValid <- submit kycAuth do exerciseCmd buyerKycCid IsKycValid
+  assertMsg "Both counterparties must hold valid KYC" (isSellerKycValid && isBuyerKycValid)
+
+  isSellerClear <- submit sanctionsAuth do exerciseCmd sellerSanctionsCid IsSanctionsClear
+  isBuyerClear <- submit sanctionsAuth do exerciseCmd buyerSanctionsCid IsSanctionsClear
   assertMsg "Both counterparties must be sanctions-clear" (isSellerClear && isBuyerClear)
 
   -- =========================================================================
@@ -131,7 +136,7 @@ testInstitutionalRepoAndMarginWorkflow = script do
       buyer = buyer
       tripartyAgent = Some triparty
       custodian = custodian
-      isin = "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       collateralQuantity = 10000000.0 -- 10M US Treasuries
       collateralAccountId = AccountId "ACC-TRI-PARTY-BNY-01"
       haircut = 0.02 -- 2% haircut
@@ -156,7 +161,7 @@ testInstitutionalRepoAndMarginWorkflow = script do
       seller = seller
       custodian = custodian
       repoId = "REPO-2026-GS-BLK-001"
-      isin = "US912828ZM24"
+      isin = ISIN "US912828ZM50"
       collateralQuantity = 10000000.0
       currency = "USD"
       purchasePrice = 9800000.0
@@ -209,10 +214,18 @@ testInstitutionalRepoAndMarginWorkflow = script do
       correlationId = CorrelationId "CORR-MARGIN-001"
       observers = [regulator]
 
-  -- Seller satisfies variation margin with Fedwire cash transfer
-  marginCallSatisfiedCid <- submit seller do
+  -- Seller submits variation margin via Fedwire cash transfer
+  marginCallSubmittedCid <- submit seller do
     exerciseCmd marginCallCid SatisfyWithCash with
       paymentRef = "FEDWIRE-IMAD-20260908-001234"
+
+  isMarginMetBeforeConfirmation <- submit buyer do
+    exerciseCmd marginCallSubmittedCid IsMarginSatisfied
+  assertMsg "Margin is not satisfied until the caller confirms receipt" (not isMarginMetBeforeConfirmation)
+
+  -- Buyer confirms receipt of the Fedwire funds
+  marginCallSatisfiedCid <- submit buyer do
+    exerciseCmd marginCallSubmittedCid ConfirmMarginReceipt
 
   isMarginMet <- submit buyer do
     exerciseCmd marginCallSatisfiedCid IsMarginSatisfied
@@ -222,15 +235,15 @@ testInstitutionalRepoAndMarginWorkflow = script do
   -- Phase 4: Collateral Substitution
   -- =========================================================================
 
-  -- Seller substitutes collateral with alternative Treasury paper (US912828XG34)
+  -- Seller substitutes collateral with alternative Treasury paper (US912828XG01)
   repoCidSubstituted <- submitMulti [seller, buyer] [] do
     exerciseCmd repoCidActive SubstituteCollateral with
-      newIsin = "US912828XG34"
+      newIsin = ISIN "US912828XG01"
       newQuantity = 10100000.0
       newHaircut = 0.02
 
   Some repoSub <- queryContractId seller repoCidSubstituted
-  assertMsg "ISIN must be updated" (repoSub.isin == "US912828XG34")
+  assertMsg "ISIN must be updated" (repoSub.isin == ISIN "US912828XG01")
 
   -- =========================================================================
   -- Phase 5: Maturity Repurchase Settlement & Closeout
@@ -245,7 +258,7 @@ testInstitutionalRepoAndMarginWorkflow = script do
 
   -- Custodian executes closing repurchase settlement
   repoCidSettled <- submit custodian do
-    exerciseCmd repoPendingClose ExecuteClosingLeg with
+    exerciseCmd repoCidPendingClose ExecuteClosingLeg with
       settlementRef = "SETTLE-CLOSE-DVP-BNY-001"
 
   Some repoFinal <- queryContractId buyer repoCidSettled

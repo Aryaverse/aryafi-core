@@ -7,8 +7,9 @@
 -- CashPosition is the primary settlement currency primitive. It supports:
 --   - Atomic split (one position → two positions, total preserved)
 --   - Atomic merge (two positions → one, total preserved)
---   - Authorized transfer to a new owner / account
---   - Locking for settlement, collateral posting, or escrow
+--   - Authorized transfer to a new owner / account (the receiver must authorize)
+--   - Locking to a named lock holder (e.g. a DvP settlement agent), who alone
+--     can release the lock or settle the position to a counterparty
 --
 -- All operations preserve the fundamental invariant:
 --   ∀ op on position p: sum of resulting amounts == sum of inputs
@@ -20,6 +21,7 @@ module AryaFi.Finance.Cash where
 import AryaFi.Common.Identifiers (AccountId, CorrelationId)
 import AryaFi.Common.Types (Amount, Currency)
 import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
+import DA.Optional (fromOptional, optionalToList)
 
 -- ---------------------------------------------------------------------------
 -- CashPosition Template
@@ -28,15 +30,16 @@ import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
 -- | Tokenized cash position held at an institutional bank or custody account.
 --
 -- Dual signatory model: bank (issuer and settlement authority) and owner.
--- The bank controls: lock/unlock, transfer authorization, and merge validation.
--- The owner controls: split authorization, merge initiation, and observer management.
+-- The bank co-authorizes: locking and direct transfers.
+-- The owner controls: split, merge, and observer management.
+-- A lock holder, once named, alone controls release of the lock and
+-- settlement of the locked position to a counterparty.
 --
--- Contract key: (bank, accountId, currency) — ensures a single canonical
--- position per currency per account. Use SplitCash if multiple sub-positions
--- are needed for settlement staging.
+-- No contract key: a holding is fungible and an account may hold any number of
+-- positions in the same currency (e.g. after SplitCash).
 --
--- Privacy: bank and owner always see this. Add settlement agents and
--- counterparties as observers for DvP coordination.
+-- Privacy: bank, owner, and the current lock holder see this position.
+-- Observers are cleared whenever ownership changes.
 template CashPosition
   with
     bank : Party
@@ -53,16 +56,16 @@ template CashPosition
     -- ^ Whether this position is locked (encumbered for settlement or collateral).
     lockReference : Optional Text
     -- ^ Reference to the contract or instruction that holds this lock.
+    lockHolder : Optional Party
+    -- ^ Party holding the lock (e.g. the DvP settlement agent). Only this party
+    --   can unlock the position or settle it to a counterparty while locked.
     observers : [Party]
     -- ^ Parties with read access (e.g. settlement agents, DvP counterparties).
   where
     signatory bank, owner
-    observer observers
+    observer observers, optionalToList lockHolder
 
-    ensure amount > 0.0
-
-    key (bank, accountId, currency) : (Party, AccountId, Currency)
-    maintainer key._1
+    ensure amount > 0.0 && isLocked == (lockHolder /= None)
 
     -- | Split this position into two positions, preserving total amount.
     -- Used for: staging settlement legs, allocating margin amounts,
@@ -107,29 +110,37 @@ template CashPosition
 
     -- | Transfer this cash position to a new owner and account at the same bank.
     -- The original position is archived; a new position is created for the receiver.
-    -- Position must not be locked. Requires joint authorization of owner and bank.
+    -- Position must not be locked. Requires joint authorization of owner, bank,
+    -- and the receiver (who becomes a signatory of the new position).
+    -- Observers are cleared so the previous owner's viewers do not follow the cash.
     --
-    -- For cross-bank transfers, use PaymentInstruction + Settlement contracts.
+    -- For exchange against another asset, lock the position to a settlement
+    -- agent and settle through DvpInstruction.
     choice TransferCash : ContractId CashPosition
       with
         newOwner : Party
         newAccountId : AccountId
         correlationId : CorrelationId
-      controller owner, bank
+      controller owner, bank, newOwner
       do
         require (not isLocked) "Cannot transfer a locked cash position"
         require (newOwner /= owner) "New owner must be different from current owner"
         create this with
           owner = newOwner
           accountId = newAccountId
+          observers = []
 
-    -- | Lock this cash position, preventing split, merge, or transfer.
+    -- | Lock this cash position to a lock holder, preventing split, merge, or transfer.
     -- Used when: staging a DvP, posting as margin, entering escrow.
     -- Requires joint authorization of owner and bank to prevent unilateral freezing.
+    -- From this point only the lock holder can release or settle the position,
+    -- so neither owner nor bank can withdraw it from an agreed settlement.
     choice LockCash : ContractId CashPosition
       with
         lockRef : Text
-        -- ^ Reference to the contract or process holding this cash (e.g. DvP contract ID).
+        -- ^ Reference to the contract or process holding this cash (e.g. DvP trade ID).
+        holder : Party
+        -- ^ Party that will hold the lock (e.g. the DvP settlement agent).
       controller owner, bank
       do
         require (not isLocked) "Cash position is already locked"
@@ -137,16 +148,36 @@ template CashPosition
         create this with
           isLocked = True
           lockReference = Some lockRef
+          lockHolder = Some holder
 
-    -- | Unlock a previously locked cash position.
-    -- Requires joint authorization of owner and bank.
+    -- | Release the lock. Only the lock holder can do this.
     choice UnlockCash : ContractId CashPosition
-      controller owner, bank
+      controller fromOptional owner lockHolder
       do
         require isLocked "Cash position is not currently locked"
         create this with
           isLocked = False
           lockReference = None
+          lockHolder = None
+
+    -- | Deliver a locked position to a counterparty as part of a settlement
+    -- (e.g. the cash leg of a DvP). Exercised by the lock holder together with
+    -- the receiver; the bank and owner consented when they created the lock.
+    -- The delivered position is unlocked and has no observers.
+    choice SettleLockedCash : ContractId CashPosition
+      with
+        newOwner : Party
+        newAccountId : AccountId
+      controller fromOptional owner lockHolder, newOwner
+      do
+        require isLocked "Only a locked position can be settled by its lock holder"
+        create this with
+          owner = newOwner
+          accountId = newAccountId
+          isLocked = False
+          lockReference = None
+          lockHolder = None
+          observers = []
 
     -- | Add an observer to this cash position.
     -- Used to grant visibility to settlement agents or DvP counterparties.
