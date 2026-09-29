@@ -687,6 +687,11 @@ function initCollateralCalculator() {
 // ============================================================================
 // 6. ISO 20022 Financial Messaging Converter
 // ============================================================================
+// The right-hand pane is a Daml 2.10 HTTP JSON API (v1) request body against
+// the actual AryaFi templates: records for newtype identifiers (AccountId,
+// ISIN, ...), {tag, value} for variants, plain strings for enums. Party
+// fields show "<party-id:Name>" placeholders because Canton party IDs are
+// assigned when parties are allocated.
 
 const ISO_TEMPLATES = {
   pacs008: {
@@ -706,37 +711,32 @@ const ISO_TEMPLATES = {
         <UETR>e1a49f82-3d92-4f10-bf91-b3b281f9a12c</UETR>
       </PmtId>
       <IntrBkSttlmAmt Ccy="USD">12500000.00</IntrBkSttlmAmt>
-      <Dbtr><Nm>Goldman Sachs Primary Dealer</Nm></Dbtr>
-      <DbtrAcct><Id><Othr><Id>ACC-GS-USD-001</Id></Othr></Id></DbtrAcct>
-      <Cdtr><Nm>BNY Mellon Global Custody</Nm></Cdtr>
-      <CdtrAcct><Id><Othr><Id>ACC-BNY-CUSTODY-USD-001</Id></Othr></Id></CdtrAcct>
+      <Dbtr><Nm>Dealer Bank A</Nm><Id><OrgId><LEI>529900DEALERBANKA078</LEI></OrgId></Id></Dbtr>
+      <DbtrAcct><Id><Othr><Id>ACC-DLRA-USD-001</Id></Othr></Id></DbtrAcct>
+      <Cdtr><Nm>Global Custodian</Nm><Id><OrgId><LEI>529900GLOBALCUST0063</LEI></OrgId></Id></Cdtr>
+      <CdtrAcct><Id><Othr><Id>ACC-CUST-USD-001</Id></Othr></Id></CdtrAcct>
       <Purp><Cd>REPO</Cd></Purp>
     </CdtTrfTxInf>
   </FIToFICstmrCdtTrf>
 </Document>`,
     daml: `{
-  "commands": [
-    {
-      "create": {
-        "templateId": "AryaFi.Finance.Payment:PaymentInstruction",
-        "arguments": {
-          "payer": "GoldmanSachs_Participant",
-          "payee": "BnyMellon_Participant",
-          "settlementAgent": "DTCC_Participant",
-          "payerAccountId": "ACC-GS-USD-001",
-          "payeeAccountId": "ACC-BNY-CUSTODY-USD-001",
-          "currency": "USD",
-          "amount": "12500000.00",
-          "purpose": { "RepoOpeningLeg": {} },
-          "obligationRef": "REPO-REF-2026-GS-BNY-001",
-          "correlationId": "CORR-REPO-2026-8831",
-          "idempotencyKey": "IDEMP-2026-09-24-0042",
-          "networkRef": "SWIFT-UETR-e1a49f82-3d92-4f10-bf91-b3b281f9a12c",
-          "status": { "PendingSettlement": {} }
-        }
-      }
-    }
-  ]
+  "templateId": "AryaFi.Finance.Payment:PaymentInstruction",
+  "payload": {
+    "payer": "<party-id:DealerBankA>",
+    "payee": "<party-id:GlobalCustodian>",
+    "settlementAgent": "<party-id:CashSettlementBank>",
+    "payerAccountId": { "unAccountId": "ACC-DLRA-USD-001" },
+    "payeeAccountId": { "unAccountId": "ACC-CUST-USD-001" },
+    "currency": "USD",
+    "amount": "12500000.00",
+    "purpose": { "tag": "RepoOpeningLeg", "value": {} },
+    "obligationRef": "REPO-REF-2026-001",
+    "correlationId": { "unCorrelationId": "CORR-REPO-2026-8831" },
+    "idempotencyKey": { "unIdempotencyKey": "IDEMP-2026-09-24-0042" },
+    "networkRef": { "unPaymentNetworkRef": "e1a49f82-3d92-4f10-bf91-b3b281f9a12c" },
+    "status": { "tag": "PendingSettlement", "value": {} },
+    "observers": []
+  }
 }`
   },
   sese023: {
@@ -746,35 +746,41 @@ const ISO_TEMPLATES = {
   <SctiesSttlmTxInstr>
     <TxDtls>
       <SttlmTxId>DVP-2026-TREAS-001</SttlmTxId>
-      <FinInstrmId><ISIN>US912828ZM24</ISIN></FinInstrmId>
+      <FinInstrmId><ISIN>US912828ZM50</ISIN></FinInstrmId>
       <SttlmQty><Qty><Unit>5000000.00</Unit></Qty></SttlmQty>
-      <SttlmAmt Ccy="USD">5000000.00</SttlmAmt>
+      <SttlmAmt Ccy="USD">4975000.00</SttlmAmt>
       <SttlmPties>
-        <DlvgPty><FinInstnId><LEI>5493006MHB84DD0ZWV18</LEI></FinInstnId></DlvgPty>
-        <RcvgPty><FinInstnId><LEI>W22LROWP2IHZNBB6K528</LEI></FinInstnId></RcvgPty>
+        <DlvgPty><FinInstnId><LEI>529900DEALERBANKA078</LEI></FinInstnId></DlvgPty>
+        <RcvgPty><FinInstnId><LEI>529900DEALERBANKB048</LEI></FinInstnId></RcvgPty>
       </SttlmPties>
     </TxDtls>
   </SctiesSttlmTxInstr>
 </Document>`,
     daml: `{
-  "commands": [
-    {
-      "create": {
-        "templateId": "AryaFi.Finance.Settlement:DvpInstruction",
-        "arguments": {
-          "dvpId": "DVP-2026-TREAS-001",
-          "seller": "DealerBankA",
-          "buyer": "DealerBankB",
-          "settlementAgent": "DTCCSettlementAgent",
-          "isin": "US912828ZM24",
-          "securityQuantity": "5000000.00",
-          "cashAmount": "5000000.00",
-          "currency": "USD",
-          "status": { "PendingDvp": {} }
-        }
-      }
-    }
-  ]
+  "templateId": "AryaFi.Finance.Settlement:DvpInstruction",
+  "payload": {
+    "settlementAgent": "<party-id:GlobalCustodian>",
+    "seller": "<party-id:DealerBankA>",
+    "buyer": "<party-id:DealerBankB>",
+    "tradeId": { "unTradeId": "DVP-2026-TREAS-001" },
+    "isin": { "unISIN": "US912828ZM50" },
+    "securityQuantity": "5000000.00",
+    "sellerSecurityAccount": { "unAccountId": "ACC-DLRA-SEC-001" },
+    "buyerSecurityAccount": { "unAccountId": "ACC-DLRB-SEC-001" },
+    "currency": "USD",
+    "cashAmount": "4975000.00",
+    "sellerCashAccount": { "unAccountId": "ACC-DLRA-USD-001" },
+    "buyerCashAccount": { "unAccountId": "ACC-DLRB-USD-001" },
+    "dvpModel": "DvpModel1",
+    "settlementDate": "2026-09-26T00:00:00Z",
+    "correlationId": { "unCorrelationId": "CORR-DVP-2026-TREAS-001" },
+    "idempotencyKey": { "unIdempotencyKey": "IDEMP-DVP-2026-TREAS-001" },
+    "sellerSecurityLockRef": "DVP-2026-TREAS-001",
+    "buyerCashLockRef": "DVP-2026-TREAS-001",
+    "status": { "tag": "PendingSettlement", "value": {} },
+    "failureReason": null,
+    "observers": []
+  }
 }`
   },
   camt053: {
@@ -784,8 +790,8 @@ const ISO_TEMPLATES = {
   <BkToCstmrStmt>
     <GrpHdr><MsgId>STMT-2026-09-24-001</MsgId><CreDtTm>2026-09-24T18:00:00Z</CreDtTm></GrpHdr>
     <Stmt>
-      <Id>STMT-EOD-FED-01</Id>
-      <Acct><Id><Othr><Id>ACC-US-OPS-001</Id></Othr></Id><Ccy>USD</Ccy></Acct>
+      <Id>STMT-EOD-BANK-01</Id>
+      <Acct><Id><Othr><Id>ACC-SUB-US-01</Id></Othr></Id><Ccy>USD</Ccy></Acct>
       <Bal>
         <Tp><CdOrPrtry><Cd>CLBD</Cd></CdOrPrtry></Tp>
         <Amt Ccy="USD">25000000.00</Amt>
@@ -796,13 +802,10 @@ const ISO_TEMPLATES = {
   </BkToCstmrStmt>
 </Document>`,
     daml: `{
+  "templateIds": ["AryaFi.Finance.Cash:CashPosition"],
   "query": {
-    "templateId": "AryaFi.Finance.Cash:CashPosition",
-    "predicate": {
-      "accountId": "ACC-US-OPS-001",
-      "currency": "USD",
-      "expectedClosingBalance": "25000000.00"
-    }
+    "accountId": { "unAccountId": "ACC-SUB-US-01" },
+    "currency": "USD"
   }
 }`
   },
@@ -813,7 +816,7 @@ const ISO_TEMPLATES = {
   <SctiesBalAcctgRpt>
     <StmtGnlDtls><StmtId>CUST-EOD-2026-09-24</StmtId></StmtGnlDtls>
     <FinInstrmDtls>
-      <Id><ISIN>US912828ZM24</ISIN></Id>
+      <Id><ISIN>US912828ZM50</ISIN></Id>
       <AggrtBal>
         <Qty><Unit>10000000.00</Unit></Qty>
         <HldgSts><Cd>AVLB</Cd></HldgSts>
@@ -822,45 +825,106 @@ const ISO_TEMPLATES = {
   </SctiesBalAcctgRpt>
 </Document>`,
     daml: `{
+  "templateIds": ["AryaFi.Finance.Security:SecurityPosition"],
   "query": {
-    "templateId": "AryaFi.Finance.Security:SecurityPosition",
-    "predicate": {
-      "isin": "US912828ZM24",
-      "isLocked": false,
-      "expectedSafekeepingUnits": "10000000.00"
-    }
+    "isin": { "unISIN": "US912828ZM50" },
+    "isLocked": false
   }
 }`
   }
 };
 
+// How each ISO element maps to the Daml payload. The "rule" column states the
+// reconciliation or ledger rule that applies; it is documentation, not a check.
 const ISO_MAPPINGS = {
   pacs008: [
-    { xml: "MsgId", path: "GrpHdr / MsgId", json: "idempotencyKey", spec: "Text (Unique Idempotency Digest)", rule: "Strict 1-time execution proof" },
-    { xml: "EndToEndId", path: "PmtId / EndToEndId", json: "correlationId", spec: "CorrelationId (Contract Linkage)", rule: "Full audit trail reconciliation" },
-    { xml: "IntrBkSttlmAmt", path: "CdtTrfTxInf / IntrBkSttlmAmt", json: "amount & currency", spec: "Decimal & Currency ('USD')", rule: "Positive non-zero check" },
-    { xml: "DbtrAcct", path: "CdtTrfTxInf / DbtrAcct / Id", json: "payerAccountId", spec: "AccountId ('ACC-GS-USD-001')", rule: "Signatory signature authorization" },
-    { xml: "CdtrAcct", path: "CdtTrfTxInf / CdtrAcct / Id", json: "payeeAccountId", spec: "AccountId ('ACC-BNY-CUSTODY-USD-001')", rule: "Sub-transaction privacy enforced" }
+    { xml: "MsgId", path: "GrpHdr / MsgId", json: "idempotencyKey", spec: "IdempotencyKey", rule: "Also used as the Ledger API command ID for deduplication" },
+    { xml: "EndToEndId", path: "PmtId / EndToEndId", json: "correlationId", spec: "CorrelationId", rule: "Links payment, obligation, and settlement records" },
+    { xml: "UETR", path: "PmtId / UETR", json: "networkRef", spec: "PaymentNetworkRef", rule: "Attached by settlement agent (AttachNetworkRef)" },
+    { xml: "IntrBkSttlmAmt", path: "CdtTrfTxInf / IntrBkSttlmAmt", json: "amount & currency", spec: "Decimal & ISO 4217 code", rule: "Template ensure: amount > 0" },
+    { xml: "DbtrAcct", path: "CdtTrfTxInf / DbtrAcct / Id", json: "payerAccountId", spec: "AccountId", rule: "Payer is a signatory of the instruction" },
+    { xml: "CdtrAcct", path: "CdtTrfTxInf / CdtrAcct / Id", json: "payeeAccountId", spec: "AccountId", rule: "Payee is a signatory of the instruction" }
   ],
   sese023: [
-    { xml: "SttlmTxId", path: "TxDtls / SttlmTxId", json: "settlementId", spec: "Text ('DVP-2026-TREAS-001')", rule: "Unique trade matching handle" },
-    { xml: "ISIN", path: "FinInstrmId / ISIN", json: "isin", spec: "ISIN ('US912828ZM24')", rule: "ISO 6166 checksum validated" },
-    { xml: "SttlmQty", path: "TxDtls / SttlmQty / Unit", json: "quantity", spec: "Amount (5,000,000.00 par)", rule: "Physical/tokenized equivalence" },
-    { xml: "SttlmAmt", path: "TxDtls / SttlmAmt", json: "cashAmount", spec: "Amount ($5,000,000.00 USD)", rule: "Gross settlement matching" },
-    { xml: "DlvgPty / RcvgPty", path: "SttlmPties / LEI", json: "seller & buyer", spec: "Party co-signatories", rule: "BIS Model 1 simultaneous finality" }
+    { xml: "SttlmTxId", path: "TxDtls / SttlmTxId", json: "tradeId, lock refs", spec: "TradeId / Text", rule: "Both legs must be locked under this reference" },
+    { xml: "ISIN", path: "FinInstrmId / ISIN", json: "isin", spec: "ISIN", rule: "Must equal the locked SecurityPosition's ISIN" },
+    { xml: "SttlmQty", path: "TxDtls / SttlmQty / Unit", json: "securityQuantity", spec: "Decimal", rule: "Must equal the locked position's quantity exactly" },
+    { xml: "SttlmAmt", path: "TxDtls / SttlmAmt", json: "cashAmount & currency", spec: "Decimal & ISO 4217 code", rule: "Must equal the locked CashPosition exactly" },
+    { xml: "DlvgPty / RcvgPty", path: "SttlmPties / LEI", json: "seller & buyer", spec: "Party (via LEI directory)", rule: "Both sign the instruction; legs settle in one transaction" }
   ],
   camt053: [
-    { xml: "MsgId", path: "GrpHdr / MsgId", json: "statementId", spec: "Text ('STMT-2026-09-24-001')", rule: "Statement chronological sequence" },
-    { xml: "Acct / Id", path: "Stmt / Acct / Id", json: "accountId", spec: "AccountId ('ACC-HQ-CONCENTRATION')", rule: "Account must exist on ACS" },
-    { xml: "Bal / Amt", path: "Stmt / Bal / Amt", json: "reconciledBalance", spec: "Amount ($10,000,000.00 USD)", rule: "Lemma 1 value invariant: Δ = 0.00" },
-    { xml: "CdtDbtInd", path: "Stmt / Bal / CdtDbtInd", json: "creditDebitIndicator", spec: "CRDT / DBIT", rule: "Zero balance sweep proof" }
+    { xml: "Acct / Id", path: "Stmt / Acct / Id", json: "query.accountId", spec: "AccountId", rule: "Select the bank's CashPositions for the account" },
+    { xml: "Acct / Ccy", path: "Stmt / Acct / Ccy", json: "query.currency", spec: "ISO 4217 code", rule: "Filter by currency" },
+    { xml: "Bal / Amt", path: "Stmt / Bal / Amt", json: "sum of amount", spec: "Decimal", rule: "Closing balance must equal the sum of matching positions" }
   ],
   semt002: [
-    { xml: "StmtId", path: "StmtGnlDtls / StmtId", json: "auditRef", spec: "Text ('CUSTODY-HOLDING-AUDIT-2026-09')", rule: "Regulator audit trail reference" },
-    { xml: "ISIN", path: "FinInstrmId / ISIN", json: "isin", spec: "ISIN ('US912828ZM24')", rule: "CSD safekeeping registry match" },
-    { xml: "AggtQty", path: "Bal / AggtQty", json: "expectedSafekeepingUnits", spec: "Amount (10,000,000.00 units)", rule: "100% reserve segregation" }
+    { xml: "ISIN", path: "FinInstrmDtls / Id / ISIN", json: "query.isin", spec: "ISIN", rule: "Select custody positions in the instrument" },
+    { xml: "HldgSts = AVLB", path: "AggrtBal / HldgSts", json: "query.isLocked = false", spec: "Bool", rule: "Available holdings exclude locked positions" },
+    { xml: "AggrtBal / Qty", path: "AggrtBal / Qty / Unit", json: "sum of quantity", spec: "Decimal", rule: "Aggregate balance must equal the sum of matching positions" }
   ]
 };
+
+// --- Real validation of the displayed payloads -------------------------------
+
+function isValidIsin(isin) {
+  if (!/^[A-Z]{2}[A-Z0-9]{9}[0-9]$/.test(isin)) return false;
+  const digits = isin.slice(0, 11).split('').map(c => parseInt(c, 36).toString()).join('');
+  let sum = 0;
+  for (let i = 0; i < digits.length; i++) {
+    let n = Number(digits[digits.length - 1 - i]);
+    if (i % 2 === 0) { n *= 2; if (n > 9) n -= 9; }
+    sum += n;
+  }
+  return (10 - (sum % 10)) % 10 === Number(isin[11]);
+}
+
+function isValidLei(lei) {
+  if (!/^[A-Z0-9]{18}[0-9]{2}$/.test(lei)) return false;
+  const digits = lei.split('').map(c => parseInt(c, 36).toString()).join('');
+  return BigInt(digits) % 97n === 1n;
+}
+
+function validateIsoPayloads(key, xmlText, jsonText) {
+  const results = [];
+  const check = (name, ok) => results.push({ name, ok });
+
+  const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+  const xmlOk = !doc.getElementsByTagName('parsererror').length;
+  check('XML is well-formed', xmlOk);
+
+  let json = null;
+  try { json = JSON.parse(jsonText); } catch (e) { json = null; }
+  check('JSON API body parses', json !== null);
+
+  if (xmlOk) {
+    const byName = name => Array.from(doc.getElementsByTagNameNS('*', name));
+    (ISO_MAPPINGS[key] || []).forEach(row => {
+      row.xml.split('/').map(p => p.trim().split(' ')[0]).forEach(el => {
+        check(`<${el}> present`, byName(el).length > 0);
+      });
+    });
+    byName('ISIN').forEach(e => check(`ISIN ${e.textContent} check digit (ISO 6166)`, isValidIsin(e.textContent.trim())));
+    byName('LEI').forEach(e => check(`LEI ${e.textContent} checksum (ISO 17442)`, isValidLei(e.textContent.trim())));
+    byName('UETR').forEach(e => check('UETR is a UUID v4', /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(e.textContent.trim())));
+    Array.from(doc.getElementsByTagName('*')).filter(e => e.hasAttribute('Ccy')).forEach(e => {
+      check(`<${e.localName}> has ISO 4217 currency`, /^[A-Z]{3}$/.test(e.getAttribute('Ccy')));
+      check(`<${e.localName}> amount is positive`, Number(e.textContent) > 0);
+    });
+  }
+
+  if (json && json.payload && key === 'sese023' && xmlOk) {
+    const text = n => (doc.getElementsByTagNameNS('*', n)[0] || {}).textContent;
+    check('ISIN matches between XML and JSON', json.payload.isin.unISIN === text('ISIN'));
+    check('Cash amount matches between XML and JSON', Number(json.payload.cashAmount) === Number(text('SttlmAmt')));
+    check('Quantity matches between XML and JSON', Number(json.payload.securityQuantity) === Number(text('Unit')));
+  }
+  if (json && json.payload && key === 'pacs008' && xmlOk) {
+    const text = n => (doc.getElementsByTagNameNS('*', n)[0] || {}).textContent;
+    check('Amount matches between XML and JSON', Number(json.payload.amount) === Number(text('IntrBkSttlmAmt')));
+    check('Idempotency key matches MsgId', json.payload.idempotencyKey.unIdempotencyKey === text('MsgId'));
+  }
+  return results;
+}
 
 function initIsoConverter() {
   const select = document.getElementById('iso-msg-select');
@@ -878,6 +942,13 @@ function initIsoConverter() {
 
   if (!select || !xmlDisplay || !damlDisplay) return;
 
+  function resetBadge() {
+    if (statusBadge) {
+      statusBadge.textContent = "Not yet validated";
+      statusBadge.style.color = "var(--text-secondary)";
+    }
+  }
+
   function render(key) {
     const template = ISO_TEMPLATES[key];
     if (template) {
@@ -889,16 +960,17 @@ function initIsoConverter() {
       tbody.innerHTML = '';
       ISO_MAPPINGS[key].forEach(row => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td><code>&lt;${row.xml}&gt;</code></td>
-          <td style="color: var(--text-secondary);">${row.path}</td>
-          <td><strong>${row.json}</strong></td>
-          <td style="color: var(--text-secondary);">${row.spec}</td>
-          <td style="color: var(--accent-emerald); font-weight: 600;">✓ ${row.rule}</td>
-        `;
+        [`<${row.xml}>`, row.path, row.json, row.spec, row.rule].forEach((val, i) => {
+          const td = document.createElement('td');
+          if (i === 0) { const code = document.createElement('code'); code.textContent = val; td.appendChild(code); }
+          else if (i === 2) { const strong = document.createElement('strong'); strong.textContent = val; td.appendChild(strong); }
+          else { td.textContent = val; td.style.color = 'var(--text-secondary)'; }
+          tr.appendChild(td);
+        });
         tbody.appendChild(tr);
       });
     }
+    resetBadge();
   }
 
   select.addEventListener('change', () => {
@@ -909,31 +981,31 @@ function initIsoConverter() {
     toggleDirBtn.addEventListener('click', () => {
       isXmlToDaml = !isXmlToDaml;
       if (dirText) {
-        dirText.textContent = isXmlToDaml 
-          ? "SWIFT MX (XML) → Canton Daml JSON" 
-          : "Canton Daml JSON → SWIFT MX (XML)";
+        dirText.textContent = isXmlToDaml
+          ? "SWIFT MX (XML) → Daml JSON API request"
+          : "Daml ledger data → SWIFT MX (XML)";
       }
       if (leftTitle && rightTitle) {
-        leftTitle.textContent = isXmlToDaml 
-          ? "INCOMING ISO 20022 MX (XML PAYLOAD)" 
-          : "OUTGOING ISO 20022 MX (SYNTHESIZED XML)";
-        rightTitle.textContent = isXmlToDaml 
-          ? "CANTON LEDGER API COMMAND (JSON RPC)" 
-          : "ORIGINATING CANTON DAML LEDGER EVENT (JSON)";
+        leftTitle.textContent = isXmlToDaml
+          ? "INCOMING ISO 20022 MX (XML PAYLOAD)"
+          : "OUTGOING ISO 20022 MX (GENERATED XML)";
+        rightTitle.textContent = isXmlToDaml
+          ? "DAML JSON API v1 REQUEST BODY"
+          : "SOURCE DAML LEDGER DATA (JSON API)";
       }
-      if (statusBadge) {
-        statusBadge.textContent = isXmlToDaml 
-          ? "✓ Ingestion Schema Validated" 
-          : "✓ Outbound Serialization Validated";
-      }
+      resetBadge();
     });
   }
 
   if (validateBtn) {
     validateBtn.addEventListener('click', () => {
+      const results = validateIsoPayloads(select.value, xmlDisplay.textContent, damlDisplay.textContent);
+      const failed = results.filter(r => !r.ok);
       if (statusBadge) {
-        statusBadge.textContent = "✓ ISO 20022 Schema & Daml Invariants 100% Validated (0 Errors)";
-        statusBadge.style.color = "var(--accent-emerald)";
+        statusBadge.textContent = failed.length === 0
+          ? `✓ ${results.length} checks passed`
+          : `✗ ${failed.length} of ${results.length} checks failed: ${failed.map(r => r.name).join('; ')}`;
+        statusBadge.style.color = failed.length === 0 ? "var(--accent-emerald)" : "var(--accent-rose)";
       }
     });
   }
