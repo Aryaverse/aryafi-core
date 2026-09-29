@@ -149,8 +149,9 @@ template PaymentInstruction
         require (newObserver `notElem` observers) "Party is already an observer"
         create this with observers = newObserver :: observers
 
-    -- | Nonconsuming check: has this payment been completed (either settled or failed)?
+    -- | Nonconsuming check: has this payment reached a final status
+    -- (settled, failed, or cancelled)?
     nonconsuming choice IsCompleted : Bool
       controller settlementAgent
       do
-        pure (status == Settled || status /= PendingSettlement)
+        pure (status /= PendingSettlement)
