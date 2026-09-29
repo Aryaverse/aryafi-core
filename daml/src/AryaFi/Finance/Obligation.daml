@@ -18,7 +18,9 @@ import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
 -- ---------------------------------------------------------------------------
 
 -- | Lifecycle status of a financial obligation.
--- Transitions: Pending → {PartiallyFulfilled → Pending} → Fulfilled | Defaulted | Cancelled
+-- Outstanding states: Pending, Amended, PartiallyFulfilled (see isOutstandingStatus).
+-- Transitions: outstanding → {PartiallyFulfilled | Amended}* → Fulfilled | Defaulted,
+--              Pending | Amended → Cancelled
 data ObligationStatus
   = Pending
     -- ^ Obligation has been acknowledged and is due for payment.
@@ -32,7 +34,16 @@ data ObligationStatus
     -- ^ Obligation has been cancelled by mutual agreement before due date.
   | Amended
     -- ^ Obligation terms have been amended (updated amount or due date).
+    --   An amended obligation is still outstanding and can be paid or defaulted.
   deriving (Eq, Show)
+
+-- | Whether an obligation in this status is still owed (can be paid,
+-- partially paid, amended, or declared in default).
+isOutstandingStatus : ObligationStatus -> Bool
+isOutstandingStatus Pending = True
+isOutstandingStatus Amended = True
+isOutstandingStatus (PartiallyFulfilled _) = True
+isOutstandingStatus _ = False
 
 -- ---------------------------------------------------------------------------
 -- FinancialObligation Template
@@ -90,11 +101,11 @@ template FinancialObligation
     choice DischargeObligation : ContractId FinancialObligation
       controller obligee
       do
-        require (status == Pending || status == PartiallyFulfilled amount)
-          "Can only discharge a Pending or PartiallyFulfilled obligation"
+        require (isOutstandingStatus status)
+          "Can only discharge an outstanding (Pending, Amended, or PartiallyFulfilled) obligation"
         create this with status = Fulfilled
 
-    -- | Record a partial payment against this obligation.
+    -- | Record a partial payment against this obligation. Can be repeated.
     -- The obligation transitions to PartiallyFulfilled with remaining balance.
     -- Caller provides the amount paid; the obligation records the remainder.
     choice PartialDischarge : ContractId FinancialObligation
@@ -102,7 +113,7 @@ template FinancialObligation
         amountPaid : Amount
       controller obligee
       do
-        require (status == Pending) "Can only partially discharge a Pending obligation"
+        require (isOutstandingStatus status) "Can only partially discharge an outstanding obligation"
         requirePositive amountPaid "amountPaid"
         require (amountPaid < amount)
           ("Partial amount " <> show amountPaid <> " must be less than total " <> show amount)
@@ -118,25 +129,26 @@ template FinancialObligation
         defaultReason : Text
       controller obligee
       do
-        require (status == Pending || status == PartiallyFulfilled amount)
-          "Can only declare default on Pending or PartiallyFulfilled obligation"
+        require (isOutstandingStatus status)
+          "Can only declare default on an outstanding obligation"
         requireNonEmpty defaultReason "defaultReason"
         create this with status = Defaulted
 
-    -- | Cancel this obligation by mutual agreement before its due date.
+    -- | Cancel this obligation by mutual agreement before any payment is made.
     -- Requires both obligor and obligee to consent.
     choice CancelObligation : ContractId FinancialObligation
       with
         cancellationReason : Text
       controller obligor, obligee
       do
-        require (status == Pending) "Can only cancel a Pending obligation"
+        require (status == Pending || status == Amended) "Can only cancel an obligation with no payments made"
         requireNonEmpty cancellationReason "cancellationReason"
         create this with status = Cancelled
 
     -- | Amend the obligation amount or due date by mutual agreement.
     -- Common for loan rescheduling or error correction.
-    -- Requires both parties to consent; transitions status to Amended.
+    -- Requires both parties to consent; transitions status to Amended, which
+    -- remains outstanding. Amount is the new outstanding balance.
     choice AmendObligation : ContractId FinancialObligation
       with
         newAmount : Amount
@@ -144,7 +156,7 @@ template FinancialObligation
         amendmentNote : Text
       controller obligor, obligee
       do
-        require (status == Pending) "Can only amend a Pending obligation"
+        require (isOutstandingStatus status) "Can only amend an outstanding obligation"
         requirePositive newAmount "newAmount"
         requireNonEmpty amendmentNote "amendmentNote"
         create this with
@@ -154,15 +166,15 @@ template FinancialObligation
           description = description <> " [Amended: " <> amendmentNote <> "]"
 
     -- | Nonconsuming check: is this obligation currently overdue?
-    -- Returns True if current time is past due date and status is still Pending.
+    -- Returns True if current time is past due date and it is still outstanding.
     nonconsuming choice IsOverdue : Bool
       controller obligee
       do
         now <- getTime
-        pure (now > dueDate && (status == Pending || status == PartiallyFulfilled amount))
+        pure (now > dueDate && isOutstandingStatus status)
 
     -- | Nonconsuming check: is this obligation still outstanding?
     nonconsuming choice IsOutstanding : Bool
       controller obligee
       do
-        pure (status == Pending || status == PartiallyFulfilled amount)
+        pure (isOutstandingStatus status)
