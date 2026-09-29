@@ -70,3 +70,42 @@ canton console --connect=bank_node -c '
 
 1. **Transaction Atomicity**: In Daml, an upgrade choice either commits in full or rolls back completely. If any assertion fails during contract creation, the original contract remains active and untouched.
 2. **Side-by-Side Execution**: Canton natively supports hosting multiple package IDs simultaneously. If an issue is detected during progressive rollout, new trades can revert to the prior package ID while active contracts remain accessible.
+
+---
+
+## 5. Upgrading to v1.0.2
+
+v1.0.2 changes template fields and choice signatures, so its package ID differs from v1.0.1 and existing contracts must be migrated (Strategy B above: archive under the old package, recreate under the new one with the signatories of each contract). Because v1.0.1 did not build, most deployments have no live contracts; the notes below apply to any that do.
+
+### 5.1 New Template Fields
+
+| Template | New field | Value for migrated contracts |
+|:---|:---|:---|
+| `CashPosition`, `SecurityPosition`, `AssetHolding` | `lockHolder : Optional Party` | `None` for unlocked positions. For locked positions, agree who holds the lock (normally the settlement or collateral agent) and set `Some agent`; the `ensure` clause requires `isLocked == (lockHolder /= None)`. |
+| `InstitutionalLoan` | `interestAccruedThrough : Time` | The date up to which interest is already included in `accruedInterest` (normally the last accrual date, or `startDate`). |
+| `TransferRestrictionRule` | `whitelist : [Party]` | The approved transferees; `[]` if `whitelistRequired` is `False`. |
+
+### 5.2 Changed Variants
+- `LendingRecallIssued qty deadline` becomes `LendingRecallIssued with recallQuantity; recallDeadline`.
+- `RedemptionSettled ref amount` becomes `RedemptionSettled with paymentReference; netPayout`.
+- `MarginCallStatus` gains `MarginCallPendingConfirmation`.
+
+### 5.3 Client Code Changes
+
+| Before (v1.0.1) | After (v1.0.2) |
+|:---|:---|
+| `LockCash with lockRef` / `LockSecurity with lockRef` | add `holder = <lock holder>`; unlock and settle as the lock holder |
+| `UnlockCash` / `UnlockSecurity` submitted by owner + bank/custodian | submitted by the lock holder |
+| `TransferCash` / `TransferSecurity` / `TransferAsset` by owner + bank/custodian | the receiving owner must also authorize |
+| `ExecuteDvpSettlement` (no arguments) | `ExecuteDvpSettlement with sellerSecurityCid; buyerCashCid`; returns `DvpSettlementResult` |
+| `AccrueInterest with additionalInterest` | `AccrueInterest` (amount computed by the contract from ledger time) |
+| `PayAccruedInterest` / `PayDownPrincipal` by borrower | by lender (confirming receipt) |
+| `AccrueLendingFee` by lender; `PayLendingFee` by borrower | `AccrueLendingFee` by lender + borrower; `PayLendingFee` by lender |
+| `SatisfyWithCash` / `SatisfyWithPledge` satisfy the call | they submit a fulfilment; the caller runs `ConfirmMarginReceipt` |
+| `IsTransferAllowed` returning `Bool` | `EvaluateTransfer with receiver; acquiredAt; receiverStatus` returning `PolicyDecision` |
+| `Add*Observer` on loans, repos, securities loans, margin calls, pledges, collateral by one party | both counterparties |
+| Timestamp arguments on `UpdateKycStatus`, `RevokeKyc`, `UpdateSanctionsStatus`, `BlockParty`, `ClearParty`, `EnforcePledge`, `ExecuteRedemptionSettlement`, `SubmitAmendment` | removed; ledger time is recorded |
+| Looking up `CashPosition` by key `(bank, accountId, currency)` | query by those fields; an account may hold several positions per currency |
+
+### 5.4 Verification
+Run the runbook in section 3, then confirm `daml test` passes and regenerate the authorization matrix (`python3 scripts/gen_authorization_matrix.py`) to review the controller changes.
