@@ -6,7 +6,7 @@ Demonstrates enterprise multi-currency liquidity pooling, concentration sweeps, 
 In global banking and enterprise treasury operations, corporate treasurers manage capital across distributed legal entities, correspondent banks, and real-time payment rails. This reference application implements:
 - **Multi-Account Topology**: Master concentration pool and operating subsidiary accounts segregated across legal entities.
 - **Liquidity Sweeping & Concentration**: Target balancing and zero-balance sweeping (ZBS) via atomic `SplitCash`, `TransferCash`, and `MergeCash` operations without ledger re-issuance.
-- **Intercompany Payment Clearing & Cash Locking**: Staging liquidity through dual-signatory `LockCash` / `UnlockCash` and atomic payment execution.
+- **Intercompany Payment Clearing & Cash Locking**: Earmarking liquidity by locking it to the settlement bank (`LockCash` with a lock holder), which then delivers it (`SettleLockedCash`) and confirms the `PaymentInstruction`.
 - **Canton Sub-Transaction Privacy**: Operating subsidiary accounts and internal sweeps remain private to the transacting entities and bank, preventing corporate structure or liquidity leakage.
 
 ---
@@ -62,26 +62,28 @@ In global banking and enterprise treasury operations, corporate treasurers manag
                                          │
                                          v
                       6. PaymentInstruction Origination
-                      (TreasuryHQ issues 8M USD PaymentInstruction
-                       for targeted entity funding)
+                      (TreasuryHQ, SubUS, and GlobalBank co-sign an
+                       8M USD PaymentInstruction)
                                          │
                                          v
                       7. Split & Lock Cash (Liquidity Staging)
                       (TreasuryHQ splits 8M from concentration pool
-                       and locks position with payment reference)
+                       and locks it to GlobalBank as lock holder)
                                          │
                                          v
                       8. Payment Execution & Settlement
-                      (GlobalBank clears payment; cash is unlocked
-                       and transferred atomically to SubUS)
+                      (GlobalBank delivers the locked cash to SubUS
+                       and confirms the payment as Settled)
 ```
 
 ---
 
 ## Detailed Step-by-Step Implementation
 
+The snippets below are taken from [TreasuryCashScenario.daml](../../daml/src/AryaFi/Test/Scenarios/TreasuryCashScenario.daml), which runs as part of `daml test`.
+
 ### 1. Multi-Currency Cash Position Setup
-Operating entities and corporate treasury center hold tokenized cash positions with custody banks:
+Operating entities and the treasury center hold tokenized cash positions issued by the transaction bank:
 ```daml
 -- SubUS funded with 25M USD
 subUsCashCid <- submitMulti [globalBank, subUS] [] do
@@ -92,97 +94,74 @@ subUsCashCid <- submitMulti [globalBank, subUS] [] do
     currency = "USD"
     amount = 25000000.0
     isLocked = False
-    lockRef = None
+    lockReference = None
+    lockHolder = None
     observers = [treasuryHQ, regulator]
-
--- SubEU funded with 20M EUR
-subEuCashCid <- submitMulti [globalBank, subEU] [] do
-  createCmd CashPosition with
-    bank = globalBank
-    accountId = euAccount
-    owner = subEU
-    currency = "EUR"
-    amount = 20000000.0
-    isLocked = False
-    lockRef = None
-    observers = [treasuryHQ, regulator]
-
--- TreasuryHQ funded with 10M USD base concentration cash
-hqCashCid <- submitMulti [globalBank, treasuryHQ] [] do
-  createCmd CashPosition with
-    bank = globalBank
-    accountId = hqAccount
-    owner = treasuryHQ
-    currency = "USD"
-    amount = 10000000.0
-    isLocked = False
-    lockRef = None
-    observers = [regulator]
 ```
+SubEU (20M EUR) and TreasuryHQ (10M USD) are funded the same way.
 
-### 2. End-of-Day Concentration Sweeping
-Operating entities identify excess operating cash and split it atomically without ledger re-issuance:
+### 2. Surplus Identification & Concentration Sweep
 ```daml
--- Split 15M surplus from working capital (10M retained locally)
-(subUsWorkingCid, subUsSweepCid) <- submit subUS do
+-- SplitCash returns (split amount, remainder): 15M to sweep, 10M retained
+(subUsSweepCid, subUsWorkingCid) <- submit subUS do
   exerciseCmd subUsCashCid SplitCash with
     splitAmount = 15000000.0
 
--- Sweep surplus to TreasuryHQ concentration account
-sweptHqCid <- submitMulti [subUS, globalBank] [] do
+-- Sender, bank, and receiver all authorize the transfer; observers are cleared
+sweptHqCid <- submitMulti [subUS, globalBank, treasuryHQ] [] do
   exerciseCmd subUsSweepCid TransferCash with
     newOwner = treasuryHQ
     newAccountId = hqAccount
     correlationId = CorrelationId "SWEEP-US-TO-HQ-001"
 
--- TreasuryHQ consolidates swept cash into single master pool (15M + 10M = 25M)
+-- TreasuryHQ consolidates the 25M pool
 mergedHqCid <- submit treasuryHQ do
   exerciseCmd hqCashCid MergeCash with
     otherCid = sweptHqCid
 ```
 
-### 3. Intercompany Payment Clearing & Cash Locking
-Corporate treasury funds cross-border entity operations through targeted payments with cash locking:
+### 3. Intercompany Payment Clearing
 ```daml
--- 1. Initiate formal payment instruction
-paymentInstructionCid <- submit treasuryHQ do
+-- Payer, payee, and settlement agent co-sign the payment instruction
+paymentInstructionCid <- submitMulti [treasuryHQ, subUS, globalBank] [] do
   createCmd PaymentInstruction with
-    instructionId = "PAY-INTERCOMPANY-001"
-    sender = treasuryHQ
-    receiver = subUS
-    senderAccountId = hqAccount
-    receiverAccountId = usAccount
+    payer = treasuryHQ
+    payee = subUS
+    settlementAgent = globalBank
+    payerAccountId = hqAccount
+    payeeAccountId = usAccount
     currency = "USD"
     amount = 8000000.0
-    settlementDate = cutOffTime
-    status = PaymentPending
+    purpose = GeneralPayment "Intercompany supplier funding"
+    obligationRef = None
     correlationId = CorrelationId "CORR-PAY-001"
-    observers = [globalBank, regulator]
+    idempotencyKey = IdempotencyKey "IDEMP-PAY-INTERCOMPANY-001"
+    networkRef = None
+    status = PendingSettlement
+    observers = [regulator]
 
--- 2. Split 8M from concentration pool for payment funding
-(hqRemainingCid, hqPaymentCashCid) <- submit treasuryHQ do
-  exerciseCmd mergedHqCid SplitCash with
-    splitAmount = 8000000.0
-
--- 3. Lock allocated cash prior to settlement execution
+-- HQ earmarks 8M and locks it to the bank; HQ can no longer withdraw it
+(hqPaymentCashCid, hqRemainingCid) <- submit treasuryHQ do
+  exerciseCmd mergedHqCid SplitCash with splitAmount = 8000000.0
 lockedPaymentCashCid <- submitMulti [treasuryHQ, globalBank] [] do
   exerciseCmd hqPaymentCashCid LockCash with
-    lockReference = "LOCK-PAY-INTERCOMPANY-001"
+    lockRef = "LOCK-PAY-INTERCOMPANY-001"
+    holder = globalBank
 
--- 4. Unlock and execute payment transfer to SubUS
-unlockedPaymentCashCid <- submit treasuryHQ do
-  exerciseCmd lockedPaymentCashCid UnlockCash
-
-paidToSubUsCid <- submitMulti [treasuryHQ, globalBank] [] do
-  exerciseCmd unlockedPaymentCashCid TransferCash with
+-- The bank, as lock holder, delivers the cash to SubUS and confirms settlement
+paidToSubUsCid <- submitMulti [globalBank, subUS] [] do
+  exerciseCmd lockedPaymentCashCid SettleLockedCash with
     newOwner = subUS
     newAccountId = usAccount
-    correlationId = CorrelationId "CORR-PAY-001"
-
--- 5. Bank executes payment clearing and marks instruction settled
 settledPaymentCid <- submit globalBank do
-  exerciseCmd paymentInstructionCid ExecutePayment with
-    settlementTime = cutOffTime
+  exerciseCmd paymentInstructionCid ConfirmPaymentSettlement
+```
+
+### 4. Privacy Verification
+```daml
+-- SubUS sees neither SubEU's EUR position nor HQ's remaining pool
+euFromUs <- queryContractId subUS subEuCashCid
+assertMsg "SubUS cannot see SubEU's EUR position" (euFromUs == None)
 ```
 
 ---
@@ -202,7 +181,7 @@ settledPaymentCid <- submit globalBank do
                  │                      │                      │
                  v                      v                      v
         ┌─────────────────┐   ┌───────────────────┐  ┌───────────────────┐
-        │ PaymentSettled  │   │   Failed (Reason) │  │ Cancelled (Reason)│
+        │     Settled     │   │   Failed (Reason) │  │ Cancelled (Reason)│
         └─────────────────┘   └───────────────────┘  └───────────────────┘
 ```
 
@@ -224,13 +203,13 @@ settledPaymentCid <- submit globalBank do
        │ New Owner/Acct │                    │ Combined Pool  │
        └────────────────┘                    └────────────────┘
                │
-               │ LockCash (owner + bank)
+               │ LockCash (owner + bank, naming a lock holder)
                v
-       ┌────────────────┐
-       │  CashPosition  │
-       │    (Locked)    │
-       └───────┬────────┘
-               │ UnlockCash (owner + bank)
+       ┌────────────────┐  SettleLockedCash   ┌────────────────┐
+       │  CashPosition  ├────────────────────>│ Receiver owns  │
+       │    (Locked)    │ (lock holder +      │  (Available)   │
+       └───────┬────────┘   receiver)         └────────────────┘
+               │ UnlockCash (lock holder only)
                v
        ┌────────────────┐
        │  CashPosition  │
@@ -248,10 +227,10 @@ settledPaymentCid <- submit globalBank do
    - `MergeCash` archives the incoming contract and adds its balance to the destination position with strict bank, owner, account, and currency equality checks.
 
 2. **Separation of Intent and Settlement Execution**:
-   - `PaymentInstruction` isolates the payment instruction creation from the operational execution and clearing trigger (`ExecutePayment`), accommodating real-world batching, RTGS netting cycles, and cutoff schedules.
+   - `PaymentInstruction` records the agreed payment; the settlement agent confirms it (`ConfirmPaymentSettlement`) or rejects it with a reason. The cash itself moves through the lock-holder flow in step 3.
 
-3. **Dual-Signatory Encumbrance**:
-   - Neither the owner nor the bank can unilaterally freeze or unlock cash. `LockCash` and `UnlockCash` require co-authorization from both parties, protecting corporate clients against arbitrary freezes while guaranteeing banks legal enforceability during staging.
+3. **Lock-Holder Encumbrance**:
+   - Neither owner nor bank can lock cash alone: `LockCash` needs both and names a lock holder. From then on only the lock holder can release the cash (`UnlockCash`) or deliver it to a receiver who co-authorizes (`SettleLockedCash`), so earmarked liquidity cannot be withdrawn mid-payment.
 
 4. **Idempotency & Audit Traceability**:
    - Every `PaymentInstruction` carries unique identifiers and `CorrelationId` to eliminate double-disbursement risks in automated ERP integrations and track multi-leg flows.
@@ -269,6 +248,6 @@ settledPaymentCid <- submit globalBank do
 ## Scenario Verification
 To execute the complete multi-party test scenario:
 ```bash
-daml test --test-pattern TreasuryCashScenario
+daml test --files daml/src/AryaFi/Test/Scenarios/TreasuryCashScenario.daml
 ```
-*Implemented in [TreasuryCashScenario.daml](file:///Users/pankaj/Desktop/DAML%20Projects/aryafi-core/daml/src/AryaFi/Test/Scenarios/TreasuryCashScenario.daml).*
+*Implemented in [TreasuryCashScenario.daml](../../daml/src/AryaFi/Test/Scenarios/TreasuryCashScenario.daml).*
