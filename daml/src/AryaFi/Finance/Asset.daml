@@ -12,6 +12,10 @@ import AryaFi.Common.Identifiers (AccountId, ExternalRef)
 import AryaFi.Common.Types (Amount, AssetClass)
 import AryaFi.Common.Errors (require, requireNonEmpty)
 import DA.Optional (fromOptional, optionalToList)
+import qualified Splice.Api.Token.HoldingV1 as HoldingV1
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
+import Splice.Api.Token.MetadataV1 (emptyMetadata)
+import AryaFi.Finance.TokenStandard (holdingAccount, holdingLockV1, holdingLockV2)
 
 -- ---------------------------------------------------------------------------
 -- AssetHolding Template
@@ -62,6 +66,23 @@ template AssetHolding
     observer observers, optionalToList lockHolder
 
     ensure quantity > 0.0 && isLocked == (lockHolder /= None)
+
+    -- Canton Network Token Standard views (see AryaFi.Finance.TokenStandard).
+    interface instance HoldingV1.Holding for AssetHolding where
+      view = HoldingV1.HoldingView with
+        owner = owner
+        instrumentId = HoldingV1.InstrumentId with admin = issuer; id = assetId
+        amount = quantity
+        lock = holdingLockV1 lockHolder lockReference
+        meta = emptyMetadata
+
+    interface instance HoldingV2.Holding for AssetHolding where
+      view = HoldingV2.HoldingView with
+        account = holdingAccount owner custodian accountId
+        instrumentId = HoldingV2.InstrumentId with admin = issuer; id = assetId
+        amount = quantity
+        lock = holdingLockV2 lockHolder lockReference
+        meta = emptyMetadata
 
     -- | Lock this asset, preventing transfer or further encumbrance.
     -- Used for: pledging as collateral, initiating settlement, margin posting.

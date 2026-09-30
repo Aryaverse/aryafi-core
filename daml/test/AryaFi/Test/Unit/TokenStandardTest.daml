@@ -1,0 +1,141 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | AryaFi positions seen through the Canton Network Token Standard `Holding`
+-- interfaces: CIP-56 (HoldingV1) and CIP-0112 (HoldingV2).
+module AryaFi.Test.Unit.TokenStandardTest where
+
+import Daml.Script
+import qualified Splice.Api.Token.HoldingV1 as HoldingV1
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
+import AryaFi.Common.Identifiers
+import AryaFi.Common.Types
+import AryaFi.Finance.Asset
+import AryaFi.Test.Scenarios.DvpSettlementTest
+
+-- | The V2 view of a holding contract, as `party` sees it.
+viewV2 : Party -> ContractId HoldingV2.Holding -> Script (Optional HoldingV2.HoldingView)
+viewV2 party cid = queryInterfaceContractId party cid
+
+-- | The V2 views of every holding `party` can see.
+holdingsV2 : Party -> Script [HoldingV2.HoldingView]
+holdingsV2 party = do
+  found <- queryInterface @HoldingV2.Holding party
+  pure [v | (_, Some v) <- found]
+
+-- Cash: account at the bank, instrument = the bank's currency.
+testCashPositionIsHolding : Script ()
+testCashPositionIsHolding = script do
+  bank <- allocateParty "Bank"
+  alice <- allocateParty "Alice"
+  cashCid <- setupCashPosition bank alice (AccountId "ACC-ALICE-USD") 1000000.0
+
+  Some v2 <- viewV2 alice (toInterfaceContractId cashCid)
+  assertMsg "V2 account: owner, bank as provider, account ID"
+    (v2.account == HoldingV2.Account with owner = Some alice; provider = Some bank; id = "ACC-ALICE-USD")
+  assertMsg "V2 instrument: the bank's USD"
+    (v2.instrumentId == HoldingV2.InstrumentId with admin = bank; id = "USD")
+  assertMsg "V2 amount" (v2.amount == 1000000.0)
+  assertMsg "V2 unlocked" (v2.lock == None)
+
+  Some v1 <- queryInterfaceContractId @HoldingV1.Holding alice (toInterfaceContractId cashCid)
+  assertMsg "V1 owner" (v1.owner == alice)
+  assertMsg "V1 instrument" (v1.instrumentId == HoldingV1.InstrumentId with admin = bank; id = "USD")
+  assertMsg "V1 amount" (v1.amount == 1000000.0)
+
+  -- The provider sees the holding too
+  bankView <- viewV2 bank (toInterfaceContractId cashCid)
+  assertMsg "Bank sees the holding" (bankView == Some v2)
+
+-- Securities: account at the custodian, instrument = the ISIN at the custodian.
+testSecurityPositionIsHolding : Script ()
+testSecurityPositionIsHolding = script do
+  custodian <- allocateParty "Custodian"
+  alice <- allocateParty "Alice"
+  secCid <- setupSecurityPosition custodian alice (AccountId "ACC-ALICE-SEC") 250000.0
+
+  Some v2 <- viewV2 alice (toInterfaceContractId secCid)
+  assertMsg "V2 account at the custodian"
+    (v2.account == HoldingV2.Account with owner = Some alice; provider = Some custodian; id = "ACC-ALICE-SEC")
+  assertMsg "V2 instrument: the ISIN"
+    (v2.instrumentId == HoldingV2.InstrumentId with admin = custodian; id = unISIN bondIsin)
+  assertMsg "V2 amount is the quantity" (v2.amount == 250000.0)
+
+-- Other assets: instrument admin is the issuer, provider is the custodian.
+testAssetHoldingIsHolding : Script ()
+testAssetHoldingIsHolding = script do
+  issuer <- allocateParty "FundManager"
+  custodian <- allocateParty "Custodian"
+  alice <- allocateParty "Alice"
+  assetCid <- submit (actAs [issuer, custodian, alice]) do
+    createCmd AssetHolding with
+      issuer
+      custodian
+      owner = alice
+      accountId = AccountId "ACC-ALICE-FUND"
+      assetClass = FundShare
+      assetId = "MMF-USD-CLASS-A"
+      quantity = 1200.0
+      isLocked = False
+      lockReference = None
+      lockHolder = None
+      externalRef = None
+      observers = []
+
+  Some v2 <- viewV2 alice (toInterfaceContractId assetCid)
+  assertMsg "V2 instrument issued by the fund manager"
+    (v2.instrumentId == HoldingV2.InstrumentId with admin = issuer; id = "MMF-USD-CLASS-A")
+  assertMsg "V2 account at the custodian"
+    (v2.account == HoldingV2.Account with owner = Some alice; provider = Some custodian; id = "ACC-ALICE-FUND")
+
+-- A leg locked for DvP shows a token-standard lock held by the settlement agent,
+-- and the agent can see the holding.
+testLockedLegShowsLock : Script ()
+testLockedLegShowsLock = script do
+  f <- stageDvp "TS-LOCK"
+  let expected = Some HoldingV2.Lock with
+        holders = [f.agent]
+        expiresAt = None
+        expiresAfter = None
+        context = Some "TS-LOCK"
+
+  Some bond <- viewV2 f.seller (toInterfaceContractId f.lockedSecCid)
+  assertMsg "Locked bond shows the agent's lock" (bond.lock == expected)
+  Some cash <- viewV2 f.buyer (toInterfaceContractId f.lockedCashCid)
+  assertMsg "Locked cash shows the agent's lock" (cash.lock == expected)
+
+  agentView <- viewV2 f.agent (toInterfaceContractId f.lockedSecCid)
+  assertMsg "Agent sees the locked holding" (agentView == Some bond)
+
+  Some bondV1 <- queryInterfaceContractId @HoldingV1.Holding f.seller (toInterfaceContractId f.lockedSecCid)
+  assertMsg "V1 lock matches"
+    (bondV1.lock == Some HoldingV1.Lock with holders = [f.agent]; expiresAt = None; expiresAfter = None; context = Some "TS-LOCK")
+
+-- After DvP, the token-standard holdings have changed hands and are unlocked;
+-- a party outside the trade sees no holdings.
+testDvpMovesHoldings : Script ()
+testDvpMovesHoldings = script do
+  f <- stageDvp "TS-DVP"
+  outsider <- allocateParty "Outsider"
+  _ <- execute f f.dvpCid
+
+  buyerHoldings <- holdingsV2 f.buyer
+  assertMsg "Buyer holds the bond, unlocked"
+    (any (\v -> v.instrumentId.id == unISIN bondIsin && v.amount == bondQuantity && v.lock == None) buyerHoldings)
+
+  sellerHoldings <- holdingsV2 f.seller
+  assertMsg "Seller holds the cash, unlocked"
+    (any (\v -> v.instrumentId.id == "USD" && v.amount == cashConsideration && v.lock == None) sellerHoldings)
+  assertMsg "Seller no longer holds the bond"
+    (not (any (\v -> v.instrumentId.id == unISIN bondIsin) sellerHoldings))
+
+  outsiderHoldings <- holdingsV2 outsider
+  assertMsg "Outsider sees no holdings" (null outsiderHoldings)
+
+runTokenStandardTests : Script ()
+runTokenStandardTests = script do
+  testCashPositionIsHolding
+  testSecurityPositionIsHolding
+  testAssetHoldingIsHolding
+  testLockedLegShowsLock
+  testDvpMovesHoldings

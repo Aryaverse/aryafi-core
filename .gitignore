@@ -1,6 +1,8 @@
 # Daml Build Artifacts
 .daml/
 *.dar
+# Vendored dependency packages (e.g. the Canton Network Token Standard interfaces)
+!daml/deps/**/*.dar
 *.dar.manifest
 *.dar.yaml
 daml.js/
