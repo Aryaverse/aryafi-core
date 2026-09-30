@@ -123,8 +123,9 @@
             <ul class="check-list">
               <li>Bond-for-cash settlement that moves both sides in one transaction</li>
               <li>Runs on Canton 3.5, the version the Canton Network TestNet runs</li>
-              <li>290 automated tests; every change is also tested on a five-institution Canton network</li>
+              <li>296 automated tests; every change is also tested on a five-institution Canton network</li>
               <li>ISO 20022 payment and securities messages mapped to ledger requests</li>
+              <li>Cash and bond positions follow the Canton Network token standard, so wallets and apps can list them</li>
             </ul>
           </article>
           <article class="card status-card status-todo">
@@ -133,7 +134,7 @@
               <li>An independent security audit</li>
               <li>Institutions on different nodes agreeing a trade step by step (today every signer must be on the same node)</li>
               <li>Loans, repos and securities lending moving real assets (today they track the agreement only)</li>
-              <li>The Canton Network token standard (CIP-56)</li>
+              <li>Moving positions, and settling other tokens such as Canton Coin, through the token standard</li>
             </ul>
           </article>
         </div>
@@ -208,8 +209,8 @@
         </div>
         <p class="area-lead">Moves real assets on the ledger today.</p>
         <div class="grid grid-3">
-          <article class="card"><h3>Cash</h3><p>Tokenized deposits at a bank: split, merge, transfer with the receiver's consent, and lock for settlement.</p><code class="tech">CashPosition</code></article>
-          <article class="card"><h3>Securities</h3><p>Bonds and equities kept by a custodian, with the same locking and consent rules.</p><code class="tech">SecurityPosition</code></article>
+          <article class="card"><h3>Cash</h3><p>Tokenized deposits at a bank: split, merge, transfer with the receiver's consent, and lock for settlement. Listed by wallets as token-standard holdings.</p><code class="tech">CashPosition</code></article>
+          <article class="card"><h3>Securities</h3><p>Bonds and equities kept by a custodian, with the same locking and consent rules. Also token-standard holdings.</p><code class="tech">SecurityPosition</code></article>
           <article class="card"><h3>Delivery versus payment</h3><p>Swaps a locked security for locked cash in one transaction, after checking both against the signed terms.</p><code class="tech">DvpInstruction</code></article>
         </div>
       </section>
@@ -275,7 +276,7 @@
         </div>
         <ul class="todo-list todo-list-plain">
           <li><strong>Agreeing trades across nodes.</strong> Propose-and-accept steps, so the seller, buyer and agent can each sign from their own node.</li>
-          <li><strong>The Canton Network token standard (CIP-56).</strong> So AryaFi holdings work with other tokens and wallets on the network.</li>
+          <li><strong>Settling through the token standard.</strong> AryaFi positions already show up as token-standard holdings; next they move, and DvP settles other tokens, through its transfer and allocation interfaces.</li>
           <li><strong>Financing on real assets.</strong> Loans, repos and securities lending that lock and move the actual cash and securities.</li>
           <li><strong>An independent security audit</strong> of the finished core.</li>
         </ul>
@@ -301,7 +302,7 @@ git clone https://github.com/Aryaverse/aryafi-core.git
 cd aryafi-core
 dpm build --all
 
-# Run the 290 tests
+# Run the 296 tests
 cd daml/test
 dpm test --all</code></pre>
           <button class="btn btn-small" type="button" data-copy="quickstart-code">Copy</button>
