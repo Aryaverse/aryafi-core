@@ -124,6 +124,16 @@ jobs:
             echo "::endgroup::"
           done
 
+      # The runner used on TestNet (deploy/testnet), here without authentication.
+      # It uploads the production DAR through the JSON Ledger API and runs the
+      # smoke test on a participant that does not have the test package.
+      - name: Run the network smoke test against the dealer A participant
+        env:
+          LEDGER_HOST: localhost
+          LEDGER_PORT: "10032"
+          JSON_API_URL: http://localhost:10033
+        run: deploy/testnet/smoke-test.sh
+
       - name: Canton logs
         if: always()
         run: docker logs aryafi-canton-sandbox 2>&1 | tail -200

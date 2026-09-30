@@ -16,6 +16,9 @@ This release moves AryaFi Core to **Daml 3** (Daml SDK 3.5.12, Daml-LF 2.2) and 
 - **Reference topology** (`deploy/`) runs on Canton 3.5.19: one synchronizer (BFT sequencer and mediator) and five participants, each with a gRPC Ledger API (`xxx2`) and a JSON Ledger API (`xxx3`). The Docker image uses Java 21.
 - **CI** builds and tests with `dpm` (coverage across both packages with `dpm test --all`), and the `canton-topology` job runs the DvP suites on the Canton 3.5 topology.
 
+### Added
+- **TestNet readiness** ([deploy/testnet](deploy/testnet/README.md)): a network smoke test (`AryaFi.Test.Network.SmokeTest`) that allocates five run-scoped parties and settles one DvP, a runner script that uploads only the production DAR and supports JWT and TLS, and a runbook for a first run on the Canton Network TestNet. CI runs it against the `deploy/` topology.
+
 ### Web Terminal
 - The ISO 20022 hub shows **JSON Ledger API v2** requests (`/v2/commands/submit-and-wait`, `/v2/state/active-contracts`) with package-name template IDs, and the validator checks their structure: template ID form, command ID matching the message ID, and every signatory in `actAs`. Each request was accepted by a Canton 3.5 sandbox.
 

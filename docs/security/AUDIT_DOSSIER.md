@@ -80,7 +80,7 @@ Each invariant below is argued from the code and exercised by a named test. They
 
 | Measure | Result |
 |:---|:---|
-| Test scripts | 289, all passing |
+| Test scripts | 290, all passing |
 | Templates created | 26 of 27 (96.3%); `JurisdictionProfile` is never created |
 | Choices exercised | 138 of 206 (67.0%), counting each template's implicit `Archive` |
 
@@ -92,6 +92,7 @@ Each invariant below is argued from the code and exercised by a named test. They
 | `Authorization/` | 1 | Multi-signatory consent |
 | `Privacy/` | 1 | Observer visibility from each party's viewpoint |
 | `Integration/` | 1 | Cross-module workflows on a single ledger |
+| `Network/` | 1 | Smoke test for shared networks such as TestNet: five run-scoped parties, one DvP |
 
 Not yet covered: property-based tests, multi-participant tests on a real Canton topology, and concurrency/contention tests.
 
