@@ -92,9 +92,6 @@ template FinancialObligation
 
     ensure amount > 0.0
 
-    key (obligor, obligee, obligationRef) : (Party, Party, Text)
-    maintainer key._1
-
     -- | Record full discharge of this obligation.
     -- Called when the full amount has been paid and settled.
     -- Only the obligee can confirm discharge (the creditor confirms receipt).

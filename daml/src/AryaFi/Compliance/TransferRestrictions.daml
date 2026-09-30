@@ -90,9 +90,6 @@ template TransferRestrictionRule
   where
     signatory complianceOfficer
 
-    key (complianceOfficer, isin) : (Party, ISIN)
-    maintainer key._1
-
     -- | Update the regulatory category and lockup configuration.
     choice UpdateRestriction : ContractId TransferRestrictionRule
       with

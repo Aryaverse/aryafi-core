@@ -11,8 +11,9 @@
 --   - authority: issues, updates, and revokes attestations.
 --   - subjectParty: read-only observer — cannot control this contract.
 --
--- Key model: (authority, subjectParty) — one attestation per authority per subject.
--- Maintainer: authority (issuer of the attestation).
+-- One attestation per authority per subject is expected but not enforced on
+-- the ledger (Daml 3 has no unique contract keys); the authority is
+-- responsible for not issuing duplicates.
 module AryaFi.Compliance.KYC where
 
 import AryaFi.Common.Identifiers (LEI, ExternalRef)
@@ -45,9 +46,6 @@ data KycStatus
 --
 -- Dual-party model: authority is signatory; subjectParty is observer only.
 -- Additional observers can be granted visibility (e.g. custodians, clearing members).
---
--- The (authority, subjectParty) key prevents duplicate attestations and allows
--- counterparties to fetch-by-key when gating compliance checks.
 template KycAttestation
   with
     authority : Party
@@ -73,9 +71,6 @@ template KycAttestation
   where
     signatory authority
     observer subjectParty :: observers
-
-    key (authority, subjectParty) : (Party, Party)
-    maintainer key._1
 
     -- | Update the KYC status and extend the validity window.
     -- The verification timestamp is the current ledger time (cannot be backdated).
