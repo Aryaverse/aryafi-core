@@ -124,7 +124,7 @@ eligibilityCid <- submit agent do
 Positions are created as tokenized claims on the Canton ledger with dual-signatory custody:
 ```daml
 -- Seller creates US Treasury 4.25% Nov 2026 position (5M face value)
-sellerSecCid <- submitMulti [custodian, seller] [] do
+sellerSecCid <- submit (actAs [custodian, seller]) do
   createCmd SecurityPosition with
     custodian = custodian
     owner = seller
@@ -137,7 +137,7 @@ sellerSecCid <- submitMulti [custodian, seller] [] do
     ...
 
 -- Buyer creates USD cash position (5M) at the central bank
-buyerCashCid <- submitMulti [cashBank, buyer] [] do
+buyerCashCid <- submit (actAs [cashBank, buyer]) do
   createCmd CashPosition with
     bank = cashBank
     owner = buyer
@@ -151,17 +151,17 @@ buyerCashCid <- submitMulti [cashBank, buyer] [] do
 Both legs are locked to the settlement agent, which then delivers them in one transaction:
 ```daml
 -- Seller locks the bond; only the settlement agent can release or settle it from now on
-lockedSecCid <- submitMulti [seller, custodian] [] do
+lockedSecCid <- submit (actAs [seller, custodian]) do
   exerciseCmd sellerSecCid LockSecurity with lockRef = dvpLockRef; holder = agent
 
 -- Buyer carves out exactly the consideration (5M face x 99.5% = 4,975,000) and locks it
 (considerationCid, buyerRemainderCid) <- submit buyer do
   exerciseCmd buyerCashCid SplitCash with splitAmount = 4975000.0
-lockedCashCid <- submitMulti [buyer, cashBank] [] do
+lockedCashCid <- submit (actAs [buyer, cashBank]) do
   exerciseCmd considerationCid LockCash with lockRef = dvpLockRef; holder = agent
 
 -- Create DvP instruction (all three parties sign)
-dvpCid <- submitMulti [agent, seller, buyer] [] do
+dvpCid <- submit (actAs [agent, seller, buyer]) do
   createCmd DvpInstruction with
     settlementAgent = agent
     seller = seller
@@ -225,6 +225,7 @@ The reference application also includes a parallel DvP test demonstrating that t
 ## Scenario Verification
 To execute the complete multi-party test scenario:
 ```bash
-daml test --files daml/src/AryaFi/Test/Scenarios/TreasuryDvpScenario.daml
+cd daml/test
+dpm test --files AryaFi/Test/Scenarios/TreasuryDvpScenario.daml
 ```
-*Implemented in [TreasuryDvpScenario.daml](../../daml/src/AryaFi/Test/Scenarios/TreasuryDvpScenario.daml).*
+*Implemented in [TreasuryDvpScenario.daml](../../daml/test/AryaFi/Test/Scenarios/TreasuryDvpScenario.daml).*

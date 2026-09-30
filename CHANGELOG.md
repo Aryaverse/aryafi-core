@@ -5,6 +5,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [3.0.0] - 2026-09-30
+
+This release moves AryaFi Core to **Daml 3** (Daml SDK 3.5.12, Daml-LF 2.2) and **Canton 3.5**, the platform the Canton Network runs, as decided in [IMPROVEMENT_PLAN.md §2](docs/IMPROVEMENT_PLAN.md). It is a major version: the DAR no longer runs on Canton 2, contract keys are removed, and clients must use Ledger API v2. Template fields and choices are otherwise unchanged from v2.0.0. See [MIGRATION_GUIDE.md §6](docs/governance/MIGRATION_GUIDE.md) for upgrade notes.
+
+### Changed
+- **Platform.** Daml SDK 3.5.12, installed with `dpm`; Daml-LF 2.2; tested on Canton 3.5.19 with protocol version 35.
+- **Contract keys removed** from `Account`, `InstitutionalParty`, `FinancialObligation`, `KycAttestation`, `SanctionsAttestation`, `TransferRestrictionRule`, and `OwnershipRestriction`. Daml-LF 2.2 has no contract keys. The library never looked them up, but the ledger no longer rejects duplicates; see [KNOWN_LIMITATIONS.md §2](docs/KNOWN_LIMITATIONS.md).
+- **Separate test package.** The production package `aryafi-core` (in `daml/src`) no longer depends on `daml-script`; the tests are the `aryafi-core-test` package in `daml/test`. `multi-package.yaml` builds both with `dpm build --all`. Releases publish only the production DAR.
+- **Reference topology** (`deploy/`) runs on Canton 3.5.19: one synchronizer (BFT sequencer and mediator) and five participants, each with a gRPC Ledger API (`xxx2`) and a JSON Ledger API (`xxx3`). The Docker image uses Java 21.
+- **CI** builds and tests with `dpm` (coverage across both packages with `dpm test --all`), and the `canton-topology` job runs the DvP suites on the Canton 3.5 topology.
+
+### Added
+- **TestNet readiness** ([deploy/testnet](deploy/testnet/README.md)): a network smoke test (`AryaFi.Test.Network.SmokeTest`) that allocates five run-scoped parties and settles one DvP, a runner script that uploads only the production DAR and supports JWT and TLS, and a runbook for a first run on the Canton Network TestNet. CI runs it against the `deploy/` topology.
+
+### Web Terminal
+- The ISO 20022 hub shows **JSON Ledger API v2** requests (`/v2/commands/submit-and-wait`, `/v2/state/active-contracts`) with package-name template IDs, and the validator checks their structure: template ID form, command ID matching the message ID, and every signatory in `actAs`. Each request was accepted by a Canton 3.5 sandbox.
+
+### Fixed
+- The `expectFailure` test helper caught its own "expected failure but succeeded" abort, so it could never fail. It now uses `tryFailureStatus` and fails when the action succeeds.
+- The DvP test suite allocated the same party names in every test, which a Canton 3 ledger rejects; each test now allocates its own parties, so the suite runs against real participants.
+
+### Documentation
+- [LEDGER_API_CLIENT.md](docs/integration/LEDGER_API_CLIENT.md) rewritten for Ledger API v2: user tokens and rights, package-name template IDs, change-ID deduplication, update streams, and TypeScript and Python examples checked against a Canton 3.5 sandbox.
+- [MIGRATION_GUIDE.md §6](docs/governance/MIGRATION_GUIDE.md) covers moving from v2.0.0; the operations runbook uses Canton 3 upgrade checks (`dpm upgrade-check`).
+- README, user guide, platform specification, audit dossier, integration docs, and examples updated for `dpm`, the test package, and Canton 3.5.
+
+---
+
 ## [2.0.0] - 2026-09-29
 
 This release makes the library build, makes its test suite run, and corrects the behaviour and documentation that did not match the code. It is a major version because of the breaking contract changes below, as required by [VERSIONING_AND_RELEASE.md](docs/governance/VERSIONING_AND_RELEASE.md). **Breaking:** several choices changed controllers or arguments (listed under *Changed*); see [MIGRATION_GUIDE.md](docs/governance/MIGRATION_GUIDE.md) for upgrade notes.

@@ -1,17 +1,17 @@
 # AryaFi Core: Improvement Plan — Taking the Library to the Next Level
 
 **Audience:** engineering and product leads deciding what AryaFi Core builds next.
-**Baseline:** v2.0.0 (2026-09-29). **Companion documents:** [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) (what is true today) and the [Technical & Business Requirements](requirements/TECHNICAL_BUSINESS_REQUIREMENTS.md) (what the product must become).
+**Baseline:** v3.0.0 (2026-09-30), the first release on Daml 3 / Canton 3.5. **Companion documents:** [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) (what is true today) and the [Technical & Business Requirements](requirements/TECHNICAL_BUSINESS_REQUIREMENTS.md) (what the product must become).
 
 ---
 
 ## 1. Where We Are
 
-v2.0.0 made the library honest and working. It builds with `-Wall -Werror`, 289 test scripts pass, and atomic DvP moves real positions on a real Canton 2.10 topology. Authorization defects are fixed: receiver-authorized transfers, locks held by a named lock holder, and no party able to reduce its own obligation. The docs and web terminal now describe the code as it is.
+v2.0.0 made the library honest and working, and v3.0.0 moved it to Daml 3 / Canton 3.5, the platform the Canton Network runs. It builds with `-Wall -Werror`, 290 test scripts pass, and atomic DvP moves real positions on a real five-participant Canton 3.5 topology. Authorization defects are fixed: receiver-authorized transfers, locks held by a named lock holder, and no party able to reduce its own obligation. The docs and web terminal now describe the code as it is.
 
-What v2.0.0 is **not** yet is what the requirements call for: *"software infrastructure — not a collection of sample contracts."* Today, only DvP composes primitives. Every other workflow (loan, repo, securities lending, margin, pledge, escrow, subscription, redemption, transfer) is a standalone status record that references assets by text. Compliance policies are correct but cannot be called from those workflows. Every multi-party contract depends on co-submission, which does not work across separate participants.
+What v3.0.0 is **not** yet is what the requirements call for: *"software infrastructure — not a collection of sample contracts."* Today, only DvP composes primitives. Every other workflow (loan, repo, securities lending, margin, pledge, escrow, subscription, redemption, transfer) is a standalone status record that references assets by text. Compliance policies are correct but cannot be called from those workflows. Every multi-party contract depends on co-submission, which does not work across separate participants.
 
-| Requirement (TBRD) | v2.0.0 | Gap closed by |
+| Requirement (TBRD) | v3.0.0 | Gap closed by |
 |:---|:---|:---|
 | Composable primitives (§5, §9) | DvP composes Cash + Security; nothing else does | Workstreams 1, 4 |
 | Synchronized DvP (§3, §26) | Done, Model 1, single-participant tested | Workstream 2 (cross-participant) |
@@ -25,9 +25,11 @@ What v2.0.0 is **not** yet is what the requirements call for: *"software infrast
 
 ---
 
-## 2. The Decision to Make First: Target Platform
+## 2. Target Platform (decided: Option B)
 
-Everything below depends on one choice, and it should be made before Workstream 1 starts.
+**Decided 2026-09-30: Option B.** v3.0.0 moves the library to Daml SDK 3.5 (Daml-LF 2.2) and Canton 3.5: the seven contract keys are removed, the tests are a separate package, and the `deploy/` topology and CI run on Canton 3.5.19. Aligning holdings and DvP with CIP-56 is Workstream 1, the next step.
+
+The options as they were weighed:
 
 | Option | What it means | Consequences |
 |:---|:---|:---|
@@ -45,7 +47,7 @@ Everything below depends on one choice, and it should be made before Workstream 
 **1. Holdings standard.** Replace the three separate position templates (`CashPosition`, `SecurityPosition`, `AssetHolding`) with one holding model behind interfaces: *Holding* (view: owner, instrument, amount, custodian), *Lockable* (lock to a holder), and *Transferable*. On Option B, implement the CIP-56 holding and allocation interfaces. Everything else in the library will hold and move assets through these interfaces.
 *Done when:* every workflow that moves value does so through a holding interface, and DvP settles any pair of holdings (cash for security, security for security).
 
-**2. Propose/accept for every multi-signatory workflow.** Add a proposal template (or a delegation role contract) for each agreement that today needs `submitMulti`: DvP instructions, loans, repos, securities loans, margin calls, pledges, payment instructions, transfers. This is what makes the library usable across separate participants; it is the single largest blocker to real deployment.
+**2. Propose/accept for every multi-signatory workflow.** Add a proposal template (or a delegation role contract) for each agreement that today needs multi-party submission: DvP instructions, loans, repos, securities loans, margin calls, pledges, payment instructions, transfers. This is what makes the library usable across separate participants; it is the single largest blocker to real deployment.
 *Done when:* the reference scenarios run with each institution's party on its own participant in `deploy/` (see Workstream 7).
 
 **3. Compliance as composable policy.** Turn the compliance modules into an interface, e.g. `evaluate : Context -> PolicyDecision`, that business workflows call inside their own transactions. Share policy and attestation contracts with the workflows that need them via explicit contract disclosure. Then:
@@ -91,11 +93,11 @@ The requirements' own market evidence (90% of surveyed banks see rising collater
 - Concurrency tests for contention on the same holding, for example two settlements racing for one position.
 - A coverage gate in CI: choices exercised from 67% today to at least 90%, with every template created in tests (`JurisdictionProfile` is not today).
 
-**10. Packaging and upgrades.** Split the build into a production package and a test package (multi-package build), so `daml-script` and test code are not in the production DAR. Design templates for Daml's smart contract upgrade feature. Publish a compatibility matrix and a release assurance report per release (§19, §20).
+**10. Packaging and upgrades.** ~~Split the build into a production package and a test package~~ (done in v3.0.0). Canton 3 validates every release of `aryafi-core` as an upgrade of the previous one, so run `dpm upgrade-check` against the last released DAR in CI, and design templates so later releases stay upgrade-compatible. Publish a compatibility matrix and a release assurance report per release (§19, §20).
 
 **11. Developer experience.** Generate TypeScript and Java bindings (codegen) and publish them with each release. Ship reference adapters (payments, custody, KYC) against the stable event schema, and a reconciliation service that compares the ledger to external books of record.
 
-**12. Live web terminal.** Connect the terminal to a sandbox through the JSON API, so scenarios run for real and each participant's view shows the contracts it actually stores. This turns the site from an explanation into a demonstration buyers and auditors can check.
+**12. Live web terminal.** Connect the terminal to a sandbox through the JSON Ledger API, so scenarios run for real and each participant's view shows the contracts it actually stores. This turns the site from an explanation into a demonstration buyers and auditors can check.
 
 **13. Independent security review.** Commission the review against the audit dossier once Phase 1 is complete, fix findings, and promote module maturity labels based on the result (`Production Candidate`, then `Production Reviewed`). Legal review of default, closeout, and pledge semantics runs in parallel (§10, §31).
 
@@ -105,7 +107,7 @@ The requirements' own market evidence (90% of surveyed banks see rising collater
 
 | Order | Workstream | Depends on | Size (2–4 Daml engineers) |
 |:---:|:---|:---|:---|
-| 0 | Platform decision (§2) | — | 1 week |
+| 0 | Platform decision (§2) and move to Daml 3 / Canton 3.5 | — | Done (v3.0.0) |
 | 1 | Holdings standard (1) | Decision | 3–4 weeks |
 | 2 | Propose/accept (2) | 1 | 2–3 weeks |
 | 3 | Composable compliance (3) | 1, 2 | 3–4 weeks |

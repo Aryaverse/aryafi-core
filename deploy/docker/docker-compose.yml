@@ -15,19 +15,25 @@ services:
     hostname: canton-sandbox
     restart: unless-stopped
     ports:
-      # Domain Public & Admin APIs
+      # Synchronizer: sequencer public & admin APIs, mediator admin API
       - "5018:5018"
       - "5019:5019"
-      # Participant Ledger APIs
+      - "5020:5020"
+      # Participant gRPC Ledger APIs (xxx2) and JSON Ledger APIs (xxx3)
       - "10012:10012"  # Bank Node (CashSettlementBank)
+      - "10013:10013"
       - "10022:10022"  # Custodian Node (GlobalCustodian)
+      - "10023:10023"
       - "10032:10032"  # Dealer A Node (DealerBankA)
+      - "10033:10033"
       - "10042:10042"  # Dealer B Node (DealerBankB)
+      - "10043:10043"
       - "10052:10052"  # Regulator Node (SupervisoryAuthority)
+      - "10053:10053"
     volumes:
       - ../../deploy/canton/canton.conf:/canton/config/canton.conf:ro
       - ../../deploy/docker/bootstrap.sh:/canton/scripts/bootstrap.sh:ro
-      # Output of `daml build`; every .dar found here is uploaded at startup.
+      # Production DAR from `dpm build --all`; every .dar found here is uploaded at startup.
       - ../../.daml/dist:/canton/dars:ro
     environment:
       - JAVA_OPTS=-Xms1g -Xmx2g -XX:+UseG1GC

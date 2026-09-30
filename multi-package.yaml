@@ -1,0 +1,6 @@
+# Production templates (aryafi-core) and their Daml Script tests
+# (aryafi-core-test) are separate packages, so the production DAR does not
+# depend on daml-script.
+packages:
+  - .
+  - ./daml/test

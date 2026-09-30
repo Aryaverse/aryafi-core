@@ -32,7 +32,7 @@ The adapter architecture enforces a strict **separation of concerns**:
                     └──────────────┬──────────────────────────┴──────────────┘
                                    │                          ▲
                            Command Submission         Transaction Stream
-                           (gRPC submitMulti)         (ACS & Updates)
+                           (gRPC multi-party)         (ACS & Updates)
                                    │                          │
                                    ▼                          │
                     ┌────────────────────────────────────────────────────────┐
@@ -88,7 +88,7 @@ The `DtcDvPAdapter` coordinates atomic Delivery-versus-Payment between tokenized
        Buyer / Seller Desk              DtcDvPAdapter                   Canton Network
               │                               │                               │
               │  1. Initiate DvP Trade        │                               │
-              │──────────────────────────────>│  2. submitMulti create        │
+              │──────────────────────────────>│  2. multi-party create        │
               │                               │     DvpInstruction            │
               │                               │──────────────────────────────>│
               │                               │                               │

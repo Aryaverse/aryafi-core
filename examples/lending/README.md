@@ -33,7 +33,7 @@ Institutional counterparties establish verified identity and clear sanctions sta
 ### 2. Collateral Perfection (`AssetPledge`)
 Borrower pledges eligible collateral (e.g. 12,000,000 face value US Treasuries) under custody:
 ```daml
-pledgeCid <- submitMulti [borrower, lender, custodian] [] do
+pledgeCid <- submit (actAs [borrower, lender, custodian]) do
   createCmd AssetPledge with
     pledgeId = "PLEDGE-UST-2026-BX01"
     pledgor = borrower
@@ -53,7 +53,7 @@ pledgeCid <- submitMulti [borrower, lender, custodian] [] do
 Lender and Borrower create the bilateral credit facility and link the collateral perfection:
 ```daml
 -- Originate facility with 10M limit and 5M initial drawn
-loanCid <- submitMulti [lender, borrower] [] do
+loanCid <- submit (actAs [lender, borrower]) do
   createCmd InstitutionalLoan with
     loanId = "FACILITY-2026-BX-01"
     lender = lender
@@ -119,6 +119,7 @@ pledgeCidReleased <- submit lender do
 ## Scenario Verification
 To execute the complete multi-party test scenario:
 ```bash
-daml test --files daml/src/AryaFi/Test/Scenarios/SecuredLoanScenario.daml
+cd daml/test
+dpm test --files AryaFi/Test/Scenarios/SecuredLoanScenario.daml
 ```
-*Implemented in [SecuredLoanScenario.daml](../../daml/src/AryaFi/Test/Scenarios/SecuredLoanScenario.daml).*
+*Implemented in [SecuredLoanScenario.daml](../../daml/test/AryaFi/Test/Scenarios/SecuredLoanScenario.daml).*

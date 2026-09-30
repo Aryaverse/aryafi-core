@@ -71,9 +71,6 @@ template Account
     signatory custodian, owner
     observer observers
 
-    key (custodian, accountId) : (Party, AccountId)
-    maintainer key._1
-
     -- | Freeze this account, preventing any asset movements in or out.
     -- Only the custodian can freeze an account (e.g. due to regulatory hold or dispute).
     choice FreezeAccount : ContractId Account
