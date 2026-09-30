@@ -80,13 +80,13 @@ Each invariant below is argued from the code and exercised by a named test. They
 
 | Measure | Result |
 |:---|:---|
-| Test scripts | 290, all passing |
+| Test scripts | 296, all passing |
 | Templates created | 26 of 27 (96.3%); `JurisdictionProfile` is never created |
 | Choices exercised | 138 of 206 (67.0%), counting each template's implicit `Archive` |
 
 | Suite | Files | Focus |
 |:---|:---|:---|
-| `Unit/` | 11 | Types, day counts, primitives, contracts, compliance policies |
+| `Unit/` | 12 | Types, day counts, primitives, contracts, compliance policies, token-standard holding views |
 | `Scenarios/` | 9 | End-to-end DvP, repo, loan, securities lending, treasury, escrow, private credit, transfer |
 | `Negative/` | 3 | Unauthorized submitters, compliance violations, invalid state transitions |
 | `Authorization/` | 1 | Multi-signatory consent |
@@ -119,7 +119,7 @@ cd daml/test
 dpm test --all --show-coverage
 
 # 3. Inspect the production DAR
-dpm inspect-dar ../../.daml/dist/aryafi-core-3.0.0.dar
+dpm inspect-dar ../../.daml/dist/aryafi-core-3.1.0.dar
 
 # 4. Run specific security and privacy suites (--files selects a test module;
 #    --test-pattern would match script names, not file names)
