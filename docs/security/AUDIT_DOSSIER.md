@@ -11,7 +11,7 @@ This dossier is the briefing package for an independent security review of **Ary
   - `daml/src/AryaFi/Finance/`: `CashPosition`, `SecurityPosition`, `AssetHolding`, `Account`, `InstitutionalParty`, `CollateralPosition`, `FinancialObligation`, `PaymentInstruction`, `DvpInstruction`.
   - `daml/src/AryaFi/Contracts/`: `InstitutionalLoan`, `RepoAgreement`, `ReverseRepoPosition`, `SecuritiesLendingAgreement`, `MarginCall`, `AssetPledge`, `ConditionalEscrow`, `AssetTransferRequest`, `FundSubscription`, `AssetRedemption`.
   - `daml/src/AryaFi/Compliance/`: `KycAttestation`, `SanctionsAttestation`, `JurisdictionProfile`, `EligibilityPolicy`, `TransferRestrictionRule`, `OwnershipRestriction`, `RegulatoryReportRecord`.
-- **Out of scope**: the test package under `daml/test/AryaFi/Test/`, the web terminal, and the deployment configuration.
+- **Out of scope**: the test package under `daml/test/AryaFi/Test/`, the website, and the deployment configuration.
 - **Authorization reference**: [AUTHORIZATION_MATRIX.md](AUTHORIZATION_MATRIX.md), generated from the source.
 - **Target release**: `v2.0.0`
 
