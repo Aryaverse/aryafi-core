@@ -5,10 +5,10 @@
 [![Release](https://img.shields.io/badge/Release-v3.0.0-purple.svg)](CHANGELOG.md)
 [![Tests](https://img.shields.io/badge/dpm_test-290_passing-brightgreen.svg)](daml/test/AryaFi/Test)
 [![Status](https://img.shields.io/badge/Status-Beta_/_Experimental-orange.svg)](docs/KNOWN_LIMITATIONS.md)
-[![Vercel Deployment](https://img.shields.io/badge/Vercel-Live_Terminal-black.svg?logo=vercel)](https://aryafi-core.vercel.app)
+[![Website](https://img.shields.io/badge/Vercel-Website-black.svg?logo=vercel)](https://aryafi-core.vercel.app)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-🌐 **Live Institutional Digital Asset Terminal & Canton Explorer**: **[https://aryafi-core.vercel.app](https://aryafi-core.vercel.app)**  
+🌐 **Website, with a step-by-step trade walkthrough**: **[https://aryafi-core.vercel.app](https://aryafi-core.vercel.app)**  
 📖 **Comprehensive User & Operator Guide**: **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)**  
 📐 **Platform & Smart Contract Specification**: **[docs/PLATFORM_SPECIFICATION.md](docs/PLATFORM_SPECIFICATION.md)**  
 
@@ -18,34 +18,14 @@
 
 ---
 
-## Interactive Institutional Web Terminal (Live on Vercel)
+## Website (Live on Vercel)
 
-The web terminal at **[https://aryafi-core.vercel.app](https://aryafi-core.vercel.app)** explains the library's topology and replays its test scenarios step by step. It is a **scripted simulation**: it does not connect to a ledger. Its code viewer loads the real Daml source from this repository.
+**[https://aryafi-core.vercel.app](https://aryafi-core.vercel.app)** explains AryaFi Core in plain language for the people evaluating it, with the technical detail one click away:
 
-```
-+-----------------------------------------------------------------------------------------+
-|  AryaFi Core | Institutional Digital Asset Terminal & Canton Explorer                   |
-|  [ Topology ] [ Simulator ] [ Contracts & Math ] [ ISO 20022 Hub ] [ Security ] [ Code ]|
-+-----------------------------------------------------------------------------------------+
-|  • Canton Network Topology: Interactive SVG map of 5 segregated participant nodes       |
-|  • Scenario Simulator: Scripted replay of the DvP, Securities Lending & Treasury tests   |
-|  • Split Calculator: SplitCash value conservation in exact 10-dp Decimal arithmetic     |
-|  • ISO 20022 Hub: MX messages mapped to JSON Ledger API requests, with real field checks|
-|  • Security & Rules: STRIDE threat model, regulatory mapping (not independently audited)|
-|  • Daml Code Dossier: Loads the actual module source from this repository              |
-|  • Institutional Themes: Crisp Light Mode (default) & White-on-Black Dark Mode toggle   |
-+-----------------------------------------------------------------------------------------+
-```
-
-### Key Terminal Features:
-1. **Canton Multi-Participant Topology Visualizer**: The five-participant reference topology from [`deploy/`](deploy/canton/canton.conf): Cash Settlement Bank, Global Custodian / Settlement Agent, Dealer Bank A, Dealer Bank B, and Supervisory Authority, with each node's hosted party, endpoint, and privacy boundary.
-2. **Multi-Party Lifecycle Simulator**: Step through scripted replays of the library's scenario tests:
-   * **Tokenized US Treasury + Cash DvP** (both legs locked to the settlement agent and delivered atomically, followed by a regulatory report record)
-   * **Institutional Securities Lending** (102% cash collateral pledge, Act/360 fee accrual, mark-to-market revaluations, and recalls)
-   * **Treasury Cash Mobility & Zero-Balance Sweeps** (surplus identification, concentration pool consolidation, and SWIFT UETR payment tracing)
-3. **Split Conservation Calculator**: Illustrates `SplitCash` using the same exact 10-decimal-place arithmetic as Daml `Decimal` (JavaScript floats would drift). The on-ledger behaviour is covered by the Daml tests.
-4. **ISO 20022 Financial Messaging Hub**: `pacs.008`, `sese.023`, `camt.053`, and `semt.002` messages side by side with the JSON Ledger API (v2) request each maps to. The validator runs real checks: XML well-formedness, required elements, ISIN (ISO 6166) and LEI (ISO 17442) check digits, UETR format, currency codes, and XML/JSON consistency.
-5. **Daml Source Viewer**: Loads `Cash.daml`, `Security.daml`, `Settlement.daml`, `Collateral.daml`, `Loan.daml`, `Repo.daml`, and `TransferRestrictions.daml` directly from this repository, so it always shows the current code.
+1. **Overview**: what the library does, why it matters (neither side pays first, only the right party can act, each firm sees only its own business), who takes part in a trade, and an honest *works today / not yet* status.
+2. **See a trade settle**: a step-by-step replay of the tested bond-for-cash scenario (`TreasuryDvpScenario`). Cards show what each of the six institutions holds and stores at every step; **Whose view?** hides everything a chosen institution's node does not store; **What if…?** tries what the contracts prevent (a seller taking back a locked bond, a short delivery, an agent cancelling alone, settling twice), each backed by a named test in `DvpSettlementTest`. It is a replay, not a live ledger.
+3. **What's inside**: settlement, financing and compliance contracts in plain words, each area labelled Beta or Experimental, what comes next, and a collateral calculator.
+4. **Developers**: quick start, running on a local Canton network or TestNet, ISO 20022 messages (`pacs.008`, `sese.023`, `camt.053`, `semt.002`) next to the JSON Ledger API v2 request each becomes with real checks (XML, ISIN and LEI check digits, UETR, currency, XML/JSON consistency), the contract source loaded from this repository, and links to the documentation.
 
 ---
 
@@ -84,9 +64,9 @@ The web terminal at **[https://aryafi-core.vercel.app](https://aryafi-core.verce
 
 ```
 aryafi-core/
-├── index.html                     # Institutional Web Terminal (HTML5 / WAI-ARIA)
-├── styles.css                     # Institutional Dark/Light Design System
-├── app.js                         # Interactive Canton Terminal & Simulator Logic
+├── index.html                     # Website: overview, trade walkthrough, contents, developer tools
+├── styles.css                     # Website styles (light and dark themes)
+├── app.js                         # Website logic: views, trade replay, ISO 20022 checks, source viewer
 ├── vercel.json                    # Production Vercel Deployment & Security Headers
 ├── daml.yaml                      # Production package (aryafi-core), Daml SDK 3.5.12
 ├── multi-package.yaml             # Builds the production and test packages together
@@ -116,7 +96,7 @@ aryafi-core/
 │   ├── canton/canton.conf         # Multi-participant Canton topology (5 nodes)
 │   └── docker/                    # Containerized multi-node Canton testing sandbox
 ├── docs/
-│   ├── USER_GUIDE.md              # Complete Web Terminal & Operator User Guide
+│   ├── USER_GUIDE.md              # Website guide and local development
 │   ├── PLATFORM_SPECIFICATION.md  # Mathematical formulas, contract matrix & architecture
 │   ├── KNOWN_LIMITATIONS.md       # What the library does not do yet (read first)
 │   ├── IMPROVEMENT_PLAN.md        # Next-level product and engineering plan
@@ -201,7 +181,7 @@ docker compose ps
 
 | Category | Guide | Description |
 |:---|:---|:---|
-| **User & Operations** | **[User Guide](docs/USER_GUIDE.md)** | Step-by-step user guide for the live Vercel web terminal & simulator |
+| **User & Operations** | **[User Guide](docs/USER_GUIDE.md)** | Guide to the website and to running the library locally |
 | | **[Known Limitations](docs/KNOWN_LIMITATIONS.md)** | Maturity status and what the library does not do yet |
 | | **[Improvement Plan](docs/IMPROVEMENT_PLAN.md)** | Next-level product and engineering plan |
 | | **[Platform Specification](docs/PLATFORM_SPECIFICATION.md)** | Formulas, contract matrix & architecture manual |
