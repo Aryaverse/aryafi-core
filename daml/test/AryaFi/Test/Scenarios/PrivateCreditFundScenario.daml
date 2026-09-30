@@ -1,0 +1,259 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Institutional Private Credit & Tokenized Fund Reference Application.
+--
+-- Demonstrates the complete capital lifecycle for institutional funds & private credit:
+--
+-- Participants:
+--   - FundManager:           General Partner (ApolloGlobalManagement)
+--   - InstitutionalInvestor: Limited Partner / Sovereign Wealth Fund (GICSingapore)
+--   - Custodian:             Fund Custodian & Transfer Agent (StateStreet)
+--   - KycAuthority:          Institutional KYC Registry
+--   - SanctionsAuthority:    Sanctions Screening Provider
+--   - Regulator:             SEC / Monetary Authority
+--
+-- Lifecycle Workflow:
+--   Phase 1 — Investor Onboarding & Compliance Attestation
+--     1. Institutional KYC Attestation (Tier 3 Institutional)
+--     2. Sanctions clearance screening
+--   Phase 2 — Capital Commitment & Subscription
+--     3. LP submits 50M USD commitment into Apollo Direct Lending Fund
+--     4. GP approves subscription commitment
+--   Phase 3 — Tranche 1 Capital Call & Funding
+--     5. GP issues 20M capital call for deal pipeline deployment
+--     6. Custodian confirms cash funding and allocates 20,000 LP units
+--   Phase 4 — Tranche 2 Final Capital Call
+--     7. GP calls remaining 30M capital
+--     8. Custodian confirms funding; subscription auto-transitions to FullyFunded
+--   Phase 5 — Valuation & Capital Redemption
+--     9. Fund NAV increases to 1,120 USD/unit
+--     10. LP submits redemption request for 10,000 units
+--     11. GP approves at official NAV with fee deduction (net payout = 11,144,000 USD)
+--     12. Custodian settles cash payout via Fedwire
+--   Phase 6 — Liquidity Gate Enforcement
+--     13. Demonstrates liquidity gating when redemption capacity limits are reached
+module AryaFi.Test.Scenarios.PrivateCreditFundScenario where
+
+import Daml.Script
+import AryaFi.Compliance.KYC
+import AryaFi.Compliance.Sanctions
+import AryaFi.Contracts.Subscription
+import AryaFi.Contracts.Redemption
+import AryaFi.Common.Identifiers
+import DA.Date (date, Month(..))
+import DA.Time (time)
+
+testPrivateCreditFundLifecycle : Script ()
+testPrivateCreditFundLifecycle = script do
+
+  -- =========================================================================
+  -- Party Allocation
+  -- =========================================================================
+  gp <- allocateParty "ApolloFundManager"
+  lp <- allocateParty "GICSingaporeLP"
+  custodian <- allocateParty "StateStreetFundServices"
+  kycAuth <- allocateParty "GlobalKycRegistry"
+  sanctionsAuth <- allocateParty "OFACSanctionsProvider"
+  regulator <- allocateParty "SEC"
+
+  let now = time (date 2026 Sep 1) 9 0 0
+
+  setTime now
+  let expiryDate = time (date 2027 Sep 1) 9 0 0
+  let _settleDate = time (date 2026 Dec 15) 15 0 0
+
+  -- =========================================================================
+  -- Phase 1: Investor Onboarding & Compliance Verification
+  -- =========================================================================
+  lpKycCid <- submit kycAuth do
+    createCmd KycAttestation with
+      authority = kycAuth
+      subjectParty = lp
+      lei = Some (LEI "5493000ABCD123456789")
+      status = KycVerified
+      verificationTimestamp = now
+      expiryTimestamp = expiryDate
+      jurisdiction = "SG"
+      riskTier = "Tier3Institutional (risk score 5)"
+      providerRef = Some (ExternalRef "KYC-GIC-2026-001")
+      observers = [regulator]
+
+  lpSanctionsCid <- submit sanctionsAuth do
+    createCmd SanctionsAttestation with
+      screeningAuthority = sanctionsAuth
+      subjectParty = lp
+      lei = None
+      status = SanctionsClear
+      screeningTimestamp = now
+      expiryTimestamp = expiryDate
+      screeningProviderRef = "SCREEN-GIC-2026-01" <> " lists: " <> show (["OFAC_SDN", "EU_CONSOLIDATED", "UN_SANCTIONS"] : [Text])
+      providerRef = Some (ExternalRef "SANC-GIC-001")
+      observers = [regulator]
+
+  isKycValid <- submit kycAuth do exerciseCmd lpKycCid IsKycValid
+  isClear <- submit sanctionsAuth do exerciseCmd lpSanctionsCid IsSanctionsClear
+  assertMsg "LP KYC must be valid" isKycValid
+  assertMsg "LP must be sanctions clear" isClear
+
+  -- =========================================================================
+  -- Phase 2: Capital Commitment & Subscription
+  -- =========================================================================
+  subCid <- submit (actAs [gp, lp]) do
+    createCmd FundSubscription with
+      subscriptionId = "SUB-APOLLO-GIC-01"
+      fundManager = gp
+      investor = lp
+      custodian = custodian
+      fundId = "FUND-APOLLO-DL-III"
+      fundName = "Apollo Senior Direct Lending Fund III"
+      currency = "USD"
+      committedAmount = 50000000.0 -- 50M USD commitment
+      calledAmount = 0.0
+      fundedAmount = 0.0
+      unitsIssued = 0.0
+      unitPrice = 1000.0 -- 1,000 USD par value
+      status = SubscriptionRequested
+      rejectionReason = None
+      correlationId = CorrelationId "CORR-FUND-APOLLO-001"
+      observers = [regulator]
+
+  -- GP approves subscription
+  subCidApproved <- submit gp do
+    exerciseCmd subCid ApproveSubscription
+
+  Some subApproved <- queryContractId lp subCidApproved
+  assertMsg "Subscription must be Approved" (subApproved.status == SubscriptionApproved)
+
+  -- =========================================================================
+  -- Phase 3: Tranche 1 Capital Call & Funding
+  -- =========================================================================
+  -- GP calls 20M USD
+  subCidCall1 <- submit gp do
+    exerciseCmd subCidApproved IssueCapitalCall with
+      callAmount = 20000000.0
+
+  -- Custodian confirms receipt of 20M cash and issues 20,000 LP units
+  subCidFunded1 <- submit custodian do
+    exerciseCmd subCidCall1 ConfirmCapitalFunding with
+      paymentRef = "WIRE-FED-GIC-001"
+      fundedPaymentAmount = 20000000.0
+      newUnitsAllocated = 20000.0
+
+  Some subAfterCall1 <- queryContractId lp subCidFunded1
+  assertMsg "Funded amount must be 20M" (subAfterCall1.fundedAmount == 20000000.0)
+  assertMsg "Units issued must be 20,000" (subAfterCall1.unitsIssued == 20000.0)
+  assertMsg "Status must be PartiallyFunded" (subAfterCall1.status == SubscriptionPartiallyFunded)
+
+  -- =========================================================================
+  -- Phase 4: Tranche 2 Final Capital Call
+  -- =========================================================================
+  -- GP calls remaining 30M USD
+  subCidCall2 <- submit gp do
+    exerciseCmd subCidFunded1 IssueCapitalCall with
+      callAmount = 30000000.0
+
+  -- Custodian confirms remaining 30M funding and issues 30,000 units
+  subCidFunded2 <- submit custodian do
+    exerciseCmd subCidCall2 ConfirmCapitalFunding with
+      paymentRef = "WIRE-FED-GIC-002"
+      fundedPaymentAmount = 30000000.0
+      newUnitsAllocated = 30000.0
+
+  Some subFinal <- queryContractId lp subCidFunded2
+  assertMsg "Funded amount must equal 50M" (subFinal.fundedAmount == 50000000.0)
+  assertMsg "Units issued must equal 50,000" (subFinal.unitsIssued == 50000.0)
+  assertMsg "Status must be FullyFunded" (subFinal.status == SubscriptionFullyFunded)
+
+  -- =========================================================================
+  -- Phase 5: Valuation & Capital Redemption
+  -- =========================================================================
+  -- LP submits redemption request for 10,000 units with 0.5% fee
+  redCid <- submit (actAs [gp, lp]) do
+    createCmd AssetRedemption with
+      redemptionId = "RED-APOLLO-GIC-01"
+      fundManager = gp
+      investor = lp
+      custodian = custodian
+      fundId = "FUND-APOLLO-DL-III"
+      fundName = "Apollo Senior Direct Lending Fund III"
+      unitsToRedeem = 10000.0
+      currency = "USD"
+      struckNavPerUnit = None
+      settlementPayout = None
+      redemptionFeeRate = 0.005 -- 50 bps fee
+      requestDate = now
+      settlementDate = None
+      status = RedemptionRequested
+      correlationId = CorrelationId "CORR-RED-APOLLO-001"
+      observers = [regulator]
+
+  -- GP strikes official NAV at 1,120.00 USD/unit
+  -- Gross = 10,000 * 1,120 = 11,200,000 USD
+  -- Fee = 11,200,000 * 0.005 = 56,000 USD
+  -- Net = 11,144,000 USD
+  redCidApproved <- submit gp do
+    exerciseCmd redCid ApproveRedemption with
+      officialNav = 1120.0
+
+  Some redApproved <- queryContractId lp redCidApproved
+  assertMsg "Official NAV must be 1120.0" (redApproved.struckNavPerUnit == Some 1120.0)
+  assertMsg "Net payout must equal 11,144,000 USD" (redApproved.settlementPayout == Some 11144000.0)
+
+  -- Custodian executes Fedwire cash payout
+  redCidSettled <- submit custodian do
+    exerciseCmd redCidApproved ExecuteRedemptionSettlement with
+      paymentRef = "FEDWIRE-RED-GIC-PAYOUT-01"
+
+  Some redFinal <- queryContractId lp redCidSettled
+  assertMsg "Redemption must be Settled" (redFinal.status == RedemptionSettled "FEDWIRE-RED-GIC-PAYOUT-01" 11144000.0)
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- Scenario: Liquidity Gating Workflow
+-- ---------------------------------------------------------------------------
+
+testLiquidityGatingScenario : Script ()
+testLiquidityGatingScenario = script do
+  gp <- allocateParty "FundManagerGP"
+  lp <- allocateParty "RedeemingLP"
+  custodian <- allocateParty "FundCustodian"
+
+  let now = time (date 2026 Sep 1) 9 0 0
+
+  setTime now
+
+  redCid <- submit (actAs [gp, lp]) do
+    createCmd AssetRedemption with
+      redemptionId = "RED-GATE-TEST-01"
+      fundManager = gp
+      investor = lp
+      custodian = custodian
+      fundId = "FUND-GATE-01"
+      fundName = "AryaFi Gated Fund"
+      unitsToRedeem = 25000.0
+      currency = "USD"
+      struckNavPerUnit = None
+      settlementPayout = None
+      redemptionFeeRate = 0.0
+      requestDate = now
+      settlementDate = None
+      status = RedemptionRequested
+      correlationId = CorrelationId "CORR-GATE-01"
+      observers = []
+
+  -- GP applies liquidity gate
+  redCidGated <- submit gp do
+    exerciseCmd redCid ApplyLiquidityGate with
+      gateReason = "Quarterly investor gate limit reached (aggregate requests exceed 10% of vehicle NAV)"
+
+  Some gatedRed <- queryContractId lp redCidGated
+  assertMsg "Status must be Gated" (gatedRed.status == RedemptionGated "Quarterly investor gate limit reached (aggregate requests exceed 10% of vehicle NAV)")
+
+  -- GP releases gate
+  redCidReleased <- submit gp do
+    exerciseCmd redCidGated ReleaseLiquidityGate
+
+  Some releasedRed <- queryContractId lp redCidReleased
+  assertMsg "Status must revert to Requested" (releasedRed.status == RedemptionRequested)
+  pure ()
