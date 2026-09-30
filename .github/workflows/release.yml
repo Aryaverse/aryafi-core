@@ -20,6 +20,25 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # The release notes are the CHANGELOG.md section for this version, with
+      # relative links made absolute (they would break on the release page).
+      # Runs first so a release without a CHANGELOG entry fails before building.
+      - name: Extract Release Notes from CHANGELOG
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          BLOB="https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}"
+          awk -v v="$VERSION" '
+            index($0, "## [" v "]") == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md \
+            | sed -E -e '/^---$/d' \
+                     -e "s#\]\(((docs|deploy|examples|daml|scripts)/[^)]*|[A-Z_]+\.md[^)]*)\)#](${BLOB}/\1)#g" \
+            > release-notes.md
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            echo "CHANGELOG.md has no entry for $VERSION"; exit 1
+          fi
+
       - name: Set up Java (required by the Daml Script test runner)
         uses: actions/setup-java@v4
         with:
@@ -68,6 +87,6 @@ jobs:
           files: |
             release-artifacts/*.dar
             release-artifacts/*.sha256
-          generate_release_notes: true
+          body_path: release-notes.md
           draft: false
           prerelease: false
