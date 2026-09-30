@@ -1,0 +1,13 @@
+sdk-version: 3.5.12
+name: aryafi-core-test
+source: .
+version: 3.0.0
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - daml-script
+data-dependencies:
+  - ../../.daml/dist/aryafi-core-3.0.0.dar
+build-options:
+  - --ghc-option=-Wall
+  - --ghc-option=-Werror

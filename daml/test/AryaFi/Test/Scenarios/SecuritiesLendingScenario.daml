@@ -1,0 +1,456 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Securities Lending End-to-End Reference Scenario.
+--
+-- This scenario demonstrates the complete AryaFi platform workflow for an
+-- institutional Securities Lending arrangement, covering the full lifecycle
+-- from trade inception through recall and closeout.
+--
+-- Participants:
+--   - BeneficialOwner:  Pension fund / asset manager lending securities from portfolio
+--   - BorrowerDealer:   Broker-dealer borrowing securities for short sale or settlement
+--   - LendingCustodian: Tri-party custodian safekeeping collateral and lent securities
+--   - AgentLender:      Securities lending agent intermediary (observer)
+--   - Regulator:        Receives visibility into the arrangement (observer)
+--
+-- Workflow:
+--   Phase 1 — Trade Inception & Collateral Posting
+--     1.  Securities Lending Agreement created (Lender + Borrower + Custodian co-sign)
+--     2.  Collateral pledge posted by borrower (cash collateral 102% of market value)
+--   Phase 2 — Ongoing Fee Accrual & Servicing
+--     3.  Lender accrues borrow fees for an elapsed period
+--     4.  Borrower settles accrued lending fees
+--   Phase 3 — Mark-to-Market & Collateral Revaluation
+--     5.  Counterparties agree on updated collateral valuation
+--   Phase 4 — Recall & Return
+--     6.  Lender issues a formal recall for a portion of the lent securities
+--     7.  Borrower returns recalled securities with pro-rata collateral release
+--   Phase 5 — Full Close-Out
+--     8.  Borrower returns remaining securities, agreement auto-closes
+--   Phase 6 — Default Scenario
+--     9.  Separate test: lender declares default on a delinquent arrangement
+--
+module AryaFi.Test.Scenarios.SecuritiesLendingScenario where
+
+import Daml.Script
+import DA.Time (time)
+import DA.Date (date, Month(..))
+import AryaFi.Contracts.SecuritiesLending
+import AryaFi.Contracts.Pledge
+import AryaFi.Common.Identifiers
+import AryaFi.Common.Types
+
+-- ---------------------------------------------------------------------------
+-- Full Securities Lending Lifecycle Scenario
+-- ---------------------------------------------------------------------------
+
+testSecuritiesLendingLifecycle : Script ()
+testSecuritiesLendingLifecycle = script do
+
+  -- =========================================================================
+  -- Party Allocation
+  -- =========================================================================
+  beneficialOwner  <- allocateParty "BeneficialOwnerPensionFund"
+  borrowerDealer   <- allocateParty "BorrowerDealerGS"
+  lendingCustodian <- allocateParty "LendingCustodianBNY"
+  agentLender      <- allocateParty "AgentLenderStateStreet"
+  regulator        <- allocateParty "SECRegulator"
+
+  let now = time (date 2026 Sep 1) 10 0 0
+
+  -- =========================================================================
+  -- Phase 1: Trade Inception & Collateral Posting
+  -- =========================================================================
+
+  -- Step 1: Create Securities Lending Agreement
+  -- Beneficial Owner lends 5M face US Treasuries at 75 bps borrow fee
+  -- Borrower posts USD cash collateral at 102% of market value (5.1M)
+  lendingCid <- submit (actAs [beneficialOwner, borrowerDealer, lendingCustodian]) do
+    createCmd SecuritiesLendingAgreement with
+      lendingId = "SECLEND-2026-BNY-GS-001"
+      lender = beneficialOwner
+      borrower = borrowerDealer
+      custodian = lendingCustodian
+      isin = ISIN "US912828ZM50"
+      borrowedQuantity = 5000000.0
+      borrowAccountId = AccountId "ACC-GS-BORROW-001"
+      lendingFeeRate = 0.0075
+      rebateRate = 0.005
+      collateralCurrency = "USD"
+      collateralAmount = 5100000.0
+      collateralPledgeRef = None
+      accruedLendingFee = 0.0
+      startDate = now
+      status = LendingActive
+      correlationId = CorrelationId "CORR-SECLEND-2026-001"
+      observers = [agentLender]
+
+  -- Verify agreement created and visible
+  lendingData <- queryContractId beneficialOwner lendingCid
+  case lendingData of
+    None -> abort "Securities lending agreement not visible to lender"
+    Some l -> do
+      assertMsg "Agreement is active" (l.status == LendingActive)
+      assertMsg "Borrowed quantity correct" (l.borrowedQuantity == 5000000.0)
+      assertMsg "Collateral posted" (l.collateralAmount == 5100000.0)
+      assertMsg "Fee rate correct" (l.lendingFeeRate == 0.0075)
+
+  -- Agent lender can see the arrangement
+  agentView <- queryContractId agentLender lendingCid
+  assertMsg "Agent lender can see arrangement" (agentView /= None)
+
+  -- Step 2: Create corresponding collateral pledge
+  pledgeCid <- submit (actAs [borrowerDealer, beneficialOwner, lendingCustodian]) do
+    createCmd AssetPledge with
+      pledgeId = "PLEDGE-SECLEND-GS-001"
+      pledgor = borrowerDealer
+      pledgee = beneficialOwner
+      custodian = lendingCustodian
+      accountId = AccountId "ACC-COLL-GS-001"
+      assetId = "CASH-USD-5100000"
+      quantity = 5100000.0
+      perfectionReference = "SECLEND-COLL-REF-001"
+      correlationId = CorrelationId "CORR-SECLEND-2026-001"
+      status = Active
+      enforceTimestamp = None
+      observers = [agentLender]
+
+  -- Link pledge to lending agreement
+  lendingLinkedCid <- submit (actAs [beneficialOwner, borrowerDealer, lendingCustodian]) do
+    createCmd SecuritiesLendingAgreement with
+      lendingId = "SECLEND-2026-BNY-GS-001"
+      lender = beneficialOwner
+      borrower = borrowerDealer
+      custodian = lendingCustodian
+      isin = ISIN "US912828ZM50"
+      borrowedQuantity = 5000000.0
+      borrowAccountId = AccountId "ACC-GS-BORROW-001"
+      lendingFeeRate = 0.0075
+      rebateRate = 0.005
+      collateralCurrency = "USD"
+      collateralAmount = 5100000.0
+      collateralPledgeRef = Some "PLEDGE-SECLEND-GS-001"
+      accruedLendingFee = 0.0
+      startDate = now
+      status = LendingActive
+      correlationId = CorrelationId "CORR-SECLEND-2026-001"
+      observers = [agentLender, regulator]
+
+  -- Retire the original unlinked agreement; the linked one replaces it.
+  -- Archiving requires all three signatories.
+  submit (actAs [beneficialOwner, borrowerDealer, lendingCustodian]) do
+    archiveCmd lendingCid
+
+  -- =========================================================================
+  -- Phase 2: Fee Accrual & Servicing
+  -- =========================================================================
+
+  -- Step 3: Counterparties agree the 30-day borrow fee
+  -- Fee = 5,000,000 * 0.0075 * 30/360 = 3,125 USD
+  accruedCid <- submit (actAs [beneficialOwner, borrowerDealer]) do
+    exerciseCmd lendingLinkedCid AccrueLendingFee with
+      additionalFee = 3125.0
+
+  -- Verify fee accrued
+  accruedData <- queryContractId beneficialOwner accruedCid
+  case accruedData of
+    None -> abort "Accrued agreement not visible"
+    Some l -> assertMsg "Fee accrued correctly" (l.accruedLendingFee == 3125.0)
+
+  -- Step 4: Lender confirms receipt of the fee payment
+  feesPaidCid <- submit beneficialOwner do
+    exerciseCmd accruedCid PayLendingFee with
+      paymentAmount = 3125.0
+
+  -- Verify fee balance cleared
+  feesPaidData <- queryContractId beneficialOwner feesPaidCid
+  case feesPaidData of
+    None -> abort "Fee-paid agreement not visible"
+    Some l -> assertMsg "Fees fully paid" (l.accruedLendingFee == 0.0)
+
+  -- =========================================================================
+  -- Phase 3: Mark-to-Market Collateral Revaluation
+  -- =========================================================================
+
+  -- Step 5: Counterparties agree on updated collateral (market moved up)
+  -- New collateral = 5,200,000 (security price increased, need more coverage)
+  revaluedCid <- submit (actAs [beneficialOwner, borrowerDealer]) do
+    exerciseCmd feesPaidCid RevalueCollateral with
+      newCollateralAmount = 5200000.0
+
+  revaluedData <- queryContractId beneficialOwner revaluedCid
+  case revaluedData of
+    None -> abort "Revalued agreement not visible"
+    Some l -> assertMsg "Collateral revalued" (l.collateralAmount == 5200000.0)
+
+  -- =========================================================================
+  -- Phase 4: Recall & Partial Return
+  -- =========================================================================
+
+  -- Step 6: Lender issues recall for 2M of the 5M lent securities
+  let recallDeadline = time (date 2026 Oct 5) 16 0 0
+  recalledCid <- submit beneficialOwner do
+    exerciseCmd revaluedCid RecallSecurities with
+      recallQuantity = 2000000.0
+      deadline = recallDeadline
+
+  recalledData <- queryContractId beneficialOwner recalledCid
+  case recalledData of
+    None -> abort "Recalled agreement not visible"
+    Some l -> do
+      assert (isRecallIssued l.status)
+
+  -- Step 7: Borrower returns 2M securities with pro-rata collateral release
+  -- Pro-rata collateral release: 5.2M * (2M / 5M) = 2,080,000 USD
+  returnedCid <- submit borrowerDealer do
+    exerciseCmd recalledCid ReturnSecurities with
+      returnedQuantity = 2000000.0
+      collateralReleaseAmount = 2080000.0
+
+  returnedData <- queryContractId beneficialOwner returnedCid
+  case returnedData of
+    None -> abort "Returned agreement not visible"
+    Some l -> do
+      assertMsg "Borrowed reduced to 3M" (l.borrowedQuantity == 3000000.0)
+      assertMsg "Collateral reduced" (l.collateralAmount == 3120000.0)
+      assertMsg "Status back to active" (l.status == LendingActive)
+
+  -- =========================================================================
+  -- Phase 5: Fee Accrual on Remaining Balance, Then Full Return & Close
+  -- =========================================================================
+
+  -- Accrue another 30-day fee on reduced balance
+  -- Fee = 3,000,000 * 0.0075 * 30/360 = 1,875 USD
+  accruedCid2 <- submit (actAs [beneficialOwner, borrowerDealer]) do
+    exerciseCmd returnedCid AccrueLendingFee with
+      additionalFee = 1875.0
+
+  -- Lender confirms receipt of the accrued fee
+  feesPaidCid2 <- submit beneficialOwner do
+    exerciseCmd accruedCid2 PayLendingFee with
+      paymentAmount = 1875.0
+
+  -- Return remaining 3M securities with full collateral release
+  closedCid <- submit borrowerDealer do
+    exerciseCmd feesPaidCid2 ReturnSecurities with
+      returnedQuantity = 3000000.0
+      collateralReleaseAmount = 3120000.0
+
+  -- Verify agreement auto-closed
+  closedData <- queryContractId beneficialOwner closedCid
+  case closedData of
+    None -> abort "Closed agreement not visible"
+    Some l -> assertMsg "Agreement auto-closed" (l.status == LendingClosed)
+
+  -- Release the collateral pledge
+  _releasedPledgeCid <- submit beneficialOwner do
+    exerciseCmd pledgeCid ReleasePledge
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- Default Scenario: Lender declares default on delinquent borrower
+-- ---------------------------------------------------------------------------
+
+testSecuritiesLendingDefault : Script ()
+testSecuritiesLendingDefault = script do
+  beneficialOwner  <- allocateParty "BeneficialOwner"
+  borrowerDealer   <- allocateParty "BorrowerDealer"
+  lendingCustodian <- allocateParty "LendingCustodian"
+
+  let now = time (date 2026 Sep 1) 10 0 0
+  let recallDeadline = time (date 2026 Oct 1) 16 0 0
+
+  -- Create active lending agreement
+  lendingCid <- submit (actAs [beneficialOwner, borrowerDealer, lendingCustodian]) do
+    createCmd SecuritiesLendingAgreement with
+      lendingId = "SECLEND-DEFAULT-001"
+      lender = beneficialOwner
+      borrower = borrowerDealer
+      custodian = lendingCustodian
+      isin = ISIN "US912828ZM50"
+      borrowedQuantity = 3000000.0
+      borrowAccountId = AccountId "ACC-DEF-BORROW-001"
+      lendingFeeRate = 0.01
+      rebateRate = 0.005
+      collateralCurrency = "USD"
+      collateralAmount = 3060000.0
+      collateralPledgeRef = None
+      accruedLendingFee = 0.0
+      startDate = now
+      status = LendingActive
+      correlationId = CorrelationId "CORR-SECLEND-DEF-001"
+      observers = []
+
+  -- Issue recall
+  recalledCid <- submit beneficialOwner do
+    exerciseCmd lendingCid RecallSecurities with
+      recallQuantity = 3000000.0
+      deadline = recallDeadline
+
+  -- Borrower fails to return — lender declares default
+  defaultedCid <- submit beneficialOwner do
+    exerciseCmd recalledCid DeclareSecLendingDefault with
+      reason = "FAILURE_TO_RETURN_RECALLED_SECURITIES"
+
+  -- Verify default state
+  defaultedData <- queryContractId beneficialOwner defaultedCid
+  case defaultedData of
+    None -> abort "Defaulted agreement not visible"
+    Some l -> do
+      assertMsg "Agreement is defaulted" (l.status == LendingDefaulted "FAILURE_TO_RETURN_RECALLED_SECURITIES")
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- Negative Tests: Invalid Securities Lending Operations
+-- ---------------------------------------------------------------------------
+
+testSecuritiesLendingNegativeCases : Script ()
+testSecuritiesLendingNegativeCases = script do
+  lender   <- allocateParty "Lender"
+  borrower <- allocateParty "Borrower"
+  custodian <- allocateParty "Custodian"
+
+  let now = time (date 2026 Sep 1) 10 0 0
+
+  -- Create active agreement
+  activeCid <- submit (actAs [lender, borrower, custodian]) do
+    createCmd SecuritiesLendingAgreement with
+      lendingId = "SECLEND-NEG-001"
+      lender = lender
+      borrower = borrower
+      custodian = custodian
+      isin = ISIN "US912828ZM50"
+      borrowedQuantity = 2000000.0
+      borrowAccountId = AccountId "ACC-NEG-001"
+      lendingFeeRate = 0.005
+      rebateRate = 0.003
+      collateralCurrency = "USD"
+      collateralAmount = 2040000.0
+      collateralPledgeRef = None
+      accruedLendingFee = 0.0
+      startDate = now
+      status = LendingActive
+      correlationId = CorrelationId "CORR-SECLEND-NEG-001"
+      observers = []
+
+  -- Cannot recall more than borrowed quantity
+  submitMustFail lender do
+    exerciseCmd activeCid RecallSecurities with
+      recallQuantity = 3000000.0
+      deadline = time (date 2026 Oct 1) 16 0 0
+
+  -- Cannot return more than borrowed quantity
+  submitMustFail borrower do
+    exerciseCmd activeCid ReturnSecurities with
+      returnedQuantity = 3000000.0
+      collateralReleaseAmount = 2040000.0
+
+  -- Cannot record a payment larger than the accrued fee
+  submitMustFail lender do
+    exerciseCmd activeCid PayLendingFee with
+      paymentAmount = 1000.0  -- No fee accrued yet
+
+  -- Create closed agreement for negative tests
+  closedCid <- submit (actAs [lender, borrower, custodian]) do
+    createCmd SecuritiesLendingAgreement with
+      lendingId = "SECLEND-CLOSED-001"
+      lender = lender
+      borrower = borrower
+      custodian = custodian
+      isin = ISIN "US912828ZM50"
+      borrowedQuantity = 100.0
+      borrowAccountId = AccountId "ACC-CLOSED-001"
+      lendingFeeRate = 0.005
+      rebateRate = 0.003
+      collateralCurrency = "USD"
+      collateralAmount = 102.0
+      collateralPledgeRef = None
+      accruedLendingFee = 0.0
+      startDate = now
+      status = LendingClosed
+      correlationId = CorrelationId "CORR-SECLEND-CLOSED-001"
+      observers = []
+
+  -- Cannot recall on a closed agreement
+  submitMustFail lender do
+    exerciseCmd closedCid RecallSecurities with
+      recallQuantity = 50.0
+      deadline = time (date 2026 Oct 1) 16 0 0
+
+  -- Cannot revalue collateral on a closed agreement
+  submitMustFail (actAs [lender, borrower]) do
+    exerciseCmd closedCid RevalueCollateral with
+      newCollateralAmount = 200.0
+
+  -- Cannot declare default on a closed agreement
+  submitMustFail lender do
+    exerciseCmd closedCid DeclareSecLendingDefault with
+      reason = "INVALID_DEFAULT"
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- Observer Privacy Verification
+-- ---------------------------------------------------------------------------
+
+testSecuritiesLendingPrivacy : Script ()
+testSecuritiesLendingPrivacy = script do
+  lender   <- allocateParty "LenderFund"
+  borrower <- allocateParty "BorrowerDealer"
+  custodian <- allocateParty "Custodian"
+  agent    <- allocateParty "AgentLender"
+  outsider <- allocateParty "UnrelatedParty"
+
+  let now = time (date 2026 Sep 1) 10 0 0
+
+  lendingCid <- submit (actAs [lender, borrower, custodian]) do
+    createCmd SecuritiesLendingAgreement with
+      lendingId = "SECLEND-PRIV-001"
+      lender = lender
+      borrower = borrower
+      custodian = custodian
+      isin = ISIN "US912828ZM50"
+      borrowedQuantity = 1000000.0
+      borrowAccountId = AccountId "ACC-PRIV-001"
+      lendingFeeRate = 0.005
+      rebateRate = 0.003
+      collateralCurrency = "USD"
+      collateralAmount = 1020000.0
+      collateralPledgeRef = None
+      accruedLendingFee = 0.0
+      startDate = now
+      status = LendingActive
+      correlationId = CorrelationId "CORR-SECLEND-PRIV-001"
+      observers = [agent]
+
+  -- Agent lender can see the agreement (they're an observer)
+  agentView <- queryContractId agent lendingCid
+  assertMsg "Agent lender can see agreement" (agentView /= None)
+
+  -- Outsider cannot see the agreement
+  outsiderView <- queryContractId outsider lendingCid
+  assertMsg "Outsider cannot see agreement" (outsiderView == None)
+
+  -- Add regulator as observer
+  updatedCid <- submit (actAs [lender, borrower]) do
+    exerciseCmd lendingCid AddSecLendingObserver with newObserver = outsider
+
+  -- Now they can see it
+  newView <- queryContractId outsider updatedCid
+  assertMsg "Newly added observer can see agreement" (newView /= None)
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- Entry Point
+-- ---------------------------------------------------------------------------
+
+runSecuritiesLendingScenario : Script ()
+runSecuritiesLendingScenario = script do
+  testSecuritiesLendingLifecycle
+  testSecuritiesLendingDefault
+  testSecuritiesLendingNegativeCases
+  testSecuritiesLendingPrivacy
