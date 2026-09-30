@@ -25,7 +25,10 @@
 1. **Overview**: what the library does, why it matters (neither side pays first, only the right party can act, each firm sees only its own business), who takes part in a trade, and an honest *works today / not yet* status.
 2. **See a trade settle**: a step-by-step replay of the tested bond-for-cash scenario (`TreasuryDvpScenario`). Cards show what each of the six institutions holds and stores at every step; **Whose view?** hides everything a chosen institution's node does not store; **What if…?** tries what the contracts prevent (a seller taking back a locked bond, a short delivery, an agent cancelling alone, settling twice), each backed by a named test in `DvpSettlementTest`. It is a replay, not a live ledger.
 3. **What's inside**: settlement, financing and compliance contracts in plain words, each area labelled Beta or Experimental, what comes next, and a collateral calculator.
-4. **Developers**: quick start, running on a local Canton network or TestNet, ISO 20022 messages (`pacs.008`, `sese.023`, `camt.053`, `semt.002`) next to the JSON Ledger API v2 request each becomes with real checks (XML, ISIN and LEI check digits, UETR, currency, XML/JSON consistency), the contract source loaded from this repository, and links to the documentation.
+4. **Developers**: quick start, running on a local Canton network or TestNet, ISO 20022 messages (`pacs.008`, `sese.023`, `camt.053`, `semt.002`) next to the JSON Ledger API v2 request each becomes with real checks (XML, ISIN and LEI check digits, UETR, currency, XML/JSON consistency), and the contract source loaded from this repository.
+5. **Docs**: the key documents (known limitations, improvement plan, changelog, integration and security guides, TestNet runbook) rendered from this repository's Markdown, with links between them kept on the site.
+
+Only the files the site uses are deployed: [`.vercelignore`](.vercelignore) lists them, so the rest of the repository stays off the public site. When the site shows a new document or module, add it there.
 
 ---
 

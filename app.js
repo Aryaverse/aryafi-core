@@ -9,6 +9,7 @@
 
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
+  initDocs();
   initRouter();
   initTradeWalkthrough();
   initCollateralCalculator();
@@ -62,7 +63,8 @@ const VIEW_TITLES = {
   overview: 'AryaFi Core',
   trade: 'See a trade settle · AryaFi Core',
   inside: "What's inside · AryaFi Core",
-  developers: 'Developers · AryaFi Core'
+  developers: 'Developers · AryaFi Core',
+  docs: 'Docs · AryaFi Core'
 };
 
 // Links to the previous site's tabs still land somewhere sensible.
@@ -79,7 +81,9 @@ function initRouter() {
   let current = null;
 
   function show(scroll) {
-    let id = location.hash.slice(1);
+    // #docs/<document>/<section> addresses a section of a published document.
+    const [first, ...rest] = decodeURIComponent(location.hash.slice(1)).split('/');
+    let id = first;
     if (LEGACY_HASHES[id]) id = LEGACY_HASHES[id];
     if (id === '') id = 'overview';
     if (!(id in VIEW_TITLES)) return; // an in-page anchor such as #main
@@ -90,7 +94,8 @@ function initRouter() {
       else link.removeAttribute('aria-current');
     });
     document.title = VIEW_TITLES[id];
-    if (scroll && current !== id) window.scrollTo(0, 0);
+    if (id === 'docs') showDocsRoute(rest[0] || '', rest.slice(1).join('/'));
+    else if (scroll && current !== id) window.scrollTo(0, 0);
     current = id;
   }
 
@@ -943,4 +948,186 @@ function initCopyButtons() {
       setTimeout(() => { btn.textContent = original; }, 1500);
     });
   });
+}
+
+// ============================================================================
+// 8. Docs: key documents rendered from the repository's Markdown
+// ============================================================================
+// The Markdown files are deployed with the site (see .vercelignore), so the
+// pages always match the repository. Links between published documents stay
+// on the site; links to files that are not published are shown as plain text.
+
+const DOCS = [
+  { slug: 'known-limitations', path: 'docs/KNOWN_LIMITATIONS.md', title: 'Known limitations', group: 'Start here', summary: 'What the library does not do yet. Read before building on it.' },
+  { slug: 'improvement-plan', path: 'docs/IMPROVEMENT_PLAN.md', title: 'Improvement plan', group: 'Start here', summary: 'What comes next, in what order, and why.' },
+  { slug: 'changelog', path: 'CHANGELOG.md', title: 'Changelog', group: 'Start here', summary: 'What changed in each release.' },
+  { slug: 'user-guide', path: 'docs/USER_GUIDE.md', title: 'User guide', group: 'Start here', summary: 'This website, and building and running the library locally.' },
+  { slug: 'ledger-api-client', path: 'docs/integration/LEDGER_API_CLIENT.md', title: 'Ledger API client guide', group: 'Integrate', summary: 'Submitting commands, tokens and rights, deduplication, streams.' },
+  { slug: 'iso20022-mappings', path: 'docs/integration/ISO20022_MAPPINGS.md', title: 'ISO 20022 mappings', group: 'Integrate', summary: 'How payment and securities messages map to the contracts.' },
+  { slug: 'migration-guide', path: 'docs/governance/MIGRATION_GUIDE.md', title: 'Migration guide', group: 'Integrate', summary: 'Upgrading between versions, including v2 to v3.' },
+  { slug: 'testnet', path: 'deploy/testnet/README.md', title: 'TestNet runbook', group: 'Integrate', summary: 'A first run on the Canton Network TestNet.' },
+  { slug: 'versioning', path: 'docs/governance/VERSIONING_AND_RELEASE.md', title: 'Versioning and releases', group: 'Integrate', summary: 'Version numbers, maturity labels, and the release process.' },
+  { slug: 'authorization-matrix', path: 'docs/security/AUTHORIZATION_MATRIX.md', title: 'Authorization matrix', group: 'Security', summary: 'Who can do what on every contract, generated from the code.' },
+  { slug: 'threat-model', path: 'docs/security/THREAT_MODEL.md', title: 'Threat model', group: 'Security', summary: 'Threats considered and how the contracts address them.' }
+];
+
+const DOC_BY_SLUG = Object.fromEntries(DOCS.map(d => [d.slug, d]));
+const DOC_BY_PATH = Object.fromEntries(DOCS.map(d => [d.path, d]));
+const DOC_GROUPS = ['Start here', 'Integrate', 'Security'];
+
+// Other published files that documents may link to (shown as raw files).
+const PUBLISHED_FILES = new Set(Object.values(DAML_MODULES).map(rel => DAML_SOURCE_BASE + rel));
+
+const REPO_BLOB = /^https:\/\/github\.com\/Aryaverse\/aryafi-core\/blob\/[^/]+\/([^#]*)(#.*)?$/;
+
+let docsRequest = 0;
+
+function initDocs() {
+  const navList = document.getElementById('docs-nav-list');
+  const jump = document.getElementById('docs-jump-select');
+  const groups = document.getElementById('docs-index-groups');
+  if (!navList || !jump || !groups) return;
+
+  navList.innerHTML = DOC_GROUPS.map(g =>
+    `<p class="docs-nav-group">${escapeHtml(g)}</p><ul>` +
+    DOCS.filter(d => d.group === g).map(d => `<li><a href="#docs/${d.slug}" data-doc="${d.slug}">${escapeHtml(d.title)}</a></li>`).join('') +
+    '</ul>').join('');
+
+  jump.innerHTML = '<option value="">All documents</option>' + DOC_GROUPS.map(g =>
+    `<optgroup label="${escapeHtml(g)}">` +
+    DOCS.filter(d => d.group === g).map(d => `<option value="${d.slug}">${escapeHtml(d.title)}</option>`).join('') +
+    '</optgroup>').join('');
+  jump.addEventListener('change', () => { location.hash = jump.value ? `docs/${jump.value}` : 'docs'; });
+
+  groups.innerHTML = DOC_GROUPS.map(g =>
+    `<h2 class="docs-group-title">${escapeHtml(g)}</h2><div class="grid grid-3">` +
+    DOCS.filter(d => d.group === g).map(d =>
+      `<a class="card link-card" href="#docs/${d.slug}"><h3>${escapeHtml(d.title)}</h3><p>${escapeHtml(d.summary)}</p></a>`).join('') +
+    '</div>').join('');
+}
+
+// GitHub's heading anchors: lower case, punctuation dropped, spaces to hyphens.
+function githubSlug(text) {
+  return text.trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/\s/g, '-');
+}
+
+// Maps a repository path (and optional #anchor) to where it lives on this site.
+function siteHref(repoPath, anchor) {
+  const clean = repoPath.replace(/^\/+/, '');
+  const doc = DOC_BY_PATH[clean] || DOC_BY_PATH[clean.replace(/\/?$/, '/README.md')];
+  if (doc) return { href: `#docs/${doc.slug}${anchor ? '/' + anchor : ''}` };
+  if (PUBLISHED_FILES.has(clean)) return { href: clean, external: true };
+  return null;
+}
+
+function rewriteDocLinks(article, doc) {
+  article.querySelectorAll('a[href]').forEach(a => {
+    const href = a.getAttribute('href');
+    let target = null;
+    if (href.startsWith('#')) {
+      target = { href: `#docs/${doc.slug}/${href.slice(1)}` };
+    } else if (/^mailto:/i.test(href)) {
+      return;
+    } else if (/^https?:/i.test(href)) {
+      const m = href.match(REPO_BLOB);
+      if (m) {
+        target = siteHref(decodeURIComponent(m[1]), m[2] ? m[2].slice(1) : '');
+      } else {
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        return;
+      }
+    } else {
+      const url = new URL(href, `https://site.invalid/${doc.path}`);
+      target = siteHref(decodeURIComponent(url.pathname), url.hash.slice(1));
+    }
+    if (target) {
+      a.setAttribute('href', target.href);
+      if (target.external) { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+    } else {
+      const span = document.createElement('span');
+      span.className = 'doc-unlinked';
+      span.title = 'Not published on this site';
+      span.textContent = a.textContent;
+      a.replaceWith(span);
+    }
+  });
+}
+
+function decorateDoc(article) {
+  const seen = {};
+  article.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach(h => {
+    let id = githubSlug(h.textContent);
+    if (seen[id] !== undefined) { seen[id] += 1; id = `${id}-${seen[id]}`; } else { seen[id] = 0; }
+    h.id = id;
+  });
+  article.querySelectorAll('table').forEach(table => {
+    const wrap = document.createElement('div');
+    wrap.className = 'table-wrap';
+    table.replaceWith(wrap);
+    wrap.appendChild(table);
+  });
+}
+
+async function showDocsRoute(slug, anchor) {
+  const index = document.getElementById('docs-index');
+  const article = document.getElementById('doc-article');
+  const source = document.getElementById('doc-source');
+  const jump = document.getElementById('docs-jump-select');
+  if (!index || !article) return;
+
+  const doc = DOC_BY_SLUG[slug];
+  document.querySelectorAll('.docs-nav [data-doc]').forEach(a => {
+    if (doc && a.dataset.doc === doc.slug) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  });
+  jump.value = doc ? doc.slug : '';
+
+  if (!doc) {
+    index.hidden = false;
+    article.hidden = true;
+    source.hidden = true;
+    window.scrollTo(0, 0);
+    return;
+  }
+
+  index.hidden = true;
+  article.hidden = false;
+  document.title = `${doc.title} · AryaFi Core`;
+
+  const request = ++docsRequest;
+  if (article.dataset.doc !== doc.slug) {
+    article.dataset.doc = '';
+    article.innerHTML = `<p class="fine-print">Loading ${escapeHtml(doc.title)}…</p>`;
+    let text;
+    try {
+      const res = await fetch(doc.path, { cache: 'no-cache' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      text = await res.text();
+    } catch (err) {
+      if (request === docsRequest) {
+        article.innerHTML = `<p>Could not load ${escapeHtml(doc.path)} (${escapeHtml(err.message)}).</p>`;
+      }
+      return;
+    }
+    if (request !== docsRequest) return;
+    if (window.marked && window.DOMPurify) {
+      article.innerHTML = window.DOMPurify.sanitize(window.marked.parse(text, { gfm: true }));
+      decorateDoc(article);
+      rewriteDocLinks(article, doc);
+    } else {
+      // The renderer could not be loaded: show the Markdown as text.
+      const pre = document.createElement('pre');
+      pre.className = 'code code-tall';
+      pre.textContent = text;
+      article.replaceChildren(pre);
+    }
+    article.dataset.doc = doc.slug;
+    source.hidden = false;
+    source.innerHTML = `Source: <a href="${escapeHtml(doc.path)}" target="_blank" rel="noopener noreferrer">${escapeHtml(doc.path)}</a> in the AryaFi Core repository.`;
+  }
+
+  const target = anchor && document.getElementById(anchor);
+  if (target) target.scrollIntoView();
+  else window.scrollTo(0, 0);
 }

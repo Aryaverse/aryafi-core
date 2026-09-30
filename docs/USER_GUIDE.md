@@ -20,6 +20,7 @@ The header has four views, each with its own address:
 | See a trade settle | `#trade` | What actually happens in a bond-for-cash trade, and what stops it going wrong? |
 | What's inside | `#inside` | What does the library cover, and which parts are ready? |
 | Developers | `#developers` | How do I build it, run it, connect my systems, and read the code? |
+| Docs | `#docs` | The key documents, rendered from the repository. `#docs/<document>/<section>` links to a section. |
 
 Links to the previous site's tabs (`#tab-simulator`, `#tab-iso`, ...) open the matching view.
 
@@ -58,7 +59,9 @@ Use **Next step** and **Back**, or click a step in the bar.
 * **Run it on a network**: the local five-institution Canton network (`deploy/docker`) and the TestNet runbook (`deploy/testnet`).
 * **Connect your systems: ISO 20022**: pick `pacs.008`, `sese.023`, `camt.053` or `semt.002` to see the message next to the JSON Ledger API v2 request it becomes. **Check this message** runs real checks: XML well-formedness, required elements, ISIN (ISO 6166) and LEI (ISO 17442) check digits, UETR format, currency codes, and consistency between the XML and the request. **Field-by-field mapping** lists each element and the rule that applies.
 * **Read the contracts**: the Daml source of seven core modules, loaded from this repository.
-* **Documentation**: links to the Ledger API client guide, migration guide, known limitations, authorization matrix, threat model and changelog.
+* **Documentation**: links to the key documents on the Docs view.
+
+**Docs** renders the key documents from this repository's Markdown: known limitations, improvement plan, changelog, this guide, the Ledger API client guide, ISO 20022 mappings, migration guide, TestNet runbook, versioning policy, authorization matrix and threat model. Links between them stay on the site; a link to a file that is not published is shown as plain text.
 
 ---
 
