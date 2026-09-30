@@ -1,847 +1,402 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AryaFi Core | Institutional Digital Asset Terminal & Canton Explorer</title>
-  <meta name="description" content="Institutional-grade, privacy-aware Daml smart contract library for wholesale finance, tokenized securities, DvP settlement, repo, and securities lending on Canton Network.">
+  <title>AryaFi Core</title>
+  <meta name="description" content="Open-source Daml smart contracts for the Canton Network: settle securities against cash in one step, so neither side pays first, with each institution seeing only its own business.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%2309090b'/><path d='M30 70 L50 25 L70 70 L50 55 Z' fill='%23ffffff'/></svg>">
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to content</a>
 
-  <!-- Top Navigation Header -->
-  <header class="header">
-    <div class="header-container">
-      <a href="#" class="logo-wrapper" id="brand-logo" aria-label="AryaFi Core Home">
-        <div class="logo-icon">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
-            <polyline points="2 17 12 22 22 17"></polyline>
-            <polyline points="2 12 12 17 22 12"></polyline>
-          </svg>
-        </div>
-        <div class="logo-text-group">
-          <span class="logo-title">AryaFi Core</span>
-          <span class="logo-subtitle"><span class="pulse-dot"></span> Daml 3.5 · Canton 3.5</span>
-        </div>
+  <header class="site-header">
+    <div class="header-inner">
+      <a href="#overview" class="brand" aria-label="AryaFi Core home">
+        <span class="brand-mark" aria-hidden="true">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+        </span>
+        <span class="brand-name">AryaFi Core</span>
       </a>
 
-      <!-- Navigation Tabs -->
-      <nav class="nav-tabs" role="tablist" aria-label="Main Navigation">
-        <button class="nav-tab-btn active" role="tab" id="tab-btn-topology" data-tab="tab-topology" aria-controls="tab-topology" aria-selected="true" tabindex="0">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line></svg>
-          Topology
-        </button>
-        <button class="nav-tab-btn" role="tab" id="tab-btn-simulator" data-tab="tab-simulator" aria-controls="tab-simulator" aria-selected="false" tabindex="-1">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-          Simulator
-        </button>
-        <button class="nav-tab-btn" role="tab" id="tab-btn-contracts" data-tab="tab-contracts" aria-controls="tab-contracts" aria-selected="false" tabindex="-1">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="9" x2="15" y2="9"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>
-          Contracts &amp; Math
-        </button>
-        <button class="nav-tab-btn" role="tab" id="tab-btn-iso" data-tab="tab-iso" aria-controls="tab-iso" aria-selected="false" tabindex="-1">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 3 21 3 21 8"></polyline><line x1="4" y1="20" x2="21" y2="3"></line><polyline points="21 16 21 21 16 21"></polyline><line x1="15" y1="15" x2="21" y2="21"></line><line x1="4" y1="4" x2="9" y2="9"></line></svg>
-          ISO 20022 Hub
-        </button>
-        <button class="nav-tab-btn" role="tab" id="tab-btn-security" data-tab="tab-security" aria-controls="tab-security" aria-selected="false" tabindex="-1">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-          Security &amp; Rules
-        </button>
-        <button class="nav-tab-btn" role="tab" id="tab-btn-docs" data-tab="tab-docs" aria-controls="tab-docs" aria-selected="false" tabindex="-1">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>
-          Daml Code
-        </button>
+      <nav class="site-nav" aria-label="Main">
+        <a href="#overview" data-view="overview">Overview</a>
+        <a href="#trade" data-view="trade">See a trade settle</a>
+        <a href="#inside" data-view="inside">What's inside</a>
+        <a href="#developers" data-view="developers">Developers</a>
       </nav>
 
-      <!-- Actions -->
       <div class="header-actions">
-        <button class="btn-theme-toggle" id="theme-toggle-btn" aria-label="Toggle Dark and Light theme">
-          <span id="theme-toggle-icon">◐</span> <span id="theme-toggle-label">Dark</span>
+        <button class="icon-btn" id="theme-toggle" type="button" aria-label="Switch to dark theme">
+          <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+          <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path></svg>
         </button>
-        <button class="btn-shortcuts-toggle" id="shortcuts-toggle-btn" aria-label="Terminal Keyboard Shortcuts" title="Press ? for keyboard shortcuts">
-          <span>⌨</span> <span>Hotkeys</span>
-        </button>
-        <span class="badge-tag">v3.0.0 · Beta (not yet audited)</span>
-        <a href="https://github.com/Aryaverse/aryafi-core" target="_blank" rel="noopener noreferrer" class="btn-github">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-          GitHub
+        <a class="icon-btn" href="https://github.com/Aryaverse/aryafi-core" target="_blank" rel="noopener noreferrer" aria-label="AryaFi Core on GitHub">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
         </a>
       </div>
     </div>
   </header>
 
-  <!-- Hero & Real-Time Telemetry Bar -->
-  <section class="hero-section">
-    <div class="hero-banner">
-      <div class="hero-content">
-        <span class="hero-pill">Canton Network Institutional Infrastructure</span>
-        <h1 class="hero-title">AryaFi Core: Institutional Digital Asset &amp; Financing Engine</h1>
-        <p class="hero-desc">
-          Composable, privacy-preserving smart contract library engineered in Daml for institutional banking, tokenized US Treasuries, DvP atomic settlement, repurchase agreements, securities lending, and multi-currency liquidity mobility.
-        </p>
-      </div>
+  <main id="main">
 
-      <!-- Telemetry Ticker -->
-      <div class="telemetry-grid">
-        <div class="telemetry-card">
-          <span class="telemetry-label">Daml Test Scripts</span>
-          <span class="telemetry-value emerald">290 Passing</span>
-          <span class="telemetry-sub">dpm test, -Wall -Werror build</span>
+    <!-- =================================================================
+         Overview
+         ================================================================= -->
+    <section class="view" id="view-overview" data-view="overview" aria-labelledby="overview-title">
+      <div class="hero">
+        <div class="hero-text">
+          <p class="eyebrow">Open-source smart contracts for the Canton Network</p>
+          <h1 id="overview-title">Settle securities against cash in one step, so neither side pays first.</h1>
+          <p class="lead">AryaFi Core is a library of Daml contracts for banks, custodians and dealers. Both sides of a trade are set aside, then swapped together in a single transaction, and each institution only ever sees its own business.</p>
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="#trade">Watch a trade settle <span aria-hidden="true">→</span></a>
+            <a class="btn" href="#inside">See what's inside</a>
+          </div>
+          <p class="fine-print">v3.0.0 · Beta · not yet independently audited</p>
         </div>
-        <div class="telemetry-card">
-          <span class="telemetry-label">Contract Templates</span>
-          <span class="telemetry-value cyan">27 Templates</span>
-          <span class="telemetry-sub">96% created · 67% of choices exercised in tests</span>
-        </div>
-        <div class="telemetry-card">
-          <span class="telemetry-label">Reference Topology</span>
-          <span class="telemetry-value purple">5 Participants</span>
-          <span class="telemetry-sub">Canton 3.5 · protocol version 35</span>
-        </div>
-        <div class="telemetry-card">
-          <span class="telemetry-label">Settlement Model</span>
-          <span class="telemetry-value emerald">Atomic DvP</span>
-          <span class="telemetry-sub">Both legs in one Daml transaction</span>
-        </div>
-      </div>
-    </div>
-  </section>
 
-  <!-- Main Content Sections -->
-  <main class="main-content">
-
-    <!-- ====================================================================
-         Tab 1: Canton Network Topology Explorer
-         ==================================================================== -->
-    <div class="tab-pane active" id="tab-topology" role="tabpanel" aria-labelledby="tab-btn-topology">
-      <div class="section-header">
-        <div>
-          <h2 class="section-title">Canton Multi-Participant Topology Visualizer</h2>
-          <p class="section-desc">Interactive network architecture showing cryptographic node boundaries, participant segregation, and sub-transaction privacy.</p>
-        </div>
-        <div class="network-status-chip">
-          <span class="pulse-dot"></span> Synchronizer: aryafi (Online)
+        <div class="hero-visual" aria-hidden="true">
+          <div class="swap-card">
+            <div class="swap-party">
+              <span class="swap-role">Seller</span>
+              <span class="swap-name">Dealer Bank A</span>
+              <span class="chip chip-bond">$5M US Treasury</span>
+            </div>
+            <div class="swap-arrows">
+              <span class="swap-arrow swap-arrow-right">bond →</span>
+              <span class="swap-lock">One transaction</span>
+              <span class="swap-arrow swap-arrow-left">← cash</span>
+            </div>
+            <div class="swap-party">
+              <span class="swap-role">Buyer</span>
+              <span class="swap-name">Dealer Bank B</span>
+              <span class="chip chip-cash">$4,975,000</span>
+            </div>
+          </div>
+          <p class="swap-caption">Both move together, or neither moves.</p>
         </div>
       </div>
 
-      <div class="topology-container">
-        <!-- Interactive Topology Map -->
-        <div class="topology-canvas-card">
-          <div class="topology-header-bar">
-            <span>CLICK ANY PARTICIPANT TO INSPECT LOCAL ACS &amp; PRIVACY DOMAIN</span>
-            <span style="color: var(--accent-cyan);">● INTERACTIVE SVG MAP</span>
-          </div>
-
-          <div class="topology-svg-wrapper">
-            <svg class="topology-svg" viewBox="0 0 800 500" xmlns="http://www.w3.org/2000/svg">
-              <defs>
-                <radialGradient id="nodeGlow" cx="50%" cy="50%" r="50%">
-                  <stop offset="0%" stop-color="var(--border-accent)" stop-opacity="0.12"/>
-                  <stop offset="100%" stop-color="var(--border-accent)" stop-opacity="0"/>
-                </radialGradient>
-                <radialGradient id="centerGlow" cx="50%" cy="50%" r="50%">
-                  <stop offset="0%" stop-color="#10b981" stop-opacity="0.2"/>
-                  <stop offset="100%" stop-color="#10b981" stop-opacity="0"/>
-                </radialGradient>
-                <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--border-accent)" opacity="0.8"/>
-                </marker>
-              </defs>
-
-              <!-- Synchronizer Hub in Center -->
-              <circle cx="400" cy="250" r="85" fill="url(#centerGlow)"/>
-              <circle cx="400" cy="250" r="50" class="topology-hub-circle" stroke="#10b981" stroke-width="2"/>
-              <text x="400" y="246" text-anchor="middle" class="topology-hub-title">SYNCHRONIZER</text>
-              <text x="400" y="262" text-anchor="middle" fill="#059669" font-family="JetBrains Mono" font-size="9" font-weight="700">Sequencer · Mediator</text>
-
-              <!-- Connection Mesh Lines -->
-              <line x1="400" y1="250" x2="200" y2="120" stroke="var(--border-medium)" stroke-width="1.5" stroke-dasharray="4 4"/>
-              <line x1="400" y1="250" x2="600" y2="120" stroke="var(--border-medium)" stroke-width="1.5" stroke-dasharray="4 4"/>
-              <line x1="400" y1="250" x2="160" y2="360" stroke="var(--border-medium)" stroke-width="1.5" stroke-dasharray="4 4"/>
-              <line x1="400" y1="250" x2="640" y2="360" stroke="var(--border-medium)" stroke-width="1.5" stroke-dasharray="4 4"/>
-              <line x1="400" y1="250" x2="400" y2="430" stroke="var(--border-medium)" stroke-width="1.5" stroke-dasharray="4 4"/>
-
-              <!-- Bilateral Trading Line (Dealer A <-> Dealer B) -->
-              <path d="M 160 360 Q 400 480 640 360" fill="none" stroke="var(--border-accent)" stroke-width="2" stroke-dasharray="6 3"/>
-              <text x="400" y="470" text-anchor="middle" fill="var(--text-secondary)" font-family="JetBrains Mono" font-size="10" font-weight="600">Atomic DvP Cross-Trading Channel (Sub-Transaction Privacy)</text>
-
-              <!-- Node 1: Bank (Cash Authority) -->
-              <g class="node-group selected" data-node="bank" transform="translate(200, 120)">
-                <circle cx="0" cy="0" r="42" fill="url(#nodeGlow)"/>
-                <circle cx="0" cy="0" r="34" class="node-ring" stroke="var(--border-accent)" stroke-width="2"/>
-                <text x="0" y="-3" class="node-label">BANK NODE</text>
-                <text x="0" y="12" class="node-sublabel">Cash Settlement</text>
-              </g>
-
-              <!-- Node 2: Global Custodian (Safekeeping) -->
-              <g class="node-group" data-node="custodian" transform="translate(600, 120)">
-                <circle cx="0" cy="0" r="42" fill="url(#nodeGlow)"/>
-                <circle cx="0" cy="0" r="34" class="node-ring" stroke="var(--border-accent)" stroke-width="2"/>
-                <text x="0" y="-3" class="node-label">CUSTODIAN</text>
-                <text x="0" y="12" class="node-sublabel">Settlement Agent</text>
-              </g>
-
-              <!-- Node 3: Primary Dealer A -->
-              <g class="node-group" data-node="dealerA" transform="translate(160, 360)">
-                <circle cx="0" cy="0" r="42" fill="url(#nodeGlow)"/>
-                <circle cx="0" cy="0" r="34" class="node-ring" stroke="var(--border-accent)" stroke-width="2"/>
-                <text x="0" y="-3" class="node-label">DEALER A</text>
-                <text x="0" y="12" class="node-sublabel">Seller Desk</text>
-              </g>
-
-              <!-- Node 4: Primary Dealer B -->
-              <g class="node-group" data-node="dealerB" transform="translate(640, 360)">
-                <circle cx="0" cy="0" r="42" fill="url(#nodeGlow)"/>
-                <circle cx="0" cy="0" r="34" class="node-ring" stroke="var(--border-accent)" stroke-width="2"/>
-                <text x="0" y="-3" class="node-label">DEALER B</text>
-                <text x="0" y="12" class="node-sublabel">Buyer Desk</text>
-              </g>
-
-              <!-- Node 5: Regulator / Observer -->
-              <g class="node-group" data-node="regulator" transform="translate(400, 420)">
-                <circle cx="0" cy="0" r="38" fill="url(#nodeGlow)"/>
-                <circle cx="0" cy="0" r="30" class="node-ring" stroke="#10b981" stroke-width="2"/>
-                <text x="0" y="-3" class="node-label">REGULATOR</text>
-                <text x="0" y="11" class="node-sublabel">Supervisory Node</text>
-              </g>
-            </svg>
-          </div>
+      <section class="section" aria-labelledby="why-title">
+        <h2 id="why-title">Why it matters</h2>
+        <div class="grid grid-4">
+          <article class="card">
+            <h3>Neither side pays first</h3>
+            <p>The bond and the cash are both locked before anything moves. Settlement swaps them in one transaction; if anything doesn't match, nothing moves at all.</p>
+          </article>
+          <article class="card">
+            <h3>Only the right party can act</h3>
+            <p>The rules live in the contracts. A seller can't take back a bond it has committed, and a borrower can't mark its own loan as repaid.</p>
+          </article>
+          <article class="card">
+            <h3>Each firm sees only its own business</h3>
+            <p>On Canton, a contract is shared only with the institutions named in it. A counterparty never sees your other positions or accounts.</p>
+          </article>
+          <article class="card">
+            <h3>One agreed record</h3>
+            <p>Buyer, seller and settlement agent sign the same instruction, so there is nothing to reconcile between them afterwards.</p>
+          </article>
         </div>
+      </section>
 
-        <!-- Node Details Inspector -->
-        <div class="node-details-card">
-          <div class="node-details-header">
-            <h3 class="node-details-title" id="node-detail-title">Cash Settlement Bank</h3>
-            <span class="node-details-role" id="node-detail-role">Tokenized Deposit Issuer (CashPosition bank)</span>
-          </div>
-
-          <div class="node-info-grid">
-            <div class="node-info-item">
-              <span class="node-info-label">Participant ID</span>
-              <span class="node-info-val" id="node-detail-id">bank_node</span>
-            </div>
-            <div class="node-info-item">
-              <span class="node-info-label">Ledger API Endpoint</span>
-              <span class="node-info-val" id="node-detail-port">localhost:10012 (gRPC / JSON)</span>
-            </div>
-            <div class="node-info-item">
-              <span class="node-info-label">Hosted Parties</span>
-              <span class="node-info-val" id="node-detail-parties">CashSettlementBank</span>
-            </div>
-            <div class="node-info-item">
-              <span class="node-info-label">Party Namespace</span>
-              <span class="node-info-val" id="node-detail-fp">Assigned at bootstrap</span>
-            </div>
-            <div class="node-info-item">
-              <span class="node-info-label">Contracts Stored</span>
-              <span class="node-info-val" id="node-detail-contracts">CashPosition contracts it issued; PaymentInstructions where it is settlement agent</span>
-            </div>
-            <div class="node-info-item">
-              <span class="node-info-label">Sub-Transaction Privacy Boundary</span>
-              <span class="node-info-val" id="node-detail-privacy" style="font-size: 0.8rem; line-height: 1.45;">
-                Stores only contracts where the bank is a stakeholder: the cash positions it issued. It does not see securities positions, loans, or repo agreements it is not party to.
-              </span>
-            </div>
-          </div>
+      <section class="section" aria-labelledby="who-title">
+        <h2 id="who-title">Who takes part in a trade</h2>
+        <p class="section-lead">Each institution runs its own Canton node and holds only the contracts it is part of.</p>
+        <div class="grid grid-3">
+          <article class="role-card"><span class="role-badge">Seller</span><h3>Dealer Bank A</h3><p>Sells the bond and is paid at the moment it is delivered.</p></article>
+          <article class="role-card"><span class="role-badge">Buyer</span><h3>Dealer Bank B</h3><p>Pays for the bond and receives it in the same step.</p></article>
+          <article class="role-card"><span class="role-badge">Settlement agent</span><h3>Settlement Agent</h3><p>Checks that both sides match the agreed terms, then swaps them. It cannot change the terms.</p></article>
+          <article class="role-card"><span class="role-badge">Custodian</span><h3>Global Custodian</h3><p>Keeps the bonds for their owners and co-signs each bond position.</p></article>
+          <article class="role-card"><span class="role-badge">Cash bank</span><h3>Cash Settlement Bank</h3><p>Holds the cash as tokenized deposits and co-signs each cash position.</p></article>
+          <article class="role-card"><span class="role-badge">Regulator</span><h3>Securities Regulator</h3><p>Receives the trade report, and nothing else.</p></article>
         </div>
+      </section>
+
+      <section class="section" aria-labelledby="status-title">
+        <h2 id="status-title">How far along is it?</h2>
+        <div class="grid grid-2">
+          <article class="card status-card status-ok">
+            <h3>Works today</h3>
+            <ul class="check-list">
+              <li>Bond-for-cash settlement that moves both sides in one transaction</li>
+              <li>Runs on Canton 3.5, the version the Canton Network TestNet runs</li>
+              <li>290 automated tests; every change is also tested on a five-institution Canton network</li>
+              <li>ISO 20022 payment and securities messages mapped to ledger requests</li>
+            </ul>
+          </article>
+          <article class="card status-card status-todo">
+            <h3>Not yet</h3>
+            <ul class="todo-list">
+              <li>An independent security audit</li>
+              <li>Institutions on different nodes agreeing a trade step by step (today every signer must be on the same node)</li>
+              <li>Loans, repos and securities lending moving real assets (today they track the agreement only)</li>
+              <li>The Canton Network token standard (CIP-56)</li>
+            </ul>
+          </article>
+        </div>
+        <p class="section-foot"><a href="https://github.com/Aryaverse/aryafi-core/blob/main/docs/KNOWN_LIMITATIONS.md" target="_blank" rel="noopener noreferrer">Read the full list of known limitations</a></p>
+      </section>
+    </section>
+
+    <!-- =================================================================
+         See a trade settle
+         ================================================================= -->
+    <section class="view" id="view-trade" data-view="trade" aria-labelledby="trade-title" hidden>
+      <div class="page-head">
+        <h1 id="trade-title">Watch a bond-for-cash trade settle</h1>
+        <p class="lead">Dealer Bank A sells $5,000,000 (face value) of US Treasury bonds to Dealer Bank B for $4,975,000. Step through the trade to see who holds what, who can see what, and what stops things going wrong.</p>
+        <p class="fine-print">A replay of the library's tested scenario (<code>TreasuryDvpScenario</code>), not a live ledger.</p>
       </div>
-    </div>
 
-    <!-- ====================================================================
-         Tab 2: Interactive Scenario Simulator
-         ==================================================================== -->
-    <div class="tab-pane" id="tab-simulator" role="tabpanel" aria-labelledby="tab-btn-simulator">
-      <div class="section-header">
-        <div>
-          <h2 class="section-title">Multi-Party Financial Lifecycle Simulator</h2>
-          <p class="section-desc">Execute institutional smart contract workflows step-by-step and inspect live transaction commits and state transitions.</p>
+      <div class="trade-controls">
+        <ol class="stepper" id="stepper" aria-label="Trade steps"></ol>
+        <div class="trade-buttons">
+          <button class="btn" id="step-back" type="button">← Back</button>
+          <button class="btn btn-primary" id="step-next" type="button">Next step →</button>
         </div>
       </div>
 
-      <div class="scenario-layout">
-        <!-- Scenario Selector Sidebar -->
-        <div class="scenario-sidebar">
-          <button class="scenario-select-btn active" data-scenario="dvp">
-            <span class="scenario-btn-title">Tokenized Treasury DvP</span>
-            <span class="scenario-btn-desc">Atomic US Treasury vs USD Cash with SEC CAT reporting</span>
-          </button>
-          <button class="scenario-select-btn" data-scenario="seclend">
-            <span class="scenario-btn-title">Securities Lending</span>
-            <span class="scenario-btn-desc">102% cash collateral pledge, fee accrual, recall &amp; closeout</span>
-          </button>
-          <button class="scenario-select-btn" data-scenario="treasury">
-            <span class="scenario-btn-title">Treasury Cash Mobility</span>
-            <span class="scenario-btn-desc">Zero-balance sweep, concentration pool &amp; SWIFT payment</span>
-          </button>
-        </div>
+      <div class="trade-layout">
+        <article class="step-panel" id="step-panel" aria-live="polite">
+          <p class="step-count" id="step-count"></p>
+          <h2 id="step-title"></h2>
+          <p id="step-text"></p>
+          <p class="step-why" id="step-why"></p>
+          <details class="under-hood">
+            <summary>Under the hood</summary>
+            <div id="step-tech"></div>
+          </details>
+        </article>
 
-        <!-- Scenario Execution Card -->
-        <div class="scenario-runner-card">
-          <div class="scenario-control-bar">
-            <div>
-              <h3 id="scenario-active-title" style="font-size: 1.25rem; font-weight: 700;">Tokenized US Treasury + Cash DvP</h3>
-              <p id="scenario-active-desc" style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.2rem;">Atomic cross-asset Delivery-versus-Payment between primary dealers.</p>
-            </div>
-            <div style="display: flex; gap: 0.6rem; flex-wrap: wrap;">
-              <button class="btn-primary" id="btn-run-next-step">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-                Next Phase
-              </button>
-              <button class="btn-secondary" id="btn-run-auto">Auto-Run</button>
-              <button class="btn-secondary" id="btn-reset-scenario">Reset</button>
-              <button class="btn-secondary" id="btn-copy-log">Copy Log</button>
-              <button class="btn-secondary" id="btn-export-audit-csv" title="Export regulator-ready CSV audit report">Export CSV</button>
-              <button class="btn-secondary" id="btn-export-audit-json" title="Export JSON ledger audit trail">Export JSON</button>
-            </div>
+        <aside class="whatif" aria-labelledby="whatif-title">
+          <h2 id="whatif-title">What if…?</h2>
+          <p class="whatif-lead">Try something the contracts are built to stop.</p>
+          <div class="whatif-list" id="whatif-list"></div>
+          <div class="whatif-result" id="whatif-result" aria-live="polite" hidden></div>
+        </aside>
+
+        <div class="trade-board">
+          <div class="viewas">
+            <label for="viewas-select">Whose view?</label>
+            <select id="viewas-select">
+              <option value="">Everything (all institutions)</option>
+            </select>
+            <p class="viewas-hint" id="viewas-hint">Pick an institution to see only what its own node stores.</p>
           </div>
 
-          <!-- Progress Track -->
-          <div style="display: flex; flex-direction: column; gap: 0.35rem;">
-            <div style="display: flex; justify-content: space-between; font-size: 0.75rem; font-family: var(--font-mono); color: var(--text-tertiary);">
-              <span>LIFECYCLE ADVANCEMENT</span>
-              <span id="sim-progress-label">0% Completed (Phase 0 of 5)</span>
-            </div>
-            <div class="sim-progress-track">
-              <div class="sim-progress-bar" id="sim-progress-bar"></div>
-            </div>
-          </div>
-
-          <!-- Telemetry / Finality Metrics Row -->
-          <div class="simulator-telemetry-bar">
-            <div class="sim-metric-item">
-              <span class="sim-metric-label">Progress</span>
-              <span class="sim-metric-val" id="metric-latency">Not started</span>
-            </div>
-            <div class="sim-metric-item">
-              <span class="sim-metric-label">Mode</span>
-              <span class="sim-metric-val">Scripted simulation</span>
-            </div>
-            <div class="sim-metric-item">
-              <span class="sim-metric-label">Backed By</span>
-              <span class="sim-metric-val" id="metric-crypto">Daml test scenarios</span>
-            </div>
-            <div class="sim-metric-item">
-              <span class="sim-metric-label">Privacy Model</span>
-              <span class="sim-metric-val" id="metric-privacy">Stakeholders only</span>
-            </div>
-            <div class="sim-metric-item">
-              <span class="sim-metric-label">Ledger</span>
-              <span class="sim-metric-val">Not connected</span>
-            </div>
-          </div>
-
-          <!-- Phase Steps Timeline -->
-          <div class="timeline-list" id="timeline-steps-container">
-            <!-- Dynamically populated by JS -->
-          </div>
-
-          <!-- Terminal Output Log -->
-          <div>
-            <div style="display: flex; justify-content: space-between; margin-bottom: 0.4rem;">
-              <span style="font-size: 0.75rem; font-family: var(--font-mono); color: var(--text-tertiary);">SIMULATED LEDGER LOG</span>
-              <span style="font-size: 0.75rem; font-family: var(--font-mono); color: var(--text-tertiary);">● SCRIPTED — NO LEDGER CONNECTION</span>
-            </div>
-            <div class="terminal-card" id="scenario-terminal-output">
-              <div class="terminal-line gray">&gt; Scripted simulation of the library's Daml test scenarios (no ledger connection).</div>
-              <div class="terminal-line green">&gt; Ready. Select a scenario and click 'Next Phase' or 'Auto-Run' to begin execution.</div>
-            </div>
-          </div>
+          <div class="board" id="board" aria-label="What each institution holds and can see"></div>
         </div>
       </div>
-    </div>
+    </section>
 
-    <!-- ====================================================================
-         Tab 3: Contract Explorer & Split Conservation Calculator
-         ==================================================================== -->
-    <div class="tab-pane" id="tab-contracts" role="tabpanel" aria-labelledby="tab-btn-contracts">
-      <div class="section-header">
-        <div>
-          <h2 class="section-title">Contract Explorer &amp; Mathematical Invariants</h2>
-          <p class="section-desc">Inspect Daml contract primitives, templates, controllers, and verify algebraic conservation of value.</p>
-        </div>
+    <!-- =================================================================
+         What's inside
+         ================================================================= -->
+    <section class="view" id="view-inside" data-view="inside" aria-labelledby="inside-title" hidden>
+      <div class="page-head">
+        <h1 id="inside-title">What's in the library</h1>
+        <p class="lead">AryaFi Core is a set of contracts that institutions run on their own Canton nodes. Here is what each area does today, and how mature it is.</p>
       </div>
 
-      <div class="contracts-grid">
-        <!-- Invariant Calculator Card -->
-        <div class="calculator-card">
-          <div>
-            <span class="hero-pill">SplitCash Illustration</span>
-            <h3 style="font-size: 1.25rem; font-weight: 800;">CashPosition Split &amp; Merge Value Conservation</h3>
-            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem;">
-              SplitCash creates positions of <em>split</em> and <em>amount &minus; split</em>; MergeCash creates one position of the sum. Daml's Decimal has 10 fixed decimal places, so the arithmetic is exact. This calculator mirrors that arithmetic in the browser; the on-ledger behaviour is covered by the Daml test suite.
-            </p>
-          </div>
+      <section class="area" aria-labelledby="area-settlement">
+        <div class="area-head">
+          <h2 id="area-settlement">Settlement</h2>
+          <span class="badge badge-ok">Beta: ready to try</span>
+        </div>
+        <p class="area-lead">Moves real assets on the ledger today.</p>
+        <div class="grid grid-3">
+          <article class="card"><h3>Cash</h3><p>Tokenized deposits at a bank: split, merge, transfer with the receiver's consent, and lock for settlement.</p><code class="tech">CashPosition</code></article>
+          <article class="card"><h3>Securities</h3><p>Bonds and equities kept by a custodian, with the same locking and consent rules.</p><code class="tech">SecurityPosition</code></article>
+          <article class="card"><h3>Delivery versus payment</h3><p>Swaps a locked security for locked cash in one transaction, after checking both against the signed terms.</p><code class="tech">DvpInstruction</code></article>
+        </div>
+      </section>
 
-          <div class="preset-btn-group">
-            <span style="font-size: 0.75rem; font-family: var(--font-mono); color: var(--text-tertiary); display: flex; align-items: center;">Quick Presets:</span>
-            <button class="btn-copy calc-preset-btn" data-total="1000000" data-split="400000">$1M (Split $400k)</button>
-            <button class="btn-copy calc-preset-btn" data-total="25000000" data-split="15000000">$25M (Split $15M)</button>
-            <button class="btn-copy calc-preset-btn" data-total="100000000" data-split="45000000">$100M (Split $45M)</button>
-          </div>
-
-          <div class="calc-inputs-row">
-            <div class="form-group">
-              <label class="form-label" for="calc-total-amount">Total CashPosition Amount ($)</label>
-              <input type="number" id="calc-total-amount" class="form-input" value="10000000.00" step="100000" min="1">
-            </div>
-            <div class="form-group">
-              <label class="form-label" for="calc-split-amount">Split Amount ($)</label>
-              <input type="number" id="calc-split-amount" class="form-input" value="3500000.00" step="50000" min="1">
-            </div>
-            <button class="btn-primary" id="btn-execute-split" style="height: 42px;">
-              Execute Split
-            </button>
-          </div>
-
-          <div class="calc-result-box">
-            <div class="calc-stat">
-              <span class="calc-stat-val" id="calc-pos1-val">$3,500,000.00</span>
-              <span class="calc-stat-lbl">Output Position A (splitAmount)</span>
-            </div>
-            <span style="font-size: 1.5rem; color: var(--text-tertiary); font-weight: 300;">+</span>
-            <div class="calc-stat">
-              <span class="calc-stat-val" id="calc-pos2-val">$6,500,000.00</span>
-              <span class="calc-stat-lbl">Output Position B (total &minus; split)</span>
-            </div>
-            <span style="font-size: 1.5rem; color: var(--text-tertiary); font-weight: 300;">=</span>
-            <div class="calc-stat">
-              <span class="calc-stat-val" id="calc-sum-val">$10,000,000.00</span>
-              <span class="calc-stat-lbl">Reconstituted Total Sum</span>
-            </div>
-            <div class="calc-stat">
-              <span class="calc-stat-val emerald" id="calc-invariant-status">Run a split</span>
-              <span class="calc-stat-lbl">Split + remainder = original</span>
-            </div>
-          </div>
+      <section class="area" aria-labelledby="area-financing">
+        <div class="area-head">
+          <h2 id="area-financing">Financing</h2>
+          <span class="badge badge-warn">Experimental</span>
+        </div>
+        <p class="area-lead">Tracks each agreement and who may change it. Cash and securities do not move on the ledger yet.</p>
+        <div class="grid grid-3">
+          <article class="card"><h3>Loans</h3><p>Credit facilities. Interest is calculated by the contract from the rate and the date; repayments are confirmed by the lender.</p><code class="tech">InstitutionalLoan</code></article>
+          <article class="card"><h3>Repos</h3><p>Sale and repurchase of securities, from opening leg to closing leg, including rolls and substitution.</p><code class="tech">RepoAgreement</code></article>
+          <article class="card"><h3>Securities lending</h3><p>Stock loans with agreed fees, recalls that stay open until met, and collateral released in proportion to what is returned.</p><code class="tech">SecuritiesLendingAgreement</code></article>
+          <article class="card"><h3>Margin calls</h3><p>The payer submits; the caller confirms receipt. Default can only be declared after the deadline.</p><code class="tech">MarginCall</code></article>
+          <article class="card"><h3>Pledges and collateral</h3><p>Collateral valued at market price minus a haircut, revalued and substituted over the life of the agreement.</p><code class="tech">AssetPledge · CollateralPosition</code></article>
+          <article class="card"><h3>Funds and escrow</h3><p>Fund subscriptions and redemptions, and conditional escrow released on agreed conditions.</p><code class="tech">FundSubscription · AssetRedemption · ConditionalEscrow</code></article>
         </div>
 
-        <!-- Collateral Valuation & Haircut Matrix -->
-        <div class="calculator-card">
-          <div>
-            <span class="hero-pill">OCC / Fed Rule 15c3-3</span>
-            <h3 style="font-size: 1.25rem; font-weight: 800;">Collateral Valuation, Haircut &amp; Margin Call Matrix</h3>
-            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem;">
-              Real-time calculation of risk-weighted collateral requirements, haircuts, and automated smart-contract margin call thresholds according to AryaFi.Finance.Collateral rules.
-            </p>
-          </div>
-
-          <div class="calc-inputs-row">
-            <div class="form-group">
-              <label class="form-label" for="calc-collateral-asset">Collateral Asset Class</label>
-              <select id="calc-collateral-asset" class="form-input" style="min-width: 240px; font-weight: 600;">
-                <option value="ust" data-haircut="0.02" data-hqla="Level 1 HQLA">US Treasuries (0-5Y) - 2.0% Haircut</option>
-                <option value="agency" data-haircut="0.03" data-hqla="Level 1 HQLA">US Agency / GSE - 3.0% Haircut</option>
-                <option value="g10" data-haircut="0.025" data-hqla="Level 1 HQLA">G10 Sovereign Bonds - 2.5% Haircut</option>
-                <option value="corp-ig" data-haircut="0.05" data-hqla="Level 2A HQLA">Investment Grade Corporate - 5.0% Haircut</option>
-                <option value="corp-hy" data-haircut="0.15" data-hqla="Non-HQLA">High Yield Corporate - 15.0% Haircut</option>
+        <article class="card calc" aria-labelledby="calc-title">
+          <h3 id="calc-title">Try it: how much collateral does a loan need?</h3>
+          <p>Collateral counts at its market value minus a haircut. With a margin on top, you need <em>loan × margin ÷ (1 − haircut)</em>.</p>
+          <div class="calc-form">
+            <label>Loan amount ($)
+              <input id="calc-loan" type="number" min="0" step="100000" value="10000000" inputmode="decimal">
+            </label>
+            <label>Collateral
+              <select id="calc-asset">
+                <option value="0.02">US Treasuries (2% haircut)</option>
+                <option value="0.03">US agency bonds (3% haircut)</option>
+                <option value="0.025">G10 government bonds (2.5% haircut)</option>
+                <option value="0.05">Investment-grade corporate bonds (5% haircut)</option>
+                <option value="0.15">High-yield corporate bonds (15% haircut)</option>
               </select>
-            </div>
-            <div class="form-group">
-              <label class="form-label" for="calc-loan-exposure">Loan Exposure / Notional ($)</label>
-              <input type="number" id="calc-loan-exposure" class="form-input" value="10000000.00" step="100000" min="1000">
-            </div>
-            <div class="form-group">
-              <label class="form-label" for="calc-margin-req">Maintenance Margin (%)</label>
-              <input type="number" id="calc-margin-req" class="form-input" value="102.0" step="0.5" min="100" max="150" style="min-width: 140px;">
-            </div>
-            <button class="btn-primary" id="btn-calculate-margin" style="height: 42px;">
-              Evaluate Risk &amp; Margin
-            </button>
+            </label>
+            <label>Margin (%)
+              <input id="calc-margin" type="number" min="100" max="200" step="1" value="102" inputmode="decimal">
+            </label>
           </div>
+          <p class="calc-result" id="calc-result" aria-live="polite"></p>
+          <p class="fine-print">Illustrative haircuts; each agreement sets its own.</p>
+        </article>
+      </section>
 
-          <div class="calc-result-box">
-            <div class="calc-stat">
-              <span class="calc-stat-val" id="calc-required-collateral">$10,408,163.27</span>
-              <span class="calc-stat-lbl">Required Collateral Value</span>
-            </div>
-            <div class="calc-stat">
-              <span class="calc-stat-val" id="calc-effective-haircut">$208,163.27 (2.0%)</span>
-              <span class="calc-stat-lbl">Risk Haircut Deduction</span>
-            </div>
-            <div class="calc-stat">
-              <span class="calc-stat-val" id="calc-margin-call-threshold">$10,200,000.00</span>
-              <span class="calc-stat-lbl">Automated Margin Call Trigger</span>
-            </div>
-            <div class="calc-stat">
-              <span class="calc-stat-val emerald" id="calc-lcr-status">Level 1 HQLA</span>
-              <span class="calc-stat-lbl">Basel III Capital Eligibility</span>
-            </div>
-          </div>
+      <section class="area" aria-labelledby="area-compliance">
+        <div class="area-head">
+          <h2 id="area-compliance">Compliance</h2>
+          <span class="badge badge-warn">Experimental</span>
         </div>
+        <p class="area-lead">The rules are evaluated correctly, but are not yet enforced automatically inside transfers and settlements.</p>
+        <div class="grid grid-3">
+          <article class="card"><h3>KYC and sanctions</h3><p>Checks issued by a KYC provider or sanctions screener, with expiry dates. They hold no personal data.</p><code class="tech">KycAttestation · SanctionsAttestation</code></article>
+          <article class="card"><h3>Transfer rules</h3><p>Lockups, holding periods, whitelists, and Reg D, Reg S and Rule 144A investor categories, reporting every rule that fails.</p><code class="tech">TransferRestrictionRule</code></article>
+          <article class="card"><h3>Eligibility and limits</h3><p>Which assets and counterparties are allowed, and how much of an issue one holder may own.</p><code class="tech">EligibilityPolicy · OwnershipRestriction</code></article>
+          <article class="card"><h3>Regulatory reports</h3><p>Report records for SEC CAT, FINRA TRACE, EMIR and MiFIR, acknowledged or rejected by the regulator.</p><code class="tech">RegulatoryReportRecord</code></article>
+        </div>
+      </section>
 
-        <!-- Contract 1: CashPosition -->
-        <div class="contract-card">
-          <div class="contract-card-header">
-            <div>
-              <h3 class="contract-name">CashPosition</h3>
-              <span class="contract-module-tag">AryaFi.Finance.Cash</span>
-            </div>
-            <span class="badge-tag">Deposit Token</span>
-          </div>
-          <p class="contract-desc">
-            Tokenized central bank / commercial bank fiat deposit primitive. Enforces strict positivity, multi-currency isolation, zero-value leakage, atomic split/merge, and cryptographic encumbrance locks.
-          </p>
-          <div class="contract-meta">
-            <div class="contract-meta-item"><span class="contract-meta-key">Signatories:</span> <span class="contract-meta-val">bank, owner</span></div>
-            <div class="contract-meta-item"><span class="contract-meta-key">Key:</span> <span class="contract-meta-val">(bank, accountId, currency)</span></div>
-            <div class="contract-meta-item"><span class="contract-meta-key">Key Choices:</span> <span class="contract-meta-val">SplitCash, MergeCash, TransferCash, LockCash</span></div>
-          </div>
+      <section class="area" aria-labelledby="area-next">
+        <div class="area-head">
+          <h2 id="area-next">Coming next</h2>
+          <span class="badge">Planned</span>
         </div>
+        <ul class="todo-list todo-list-plain">
+          <li><strong>Agreeing trades across nodes.</strong> Propose-and-accept steps, so the seller, buyer and agent can each sign from their own node.</li>
+          <li><strong>The Canton Network token standard (CIP-56).</strong> So AryaFi holdings work with other tokens and wallets on the network.</li>
+          <li><strong>Financing on real assets.</strong> Loans, repos and securities lending that lock and move the actual cash and securities.</li>
+          <li><strong>An independent security audit</strong> of the finished core.</li>
+        </ul>
+        <p class="section-foot"><a href="https://github.com/Aryaverse/aryafi-core/blob/main/docs/IMPROVEMENT_PLAN.md" target="_blank" rel="noopener noreferrer">Read the improvement plan</a></p>
+      </section>
+    </section>
 
-        <!-- Contract 2: SecurityPosition -->
-        <div class="contract-card">
-          <div class="contract-card-header">
-            <div>
-              <h3 class="contract-name">SecurityPosition</h3>
-              <span class="contract-module-tag">AryaFi.Finance.Security</span>
-            </div>
-            <span class="badge-tag">CUSIP / ISIN Safekeeping</span>
-          </div>
-          <p class="contract-desc">
-            Safekeeping asset token for institutional wholesale securities (US Treasuries, Sovereign Debt, Corporate Bonds). Maintains encumbrance locks for bilateral repo and lending collateral.
-          </p>
-          <div class="contract-meta">
-            <div class="contract-meta-item"><span class="contract-meta-key">Signatories:</span> <span class="contract-meta-val">custodian, owner</span></div>
-            <div class="contract-meta-item"><span class="contract-meta-key">Key:</span> <span class="contract-meta-val">(custodian, accountId, isin)</span></div>
-            <div class="contract-meta-item"><span class="contract-meta-key">Key Choices:</span> <span class="contract-meta-val">LockSecurity, UnlockSecurity, TransferSecurity</span></div>
-          </div>
-        </div>
-
-        <!-- Contract 3: CollateralPosition -->
-        <div class="contract-card">
-          <div class="contract-card-header">
-            <div>
-              <h3 class="contract-name">CollateralPosition</h3>
-              <span class="contract-module-tag">AryaFi.Finance.Collateral</span>
-            </div>
-            <span class="badge-tag">Haircut &amp; Margin</span>
-          </div>
-          <p class="contract-desc">
-            Collateral position tracking allocated assets against financing facilities. Manages haircut rates, daily mark-to-market revaluation, bilateral substitution, and default liquidation.
-          </p>
-          <div class="contract-meta">
-            <div class="contract-meta-item"><span class="contract-meta-key">Signatories:</span> <span class="contract-meta-val">collateralProvider, collateralReceiver, custodian</span></div>
-            <div class="contract-meta-item"><span class="contract-meta-key">Formula:</span> <span class="contract-meta-val">Value = marketValue &times; (1 &minus; haircut)</span></div>
-            <div class="contract-meta-item"><span class="contract-meta-key">Key Choices:</span> <span class="contract-meta-val">RevalueCollateral, SubstituteCollateral, ReleaseCollateral</span></div>
-          </div>
-        </div>
-
-        <!-- Contract 4: DvpInstruction -->
-        <div class="contract-card">
-          <div class="contract-card-header">
-            <div>
-              <h3 class="contract-name">DvpInstruction</h3>
-              <span class="contract-module-tag">AryaFi.Finance.Settlement</span>
-            </div>
-            <span class="badge-tag">Atomic DvP</span>
-          </div>
-          <p class="contract-desc">
-            Delivery-versus-Payment settlement engine matching buyer cash and seller securities. Eliminates Herstatt risk by executing cross-asset exchange simultaneously in a single Canton commit.
-          </p>
-          <div class="contract-meta">
-            <div class="contract-meta-item"><span class="contract-meta-key">Signatories:</span> <span class="contract-meta-val">settlementAgent, seller, buyer</span></div>
-            <div class="contract-meta-item"><span class="contract-meta-key">Standard:</span> <span class="contract-meta-val">BIS CPSS Model 1 Finality</span></div>
-            <div class="contract-meta-item"><span class="contract-meta-key">Key Choices:</span> <span class="contract-meta-val">ExecuteDvpSettlement, CancelDvpSettlement</span></div>
-          </div>
-        </div>
-
-        <!-- Contract 5: InstitutionalLoan -->
-        <div class="contract-card">
-          <div class="contract-card-header">
-            <div>
-              <h3 class="contract-name">InstitutionalLoan</h3>
-              <span class="contract-module-tag">AryaFi.Contracts.Loan</span>
-            </div>
-            <span class="badge-tag">Credit Facility</span>
-          </div>
-          <p class="contract-desc">
-            Multi-drawdown revolving credit and term loan engine with Act360/Act365 day-count convention accruals, collateral pledge link, and payment servicing waterfalls.
-          </p>
-          <div class="contract-meta">
-            <div class="contract-meta-item"><span class="contract-meta-key">Signatories:</span> <span class="contract-meta-val">lender, borrower</span></div>
-            <div class="contract-meta-item"><span class="contract-meta-key">Features:</span> <span class="contract-meta-val">Auto-Close, Collateral Release, Default State</span></div>
-            <div class="contract-meta-item"><span class="contract-meta-key">Key Choices:</span> <span class="contract-meta-val">Drawdown, AccrueInterest, RepayLoan, DeclareDefault</span></div>
-          </div>
-        </div>
-
-        <!-- Contract 6: SecuritiesLendingAgreement -->
-        <div class="contract-card">
-          <div class="contract-card-header">
-            <div>
-              <h3 class="contract-name">SecuritiesLendingAgreement</h3>
-              <span class="contract-module-tag">AryaFi.Contracts.SecuritiesLending</span>
-            </div>
-            <span class="badge-tag">Stock Loan</span>
-          </div>
-          <p class="contract-desc">
-            Institutional stock lending contract with 102% cash collateral pledge, Act360 borrow fee accrual, rebate calculations, recall notices, and pro-rata collateral release.
-          </p>
-          <div class="contract-meta">
-            <div class="contract-meta-item"><span class="contract-meta-key">Signatories:</span> <span class="contract-meta-val">lender, borrower, custodian</span></div>
-            <div class="contract-meta-item"><span class="contract-meta-key">Formulas:</span> <span class="contract-meta-val">BorrowFee = Notional &times; Rate &times; (d/360)</span></div>
-            <div class="contract-meta-item"><span class="contract-meta-key">Key Choices:</span> <span class="contract-meta-val">AccrueLendingFee, RecallSecurities, ReturnSecurities</span></div>
-          </div>
-        </div>
+    <!-- =================================================================
+         Developers
+         ================================================================= -->
+    <section class="view" id="view-developers" data-view="developers" aria-labelledby="dev-title" hidden>
+      <div class="page-head">
+        <h1 id="dev-title">Build with AryaFi Core</h1>
+        <p class="lead">Daml SDK 3.5.12 and Canton 3.5. Everything below uses the code in this repository.</p>
       </div>
-    </div>
 
-    <!-- ====================================================================
-         Tab 4: ISO 20022 Financial Messaging Hub
-         ==================================================================== -->
-    <div class="tab-pane" id="tab-iso" role="tabpanel" aria-labelledby="tab-btn-iso">
-      <div class="section-header">
-        <div>
-          <h2 class="section-title">ISO 20022 Financial Messaging Translation Engine</h2>
-          <p class="section-desc">Bidirectional translation between global banking messaging standards (SWIFT MX) and Daml Ledger API command payloads.</p>
+      <div class="grid grid-2">
+        <article class="card">
+          <h2 class="card-title">Get started</h2>
+          <pre class="code" id="quickstart-code"><code># Install the Daml SDK (dpm) and build both packages
+curl https://get.digitalasset.com/install/install.sh | sh -s 3.5.12
+git clone https://github.com/Aryaverse/aryafi-core.git
+cd aryafi-core
+dpm build --all
+
+# Run the 290 tests
+cd daml/test
+dpm test --all</code></pre>
+          <button class="btn btn-small" type="button" data-copy="quickstart-code">Copy</button>
+        </article>
+
+        <article class="card">
+          <h2 class="card-title">Run it on a network</h2>
+          <ul class="link-list">
+            <li><strong>Five institutions on your laptop.</strong> <code>deploy/docker</code> starts a Canton 3.5 network with one node per institution: <code>docker compose up -d --build</code>.</li>
+            <li><strong>Canton Network TestNet.</strong> <code>deploy/testnet</code> has a smoke test and a runbook for a first run on a TestNet validator.</li>
+          </ul>
+          <p><a href="https://github.com/Aryaverse/aryafi-core/blob/main/deploy/testnet/README.md" target="_blank" rel="noopener noreferrer">TestNet runbook</a></p>
+        </article>
+      </div>
+
+      <section class="section" aria-labelledby="iso-title">
+        <h2 id="iso-title">Connect your systems: ISO 20022</h2>
+        <p class="section-lead">Payment and custody systems speak ISO 20022. Pick a message to see the Canton JSON Ledger API request it becomes, then check both.</p>
+
+        <div class="iso-toolbar">
+          <label for="iso-msg-select">Message</label>
+          <select id="iso-msg-select">
+            <option value="pacs008">pacs.008: customer credit transfer → payment instruction</option>
+            <option value="sese023">sese.023: securities settlement → DvP instruction</option>
+            <option value="camt053">camt.053: bank statement → cash positions</option>
+            <option value="semt002">semt.002: custody statement → security positions</option>
+          </select>
+          <button class="btn btn-primary" id="btn-validate-iso" type="button">Check this message</button>
+          <span class="badge" id="iso-status-badge" aria-live="polite">Not checked yet</span>
         </div>
-        <div>
-          <label for="iso-msg-select" style="font-size: 0.8rem; font-family: var(--font-mono); color: var(--text-tertiary); margin-right: 0.5rem;">SELECT MESSAGE:</label>
-          <select id="iso-msg-select" class="form-input" style="min-width: 320px; font-weight: 600;">
-            <option value="pacs008">pacs.008.001.10 (Customer Credit Transfer &rarr; PaymentInstruction)</option>
-            <option value="sese023">sese.023.001.10 (Securities Settlement &rarr; DvpInstruction)</option>
-            <option value="camt053">camt.053.001.10 (Bank-to-Customer Statement &rarr; Cash Reconcile)</option>
-            <option value="semt002">semt.002.001.10 (Custody Holding Statement &rarr; Security Audit)</option>
+
+        <div class="grid grid-2 iso-panes">
+          <div class="code-card">
+            <div class="code-card-head"><span id="iso-left-title">ISO 20022 message (XML)</span><button class="btn btn-small" type="button" data-copy="iso-xml-display">Copy</button></div>
+            <pre class="code" id="iso-xml-display"></pre>
+          </div>
+          <div class="code-card">
+            <div class="code-card-head"><span id="iso-right-title">JSON Ledger API v2 request</span><button class="btn btn-small" type="button" data-copy="iso-daml-display">Copy</button></div>
+            <pre class="code" id="iso-daml-display"></pre>
+          </div>
+        </div>
+
+        <details class="under-hood">
+          <summary>Field-by-field mapping</summary>
+          <div class="table-wrap">
+            <table class="map-table">
+              <thead><tr><th>ISO element</th><th>Path</th><th>Ledger field</th><th>Type</th><th>Rule</th></tr></thead>
+              <tbody id="iso-mapping-tbody"></tbody>
+            </table>
+          </div>
+        </details>
+      </section>
+
+      <section class="section" aria-labelledby="src-title">
+        <h2 id="src-title">Read the contracts</h2>
+        <div class="iso-toolbar">
+          <label for="daml-file-select">Module</label>
+          <select id="daml-file-select">
+            <option value="cash">Cash (tokenized deposits)</option>
+            <option value="security">Securities (custody positions)</option>
+            <option value="settlement">Settlement (delivery versus payment)</option>
+            <option value="collateral">Collateral (haircuts and valuation)</option>
+            <option value="loan">Loans (credit facilities)</option>
+            <option value="repo">Repos (repurchase agreements)</option>
+            <option value="transfer">Transfer rules (Reg D, Reg S, 144A)</option>
           </select>
         </div>
-      </div>
+        <div class="code-card">
+          <div class="code-card-head"><span id="daml-viewer-title"></span><button class="btn btn-small" type="button" data-copy="daml-viewer-content">Copy</button></div>
+          <pre class="code code-tall" id="daml-viewer-content"></pre>
+        </div>
+      </section>
 
-      <!-- ISO Translation Control Bar -->
-      <div class="iso-toolbar">
-        <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
-          <span class="iso-direction-badge" id="iso-direction-display">
-            <span>⇄</span> <span id="iso-direction-text">SWIFT MX (XML) &rarr; JSON Ledger API request</span>
-          </span>
-          <span class="badge-tag" id="iso-status-badge" style="color: var(--text-secondary);">
-            Not yet validated
-          </span>
+      <section class="section" aria-labelledby="docs-title">
+        <h2 id="docs-title">Documentation</h2>
+        <div class="grid grid-3 doc-links">
+          <a class="card link-card" href="https://github.com/Aryaverse/aryafi-core/blob/main/docs/integration/LEDGER_API_CLIENT.md" target="_blank" rel="noopener noreferrer"><h3>Ledger API client guide</h3><p>Submitting commands, tokens and rights, deduplication, streams.</p></a>
+          <a class="card link-card" href="https://github.com/Aryaverse/aryafi-core/blob/main/docs/governance/MIGRATION_GUIDE.md" target="_blank" rel="noopener noreferrer"><h3>Migration guide</h3><p>Upgrading between versions, including v2 to v3.</p></a>
+          <a class="card link-card" href="https://github.com/Aryaverse/aryafi-core/blob/main/docs/KNOWN_LIMITATIONS.md" target="_blank" rel="noopener noreferrer"><h3>Known limitations</h3><p>What the library does not do yet. Read before building on it.</p></a>
+          <a class="card link-card" href="https://github.com/Aryaverse/aryafi-core/blob/main/docs/security/AUTHORIZATION_MATRIX.md" target="_blank" rel="noopener noreferrer"><h3>Authorization matrix</h3><p>Who can do what on every contract, generated from the code.</p></a>
+          <a class="card link-card" href="https://github.com/Aryaverse/aryafi-core/blob/main/docs/security/THREAT_MODEL.md" target="_blank" rel="noopener noreferrer"><h3>Threat model</h3><p>Threats considered and how the contracts address them.</p></a>
+          <a class="card link-card" href="https://github.com/Aryaverse/aryafi-core/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer"><h3>Changelog</h3><p>What changed in each release.</p></a>
         </div>
-        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-          <button class="btn-secondary" id="btn-toggle-iso-dir">⇄ Invert Direction</button>
-          <button class="btn-secondary" id="btn-validate-iso">Run Validation Checks</button>
-        </div>
-      </div>
-
-      <div class="iso-grid">
-        <!-- ISO XML Card -->
-        <div class="editor-card">
-          <div class="editor-header">
-            <span class="editor-title" id="iso-left-title">INCOMING ISO 20022 MX (XML PAYLOAD)</span>
-            <div class="editor-actions">
-              <span class="badge-tag">SWIFT MX</span>
-              <button class="btn-copy" id="btn-copy-xml">Copy XML</button>
-            </div>
-          </div>
-          <pre class="editor-content" id="iso-xml-display"></pre>
-        </div>
-
-        <!-- Daml Ledger API Payload Card -->
-        <div class="editor-card">
-          <div class="editor-header">
-            <span class="editor-title" id="iso-right-title">JSON LEDGER API v2 REQUEST BODY</span>
-            <div class="editor-actions">
-              <span class="badge-tag">Canton 3.5</span>
-              <button class="btn-copy" id="btn-copy-daml">Copy Daml</button>
-            </div>
-          </div>
-          <pre class="editor-content" id="iso-daml-display"></pre>
-        </div>
-      </div>
-
-      <!-- Canonical Field Mapping Inspector -->
-      <div class="calculator-card" style="margin-top: 1.5rem;">
-        <div>
-          <span class="hero-pill">Bi-Directional Lexicon</span>
-          <h3 style="font-size: 1.15rem; font-weight: 800;">Canonical ISO 20022 &harr; Daml Schema Field Mapping</h3>
-          <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.2rem;">
-            Real-time ontological alignment between SWIFT MX business conceptual elements and Daml smart contract template choices.
-          </p>
-        </div>
-        <div style="overflow-x: auto;">
-          <table class="iso-mapping-table">
-            <thead>
-              <tr>
-                <th>SWIFT MX (XML Element)</th>
-                <th>ISO 20022 Tag Path</th>
-                <th>Daml Ledger API (JSON Key)</th>
-                <th>Contract Field Specification</th>
-                <th>Validation Invariant</th>
-              </tr>
-            </thead>
-            <tbody id="iso-mapping-tbody">
-              <!-- Dynamically populated -->
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-    <!-- ====================================================================
-         Tab 5: Security & Compliance Matrix
-         ==================================================================== -->
-    <div class="tab-pane" id="tab-security" role="tabpanel" aria-labelledby="tab-btn-security">
-      <div class="section-header">
-        <div>
-          <h2 class="section-title">Institutional Security Assurance &amp; Regulatory Alignment</h2>
-          <p class="section-desc">STRIDE threat model, regulatory mapping, and design controls. Not yet independently audited; see docs/KNOWN_LIMITATIONS.md.</p>
-        </div>
-      </div>
-
-      <div class="security-grid">
-        <!-- STRIDE Card -->
-        <div class="security-card">
-          <h3 class="security-card-title">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-emerald)" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-            STRIDE Threat Model Mitigations
-          </h3>
-          <div class="checklist-item">
-            <span class="check-icon">&#10003;</span>
-            <div><strong>Spoofing (S):</strong> Canton Ed25519/ECDSA cryptographic signatures. Every transaction requires explicit multi-party co-signatures.</div>
-          </div>
-          <div class="checklist-item">
-            <span class="check-icon">&#10003;</span>
-            <div><strong>Tampering (T):</strong> Transaction views are hashed in a Merkle tree and confirmed through the Canton synchronizer's mediator; contracts cannot change without their signatories' authorization.</div>
-          </div>
-          <div class="checklist-item">
-            <span class="check-icon">&#10003;</span>
-            <div><strong>Repudiation (R):</strong> Non-repudiable on-ledger contract signatures and auditable event commitments.</div>
-          </div>
-          <div class="checklist-item">
-            <span class="check-icon">&#10003;</span>
-            <div><strong>Information Disclosure (I):</strong> Sub-transaction privacy ensures third parties are blind to unshared contracts.</div>
-          </div>
-          <div class="checklist-item">
-            <span class="check-icon">&#10003;</span>
-            <div><strong>Denial of Service (D):</strong> Deterministic Daml execution without unbounded recursion or gas exhaustion vulnerabilities.</div>
-          </div>
-          <div class="checklist-item">
-            <span class="check-icon">&#10003;</span>
-            <div><strong>Elevation of Privilege (E):</strong> Strictly enforced signatory and controller authorizations verified at compile and runtime.</div>
-          </div>
-        </div>
-
-        <!-- US Banking Capital Rules -->
-        <div class="security-card">
-          <h3 class="security-card-title">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-cyan)" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M7 12h10M12 7v10"></path></svg>
-            US Capital Rules (OCC / Fed / FDIC)
-          </h3>
-          <div class="checklist-item">
-            <span class="check-icon">&#10003;</span>
-            <div><strong>Capital Neutrality:</strong> Tokenized deposit positions match 1:1 with traditional ledger deposits, zero supplemental reserve drain.</div>
-          </div>
-          <div class="checklist-item">
-            <span class="check-icon">&#10003;</span>
-            <div><strong>Basel III LCR:</strong> Tokenized US Treasuries maintain Level 1 High-Quality Liquid Asset (HQLA) classification with 0% haircut.</div>
-          </div>
-          <div class="checklist-item">
-            <span class="check-icon">&#10003;</span>
-            <div><strong>UCC Article 8 / Article 12:</strong> Perfected security interests via AssetPledge and electronic controllable records compliance.</div>
-          </div>
-          <div class="checklist-item">
-            <span class="check-icon">&#10003;</span>
-            <div><strong>Custodial Segregation:</strong> Customer positions held in segregated omnibus accounts, insulated from custodian insolvency.</div>
-          </div>
-        </div>
-
-        <!-- SEC Regulatory Alignment -->
-        <div class="security-card">
-          <h3 class="security-card-title">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-purple)" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-            SEC &amp; TRACE Compliance
-          </h3>
-          <div class="checklist-item">
-            <span class="check-icon">&#10003;</span>
-            <div><strong>SEC Rule 15c3-3:</strong> Special reserve bank account protection for customer credit balances.</div>
-          </div>
-          <div class="checklist-item">
-            <span class="check-icon">&#10003;</span>
-            <div><strong>Regulatory Reports:</strong> RegulatoryReportRecord captures CAT / TRACE / EMIR submissions and regulator acknowledgement. Reports are created by the reporting party; automatic emission on settlement is on the roadmap.</div>
-          </div>
-          <div class="checklist-item">
-            <span class="check-icon">&#10003;</span>
-            <div><strong>FINRA TRACE:</strong> Real-time secondary market repo and treasury trade transaction reporting.</div>
-          </div>
-          <div class="checklist-item">
-            <span class="check-icon">&#10003;</span>
-            <div><strong>Transfer Restrictions:</strong> Programmatic enforcement of Reg D 506(c), Reg S, and Rule 144A lockups.</div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ====================================================================
-         Tab 6: Daml Code Dossier
-         ==================================================================== -->
-    <div class="tab-pane" id="tab-docs" role="tabpanel" aria-labelledby="tab-btn-docs">
-      <div class="section-header">
-        <div>
-          <h2 class="section-title">AryaFi Daml Smart Contract Source Code Dossier</h2>
-          <p class="section-desc">Production-grade Daml smart contract modules ready for compilation and Canton deployment.</p>
-        </div>
-        <div>
-          <label for="daml-file-select" style="font-size: 0.8rem; font-family: var(--font-mono); color: var(--text-tertiary); margin-right: 0.5rem;">SELECT MODULE:</label>
-          <select id="daml-file-select" class="form-input" style="min-width: 280px; font-weight: 600;">
-            <option value="cash">AryaFi.Finance.Cash (Tokenized Cash)</option>
-            <option value="security">AryaFi.Finance.Security (Safekeeping)</option>
-            <option value="settlement">AryaFi.Finance.Settlement (Atomic DvP)</option>
-            <option value="collateral">AryaFi.Finance.Collateral (Haircut &amp; Margin)</option>
-            <option value="loan">AryaFi.Contracts.Loan (Credit Facility)</option>
-            <option value="repo">AryaFi.Contracts.Repo (Repurchase Agreement)</option>
-            <option value="transfer">AryaFi.Compliance.TransferRestrictions (Rule 144A / Reg D)</option>
-          </select>
-        </div>
-      </div>
-
-      <div class="editor-card" style="min-height: 540px;">
-        <div class="editor-header">
-          <span class="editor-title" id="daml-viewer-title">AryaFi/Finance/Cash.daml (Tokenized Cash Primitive)</span>
-          <div class="editor-actions">
-            <span class="badge-tag">Daml SDK 3.5.12</span>
-            <button class="btn-copy" id="btn-copy-source">Copy Source</button>
-          </div>
-        </div>
-        <pre class="editor-content" id="daml-viewer-content" style="height: 500px;"></pre>
-      </div>
-    </div>
+      </section>
+    </section>
   </main>
 
-  <!-- Global Footer -->
-  <footer class="footer">
-    <div class="footer-container">
-      <div class="footer-text">
-        &copy; 2026 Aryaverse. All rights reserved. Licensed under Apache 2.0. Built with Daml SDK 3.5 for Canton 3.5.
-      </div>
-      <div class="footer-links">
-        <a href="https://github.com/Aryaverse/aryafi-core/blob/main/docs/ROADMAP.md" target="_blank" rel="noopener noreferrer" class="footer-link">Roadmap</a>
-        <a href="https://github.com/Aryaverse/aryafi-core/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer" class="footer-link">Changelog</a>
-        <a href="https://github.com/Aryaverse/aryafi-core/blob/main/docs/security/THREAT_MODEL.md" target="_blank" rel="noopener noreferrer" class="footer-link">STRIDE Security</a>
-        <a href="https://github.com/Aryaverse/aryafi-core/blob/main/docs/integration/ISO20022_MAPPINGS.md" target="_blank" rel="noopener noreferrer" class="footer-link">ISO 20022</a>
-        <a href="https://github.com/Aryaverse/aryafi-core" target="_blank" rel="noopener noreferrer" class="footer-link">GitHub</a>
-      </div>
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <p>AryaFi Core v3.0.0 · Beta, not independently audited · Daml SDK 3.5 / Canton 3.5 · Apache 2.0</p>
+      <p>© 2026 Aryaverse</p>
     </div>
   </footer>
-
-  <!-- Keyboard Shortcuts Modal -->
-  <dialog class="shortcuts-dialog" id="shortcuts-modal" aria-labelledby="shortcuts-title">
-    <div class="shortcuts-modal-content">
-      <div class="shortcuts-header">
-        <h3 id="shortcuts-title" class="shortcuts-title">⌨ Institutional Terminal Hotkeys</h3>
-        <button class="btn-close-modal" id="btn-close-shortcuts" aria-label="Close modal">&times;</button>
-      </div>
-      <div class="shortcuts-grid">
-        <div class="shortcut-item"><kbd>1</kbd> - <kbd>6</kbd> <span>Switch Active Tab (Topology, Simulator, Contracts, ISO, Rules, Daml)</span></div>
-        <div class="shortcut-item"><kbd>T</kbd> <span>Toggle Light / Dark Mode</span></div>
-        <div class="shortcut-item"><kbd>R</kbd> <span>Run / Advance Multi-Party Scenario</span></div>
-        <div class="shortcut-item"><kbd>?</kbd> <span>Toggle Hotkey Cheatsheet</span></div>
-        <div class="shortcut-item"><kbd>Esc</kbd> <span>Dismiss Dialog</span></div>
-      </div>
-    </div>
-  </dialog>
 
   <script src="app.js"></script>
 </body>
