@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+env:
+  # Keep in step with sdk-version in daml.yaml and daml/test/daml.yaml.
+  DPM_SDK_VERSION: "3.5.12"
+
 jobs:
   release-dar:
     name: Build and Publish Daml Release Artifacts
@@ -20,31 +24,35 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
 
       # Exact-version cache key only: restoring a different SDK version would
       # silently build against the wrong compiler.
       - name: Cache Daml SDK
         uses: actions/cache@v4
         with:
-          path: ~/.daml
-          key: daml-sdk-${{ runner.os }}-2.10.0
+          path: ~/.dpm
+          key: dpm-sdk-${{ runner.os }}-${{ env.DPM_SDK_VERSION }}
 
       - name: Install Daml SDK
         run: |
-          if ! "$HOME/.daml/bin/daml" version 2>/dev/null | grep -q "2.10.0"; then
-            curl -sSL https://get.daml.com/ | sh -s 2.10.0
+          if ! "$HOME/.dpm/bin/dpm" version 2>/dev/null | grep -q "$DPM_SDK_VERSION"; then
+            curl -sSL https://get.digitalasset.com/install/install.sh | sh -s "$DPM_SDK_VERSION"
           fi
-          echo "$HOME/.daml/bin" >> $GITHUB_PATH
+          echo "$HOME/.dpm/bin" >> $GITHUB_PATH
+
+      - name: Compile Daml Archives (DARs)
+        run: dpm build --all
 
       - name: Execute Full Test Suite (release gate)
-        run: daml test
+        working-directory: daml/test
+        run: dpm test
 
-      - name: Compile Release DAR
+      # Only the production package is released; the test package stays in CI.
+      - name: Collect Release DAR
         run: |
-          daml build
           mkdir -p release-artifacts
-          cp .daml/dist/*.dar release-artifacts/
+          cp .daml/dist/aryafi-core-*.dar release-artifacts/
 
       - name: Generate Cryptographic Checksums
         working-directory: release-artifacts
