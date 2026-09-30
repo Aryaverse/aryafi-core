@@ -52,7 +52,7 @@ Maturity labels follow [VERSIONING_AND_RELEASE.md](governance/VERSIONING_AND_REL
 - **Audit events are not emitted automatically.** `AuditLog` and `RegulatoryReportRecord` contracts are created by the reporting party; no workflow emits them on settlement.
 - **Local test topology only.** `deploy/` runs five in-memory Canton 3.5 participants and one synchronizer (sequencer and mediator) for integration testing. The config and bootstrap script have been run against Canton 3.5.19, and the DvP scenario and test suites (`runTreasuryDvpScenario`, `runDvpSettlementTests`) pass with `dpm script` against one of its participants. CI builds the Docker image, boots the topology, and runs both suites against it on every push and pull request (`canton-topology` job). Scripts that call `setTime` only run on the test ledger.
 - **No field filters on the JSON Ledger API.** The v2 active-contracts endpoint filters by template and party only, so statement reconciliation (`camt.053`, `semt.002`) filters positions by account, currency, or ISIN in the client. A participant query store (PQS) would move that filtering into SQL.
-- **Web terminal is a simulation.** The site at https://aryafi-core.vercel.app replays scripted scenarios and does not connect to a ledger. Its code viewer shows the real source files.
+- **The website is a replay.** The trade walkthrough at https://aryafi-core.vercel.app replays the tested DvP scenario and does not connect to a ledger. Its code viewer shows the real source files.
 
 ## 7. Test Coverage
 

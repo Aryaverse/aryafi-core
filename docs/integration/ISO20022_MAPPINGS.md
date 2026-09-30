@@ -181,7 +181,7 @@ The `sese.023.001.10` (*Securities Settlement Transaction Instruction*) maps to 
 ```
 
 ### 7.2 Resulting Daml Command (JSON Ledger API v2, `POST /v2/commands/submit-and-wait`)
-Template IDs use the package-name form (`#aryafi-core:...`). Newtype identifiers (`AccountId`, `CorrelationId`, ...) are encoded as records, variants as `{"tag", "value"}`, and parties as full party IDs (shown as placeholders). The command ID is derived from the message ID, so a resubmitted message is deduplicated. The web terminal's ISO 20022 Hub shows the same request shape and runs its validation checks on it.
+Template IDs use the package-name form (`#aryafi-core:...`). Newtype identifiers (`AccountId`, `CorrelationId`, ...) are encoded as records, variants as `{"tag", "value"}`, and parties as full party IDs (shown as placeholders). The command ID is derived from the message ID, so a resubmitted message is deduplicated. The website's Developers page shows the same request shape and runs its validation checks on it.
 ```json
 {
   "commands": [
