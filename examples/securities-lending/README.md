@@ -79,7 +79,7 @@ This reference application exercises the AryaFi Securities Lending module throug
 ### 1. Trade Inception: Securities Lending Agreement
 Beneficial Owner lends 5M face value US Treasuries to Broker-Dealer at 75 bps annual borrow fee with 102% cash collateral:
 ```daml
-lendingCid <- submitMulti [beneficialOwner, borrowerDealer, lendingCustodian] [] do
+lendingCid <- submit (actAs [beneficialOwner, borrowerDealer, lendingCustodian]) do
   createCmd SecuritiesLendingAgreement with
     lendingId = "SECLEND-2026-001"
     lender = beneficialOwner
@@ -103,7 +103,7 @@ lendingCid <- submitMulti [beneficialOwner, borrowerDealer, lendingCustodian] []
 ### 2. Collateral Pledge
 Borrower posts cash collateral under tri-party custody arrangement:
 ```daml
-pledgeCid <- submitMulti [borrowerDealer, beneficialOwner, lendingCustodian] [] do
+pledgeCid <- submit (actAs [borrowerDealer, beneficialOwner, lendingCustodian]) do
   createCmd AssetPledge with
     pledgeId = "PLEDGE-SECLEND-001"
     pledgor = borrowerDealer
@@ -122,7 +122,7 @@ pledgeCid <- submitMulti [borrowerDealer, beneficialOwner, lendingCustodian] [] 
 Both counterparties agree each period's fee (Act/360 convention), and the lender confirms payment, so neither side can change what the borrower owes on its own:
 ```daml
 -- Lender and borrower agree the 30-day borrow fee: 5M × 0.0075 × 30/360 = 3,125 USD
-accruedCid <- submitMulti [beneficialOwner, borrowerDealer] [] do
+accruedCid <- submit (actAs [beneficialOwner, borrowerDealer]) do
   exerciseCmd lendingCid AccrueLendingFee with
     additionalFee = 3125.0
 
@@ -136,7 +136,7 @@ feesPaidCid <- submit beneficialOwner do
 When the underlying security's market value changes, both parties agree to adjust collateral:
 ```daml
 -- Bilateral agreement on updated collateral value
-revaluedCid <- submitMulti [beneficialOwner, borrowerDealer] [] do
+revaluedCid <- submit (actAs [beneficialOwner, borrowerDealer]) do
   exerciseCmd feesPaidCid RevalueCollateral with
     newCollateralAmount = 5200000.0
 ```
@@ -212,6 +212,7 @@ defaultedCid <- submit beneficialOwner do
 ## Scenario Verification
 To execute the complete multi-party test scenario:
 ```bash
-daml test --files daml/src/AryaFi/Test/Scenarios/SecuritiesLendingScenario.daml
+cd daml/test
+dpm test --files AryaFi/Test/Scenarios/SecuritiesLendingScenario.daml
 ```
-*Implemented in [SecuritiesLendingScenario.daml](../../daml/src/AryaFi/Test/Scenarios/SecuritiesLendingScenario.daml).*
+*Implemented in [SecuritiesLendingScenario.daml](../../daml/test/AryaFi/Test/Scenarios/SecuritiesLendingScenario.daml).*

@@ -217,7 +217,7 @@ The tables below list every template in the production modules (`daml/src/AryaFi
 
 ## 3. Trust Boundary Principles
 
-These principles hold for the current code and are covered by the negative and authorization tests in `daml/src/AryaFi/Test`:
+These principles hold for the current code and are covered by the negative and authorization tests in `daml/test/AryaFi/Test`:
 
 1. **No position is imposed on a party without its consent.** `TransferCash`, `TransferSecurity`, and `TransferAsset` require the current owner, the holding institution (bank or custodian), and the receiving owner. The receiver becomes a signatory of the new position, so its authority is required.
 2. **Locks bind to a named lock holder.** `LockCash` / `LockSecurity` / `LockAsset` are authorized by owner and bank/custodian and name a lock holder. Only the lock holder can release the lock, or deliver the position to a receiver who co-authorizes (`SettleLockedCash` / `SettleLockedSecurity`). Neither owner nor custodian can withdraw a leg from an agreed settlement.

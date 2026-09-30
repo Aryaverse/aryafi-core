@@ -25,7 +25,7 @@ This specification establishes the canonical bidirectional field mapping between
 └────────────────────────┘              └────────────────────────┘              └──────────────────────┘
             │                                       │                                       │
             │  1. Inbound pacs.008                  │                                       │
-            │──────────────────────────────────────>│  2. submitMulti create               │
+            │──────────────────────────────────────>│  2. multi-party create               │
             │                                       │     PaymentInstruction                │
             │                                       │──────────────────────────────────────>│
             │                                       │                                       │
@@ -180,28 +180,36 @@ The `sese.023.001.10` (*Securities Settlement Transaction Instruction*) maps to 
 </Document>
 ```
 
-### 7.2 Resulting Daml Command (HTTP JSON API v1, `POST /v1/create`)
-Newtype identifiers (`AccountId`, `CorrelationId`, ...) are encoded as records, variants as `{"tag", "value"}`, and parties as full party IDs (shown as placeholders). The same payload appears in the web terminal's ISO 20022 Hub, where it passes the built-in validation checks.
+### 7.2 Resulting Daml Command (JSON Ledger API v2, `POST /v2/commands/submit-and-wait`)
+Template IDs use the package-name form (`#aryafi-core:...`). Newtype identifiers (`AccountId`, `CorrelationId`, ...) are encoded as records, variants as `{"tag", "value"}`, and parties as full party IDs (shown as placeholders). The command ID is derived from the message ID, so a resubmitted message is deduplicated. The web terminal's ISO 20022 Hub shows the same request shape and runs its validation checks on it.
 ```json
 {
-  "templateId": "AryaFi.Finance.Payment:PaymentInstruction",
-  "payload": {
-    "payer": "<party-id:DealerBankA>",
-    "payee": "<party-id:GlobalCustodian>",
-    "settlementAgent": "<party-id:CashSettlementBank>",
-    "payerAccountId": { "unAccountId": "ACC-DLRA-USD-001" },
-    "payeeAccountId": { "unAccountId": "ACC-CUST-USD-001" },
-    "currency": "USD",
-    "amount": "12500000.00",
-    "purpose": { "tag": "RepoOpeningLeg", "value": {} },
-    "obligationRef": "REPO-REF-2026-001",
-    "correlationId": { "unCorrelationId": "CORR-REPO-2026-8831" },
-    "idempotencyKey": { "unIdempotencyKey": "IDEMP-2026-09-18-0042" },
-    "networkRef": { "unPaymentNetworkRef": "e1a49f82-3d92-4f10-bf91-b3b281f9a12c" },
-    "status": { "tag": "PendingSettlement", "value": {} },
-    "observers": ["<party-id:SupervisoryAuthority>"]
-  },
-  "meta": { "commandId": "aryafi-pacs008-IDEMP-2026-09-18-0042" }
+  "commands": [
+    {
+      "CreateCommand": {
+        "templateId": "#aryafi-core:AryaFi.Finance.Payment:PaymentInstruction",
+        "createArguments": {
+          "payer": "<party-id:DealerBankA>",
+          "payee": "<party-id:GlobalCustodian>",
+          "settlementAgent": "<party-id:CashSettlementBank>",
+          "payerAccountId": { "unAccountId": "ACC-DLRA-USD-001" },
+          "payeeAccountId": { "unAccountId": "ACC-CUST-USD-001" },
+          "currency": "USD",
+          "amount": "12500000.00",
+          "purpose": { "tag": "RepoOpeningLeg", "value": {} },
+          "obligationRef": "REPO-REF-2026-001",
+          "correlationId": { "unCorrelationId": "CORR-REPO-2026-8831" },
+          "idempotencyKey": { "unIdempotencyKey": "IDEMP-2026-09-18-0042" },
+          "networkRef": { "unPaymentNetworkRef": "e1a49f82-3d92-4f10-bf91-b3b281f9a12c" },
+          "status": { "tag": "PendingSettlement", "value": {} },
+          "observers": ["<party-id:SupervisoryAuthority>"]
+        }
+      }
+    }
+  ],
+  "commandId": "aryafi-pacs008-IDEMP-2026-09-18-0042",
+  "userId": "<user-id>",
+  "actAs": ["<party-id:DealerBankA>", "<party-id:GlobalCustodian>", "<party-id:CashSettlementBank>"]
 }
 ```
-`PaymentInstruction` is signed by payer, payee, and settlement agent, so the submitting token must act as all three, or the instruction must be created through a propose/accept flow (not yet provided).
+`PaymentInstruction` is signed by payer, payee, and settlement agent, so the submitting user must be able to act as all three and they must be hosted on the same participant, or the instruction must be created through a propose/accept flow (not yet provided).
