@@ -160,6 +160,7 @@ daml/test/AryaFi/Test/      # separate test package (aryafi-core-test)
 ├── Negative/               # Unauthorized access, compliance violation & invalid transition tests
 ├── Privacy/                # Canton sub-transaction privacy & observer visibility verification
 ├── Authorization/          # Multi-signatory, bilateral & tri-party authorization edge cases
+├── Network/                # Smoke test for shared networks such as TestNet (deploy/testnet)
 └── Integration/            # Cross-module workflow tests (single ledger)
 ```
 

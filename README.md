@@ -3,7 +3,7 @@
 [![Daml](https://img.shields.io/badge/Daml_SDK-3.5.12-blue.svg)](https://docs.digitalasset.com)
 [![Canton](https://img.shields.io/badge/Canton-3.5_(protocol_35)-green.svg)](deploy/canton/canton.conf)
 [![Release](https://img.shields.io/badge/Release-v3.0.0-purple.svg)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/dpm_test-289_passing-brightgreen.svg)](daml/test/AryaFi/Test)
+[![Tests](https://img.shields.io/badge/dpm_test-290_passing-brightgreen.svg)](daml/test/AryaFi/Test)
 [![Status](https://img.shields.io/badge/Status-Beta_/_Experimental-orange.svg)](docs/KNOWN_LIMITATIONS.md)
 [![Vercel Deployment](https://img.shields.io/badge/Vercel-Live_Terminal-black.svg?logo=vercel)](https://aryafi-core.vercel.app)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
@@ -102,12 +102,13 @@ aryafi-core/
 │   │       └── Compliance/        # KYC, Sanctions, Eligibility, TransferRestrictions
 │   └── test/                      # Test package (aryafi-core-test), depends on the production DAR
 │       ├── daml.yaml
-│       └── AryaFi/Test/           # Daml Script test suite (289 scripts, run by `dpm test`)
+│       └── AryaFi/Test/           # Daml Script test suite (290 scripts, run by `dpm test`)
 │           ├── Unit/              # 11 unit suites across primitives, contracts & compliance
 │           ├── Scenarios/         # 9 end-to-end multi-party lifecycle scenarios
 │           ├── Negative/          # Unauthorized access, violation & invalid transition tests
 │           ├── Privacy/           # Observer visibility tests
 │           ├── Authorization/     # Multi-signatory consent tests
+│           ├── Network/           # Smoke test for shared networks (deploy/testnet)
 │           └── Integration/       # Cross-module workflow tests (single ledger)
 ├── scripts/
 │   └── gen_authorization_matrix.py # Regenerates docs/security/AUTHORIZATION_MATRIX.md from source
@@ -173,7 +174,7 @@ aryafi-core/
 # Build both packages: aryafi-core (production) and aryafi-core-test
 dpm build --all
 
-# Run the test suite (289 scripts); --all includes the production templates in the coverage report
+# Run the test suite (290 scripts); --all includes the production templates in the coverage report
 cd daml/test
 dpm test --all --show-coverage
 ```
@@ -214,6 +215,7 @@ docker compose ps
 | | [Rail Adapters](docs/integration/ADAPTERS_SPEC.md) | Fedwire, SWIFT, DTCC DvP, and AML screening microservices |
 | **Deployment & Ops** | [Canton Topology](deploy/canton/canton.conf) | Multi-participant Canton node configuration (Bank, Custodian, Dealers) |
 | | [Docker Sandbox](deploy/docker/docker-compose.yml) | Local multi-node Canton container environment with auto-bootstrap |
+| | [TestNet Runbook](deploy/testnet/README.md) | Prerequisites and smoke test for a first run on the Canton Network TestNet |
 | **Security & Audit** | [STRIDE Threat Model](docs/security/THREAT_MODEL.md) | Formal STRIDE security evaluation across all contract modules |
 | | [Authorization Matrix](docs/security/AUTHORIZATION_MATRIX.md) | Signatories, observers, choices & controllers, generated from source |
 | | [Audit Dossier](docs/security/AUDIT_DOSSIER.md) | Invariant arguments, test breakdown, and briefing for an external review |

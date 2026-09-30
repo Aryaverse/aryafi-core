@@ -1,0 +1,59 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | End-to-end check for a shared Canton 3 network, such as the Canton Network
+-- TestNet or DevNet. Unlike the full test suites, it allocates only five
+-- parties, names them after a caller-supplied run ID so it can be rerun on the
+-- same participant, and does not change ledger time.
+--
+-- Run it with deploy/testnet/smoke-test.sh.
+module AryaFi.Test.Network.SmokeTest where
+
+import Daml.Script
+import DA.Foldable (forA_)
+import AryaFi.Common.Types
+import AryaFi.Finance.Security
+import AryaFi.Test.Scenarios.DvpSettlementTest
+
+-- | Script input, passed as JSON with --input-file.
+data SmokeTestInput = SmokeTestInput
+  with
+    runId : Text
+    -- ^ Names this run's parties, so reruns on one participant do not collide.
+    userId : Optional Text
+    -- ^ Ledger API user running the script on an authenticated participant.
+    -- Allocating a party does not let a user act as it, so the script grants
+    -- this user CanActAs for the parties it allocates (it needs ParticipantAdmin).
+  deriving (Eq, Show)
+
+-- | Stages a DvP under "SMOKE-<runId>", checks that the seller cannot take back
+-- its locked bond, settles, and checks that both legs changed hands.
+runNetworkSmokeTest : SmokeTestInput -> Script ()
+runNetworkSmokeTest input = do
+  let tag = "SMOKE-" <> input.runId
+  custodian <- allocateTestParty "GlobalCustodian" tag
+  bank      <- allocateTestParty "CashSettlementBank" tag
+  seller    <- allocateTestParty "DealerBankA" tag
+  buyer     <- allocateTestParty "DealerBankB" tag
+  agent     <- allocateTestParty "SettlementAgent" tag
+  forA_ input.userId \name -> do
+    user <- validateUserId name
+    grantUserRights user (map CanActAs [custodian, bank, seller, buyer, agent])
+
+  f <- stageDvpFor tag custodian bank seller buyer agent
+
+  submitMustFail f.seller do
+    exerciseCmd f.lockedSecCid UnlockSecurity
+
+  result <- execute f f.dvpCid
+
+  Some dvp <- queryContractId f.seller result.instructionCid
+  assertMsg "DvP instruction is settled" (dvp.status == Settled)
+  Some delivered <- queryContractId f.buyer result.deliveredSecurityCid
+  assertMsg "Buyer owns the full bond position" (delivered.owner == f.buyer && delivered.quantity == bondQuantity)
+  Some paid <- queryContractId f.seller result.paidCashCid
+  assertMsg "Seller owns the full consideration" (paid.owner == f.seller && paid.amount == cashConsideration)
+
+-- | Runs the smoke test on the Daml test ledger, so `dpm test` covers it.
+testNetworkSmokeTest : Script ()
+testNetworkSmokeTest = runNetworkSmokeTest SmokeTestInput with runId = "IDE"; userId = None

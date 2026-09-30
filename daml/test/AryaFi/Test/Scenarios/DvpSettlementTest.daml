@@ -126,9 +126,7 @@ data DvpFixture = DvpFixture
     lockedCashCid : ContractId CashPosition
     dvpCid : ContractId DvpInstruction
 
--- | Seller holds the bond, buyer holds exactly the consideration; both legs are
--- locked to the settlement agent under the trade reference; all three parties
--- sign the instruction.
+-- | Allocates the five DvP parties and stages a trade between them (see stageDvpFor).
 stageDvp : Text -> Script DvpFixture
 stageDvp lockRef = do
   custodian <- allocateTestParty "GlobalCustodian" lockRef
@@ -136,6 +134,13 @@ stageDvp lockRef = do
   seller    <- allocateTestParty "DealerBankA" lockRef
   buyer     <- allocateTestParty "DealerBankB" lockRef
   agent     <- allocateTestParty "SettlementAgent" lockRef
+  stageDvpFor lockRef custodian bank seller buyer agent
+
+-- | Seller holds the bond, buyer holds exactly the consideration; both legs are
+-- locked to the settlement agent under the trade reference; all three parties
+-- sign the instruction.
+stageDvpFor : Text -> Party -> Party -> Party -> Party -> Party -> Script DvpFixture
+stageDvpFor lockRef custodian bank seller buyer agent = do
   secCid  <- setupSecurityPosition custodian seller sellerSecAcc bondQuantity
   cashCid <- setupCashPosition bank buyer buyerCashAcc cashConsideration
   lockedSecCid <- submit (actAs [seller, custodian]) do
