@@ -7,7 +7,7 @@
 
 ## 1. Where We Are
 
-v2.0.0 made the library honest and working, and v3.0.0 moved it to Daml 3 / Canton 3.5, the platform the Canton Network runs. It builds with `-Wall -Werror`, 290 test scripts pass, and atomic DvP moves real positions on a real five-participant Canton 3.5 topology. Authorization defects are fixed: receiver-authorized transfers, locks held by a named lock holder, and no party able to reduce its own obligation. The docs and web terminal now describe the code as it is.
+v2.0.0 made the library honest and working, and v3.0.0 moved it to Daml 3 / Canton 3.5, the platform the Canton Network runs. It builds with `-Wall -Werror`, 290 test scripts pass, and atomic DvP moves real positions on a real five-participant Canton 3.5 topology. Authorization defects are fixed: receiver-authorized transfers, locks held by a named lock holder, and no party able to reduce its own obligation. The docs and website now describe the code as it is.
 
 What v3.0.0 is **not** yet is what the requirements call for: *"software infrastructure — not a collection of sample contracts."* Today, only DvP composes primitives. Every other workflow (loan, repo, securities lending, margin, pledge, escrow, subscription, redemption, transfer) is a standalone status record that references assets by text. Compliance policies are correct but cannot be called from those workflows. Every multi-party contract depends on co-submission, which does not work across separate participants.
 
@@ -97,7 +97,7 @@ The requirements' own market evidence (90% of surveyed banks see rising collater
 
 **11. Developer experience.** Generate TypeScript and Java bindings (codegen) and publish them with each release. Ship reference adapters (payments, custody, KYC) against the stable event schema, and a reconciliation service that compares the ledger to external books of record.
 
-**12. Live web terminal.** Connect the terminal to a sandbox through the JSON Ledger API, so scenarios run for real and each participant's view shows the contracts it actually stores. This turns the site from an explanation into a demonstration buyers and auditors can check.
+**12. Live website.** Connect the trade walkthrough to a sandbox through the JSON Ledger API, so scenarios run for real and each participant's view shows the contracts it actually stores. This turns the site from an explanation into a demonstration buyers and auditors can check.
 
 **13. Independent security review.** Commission the review against the audit dossier once Phase 1 is complete, fix findings, and promote module maturity labels based on the result (`Production Candidate`, then `Production Reviewed`). Legal review of default, closeout, and pledge semantics runs in parallel (§10, §31).
 

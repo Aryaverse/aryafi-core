@@ -1,712 +1,520 @@
 // Copyright (c) 2026 Aryaverse. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * AryaFi Core: Interactive Institutional Digital Asset Terminal & Canton Explorer
- */
+// AryaFi Core site: plain-language overview, a guided replay of the library's
+// tested bond-for-cash (DvP) scenario, the library's contents, and developer
+// tools (ISO 20022 mapping and the contract source viewer).
+
+'use strict';
 
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
-  initNavigation();
-  initTopologyVisualizer();
-  initScenarioSimulator();
-  initInvariantCalculator();
+  initDocs();
+  initRouter();
+  initTradeWalkthrough();
   initCollateralCalculator();
   initIsoConverter();
   initDamlViewer();
   initCopyButtons();
-  initKeyboardShortcuts();
 });
 
 // ============================================================================
-// 1. Theme Management (Dark / Light Mode)
+// 1. Theme (follows the system until the visitor picks one)
 // ============================================================================
+
+function readStored(key) {
+  try { return localStorage.getItem(key); } catch (e) { return null; }
+}
+
+function writeStored(key, value) {
+  try { localStorage.setItem(key, value); } catch (e) { /* storage unavailable */ }
+}
 
 function initTheme() {
-  const toggleBtn = document.getElementById('theme-toggle-btn');
-  const toggleLabel = document.getElementById('theme-toggle-label');
-  const toggleIcon = document.getElementById('theme-toggle-icon');
+  const root = document.documentElement;
+  const btn = document.getElementById('theme-toggle');
+  const media = window.matchMedia('(prefers-color-scheme: dark)');
 
-  const savedTheme = localStorage.getItem('aryafi-theme') || 'light';
-  applyTheme(savedTheme);
+  const saved = readStored('aryafi-theme');
+  if (saved === 'light' || saved === 'dark') root.setAttribute('data-theme', saved);
 
-  if (toggleBtn) {
-    toggleBtn.addEventListener('click', () => {
-      const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
-      const newTheme = currentTheme === 'light' ? 'dark' : 'light';
-      applyTheme(newTheme);
-      localStorage.setItem('aryafi-theme', newTheme);
-    });
-  }
-
-  function applyTheme(theme) {
-    document.documentElement.setAttribute('data-theme', theme);
-    if (toggleLabel && toggleIcon) {
-      if (theme === 'dark') {
-        toggleLabel.textContent = 'Light';
-        toggleIcon.textContent = '☼';
-      } else {
-        toggleLabel.textContent = 'Dark';
-        toggleIcon.textContent = '◐';
-      }
-    }
-  }
-}
-
-// ============================================================================
-// 2. Navigation, ARIA Tab Switching & URL Hash Support
-// ============================================================================
-
-function initNavigation() {
-  const tabs = document.querySelectorAll('.nav-tab-btn');
-  const panes = document.querySelectorAll('.tab-pane');
-
-  function switchTab(targetTabId, updateHash = true) {
-    const targetBtn = document.querySelector(`.nav-tab-btn[data-tab="${targetTabId}"]`);
-    const targetPane = document.getElementById(targetTabId);
-
-    if (!targetBtn || !targetPane) return;
-
-    tabs.forEach(t => {
-      t.classList.remove('active');
-      t.setAttribute('aria-selected', 'false');
-      t.setAttribute('tabindex', '-1');
-    });
-
-    panes.forEach(p => p.classList.remove('active'));
-
-    targetBtn.classList.add('active');
-    targetBtn.setAttribute('aria-selected', 'true');
-    targetBtn.setAttribute('tabindex', '0');
-    targetPane.classList.add('active');
-
-    if (updateHash) {
-      const hash = targetTabId.replace('tab-', '');
-      history.replaceState(null, '', `#${hash}`);
-    }
-  }
-
-  tabs.forEach((tab, index) => {
-    tab.addEventListener('click', () => {
-      const targetTabId = tab.getAttribute('data-tab');
-      switchTab(targetTabId, true);
-    });
-
-    // Keyboard accessibility (ArrowLeft, ArrowRight)
-    tab.addEventListener('keydown', (e) => {
-      let nextIndex = null;
-      if (e.key === 'ArrowRight') {
-        nextIndex = (index + 1) % tabs.length;
-      } else if (e.key === 'ArrowLeft') {
-        nextIndex = (index - 1 + tabs.length) % tabs.length;
-      }
-
-      if (nextIndex !== null) {
-        tabs[nextIndex].focus();
-        const targetTabId = tabs[nextIndex].getAttribute('data-tab');
-        switchTab(targetTabId, true);
-      }
-    });
-  });
-
-  // Handle Initial Hash
-  if (window.location.hash) {
-    const hash = window.location.hash.replace('#', '');
-    const candidateTabId = `tab-${hash}`;
-    if (document.getElementById(candidateTabId)) {
-      switchTab(candidateTabId, false);
-    }
-  }
-}
-
-function initKeyboardShortcuts() {
-  const modal = document.getElementById('shortcuts-modal');
-  const openBtn = document.getElementById('shortcuts-toggle-btn');
-  const closeBtn = document.getElementById('btn-close-shortcuts');
-  const themeToggle = document.getElementById('theme-toggle-btn');
-  const tabIds = ['tab-topology', 'tab-simulator', 'tab-contracts', 'tab-iso', 'tab-security', 'tab-docs'];
-
-  if (openBtn && modal) {
-    openBtn.addEventListener('click', () => modal.showModal());
-  }
-
-  if (closeBtn && modal) {
-    closeBtn.addEventListener('click', () => modal.close());
-  }
-
-  if (modal) {
-    modal.addEventListener('click', (e) => {
-      const rect = modal.getBoundingClientRect();
-      if (
-        e.clientX < rect.left ||
-        e.clientX > rect.right ||
-        e.clientY < rect.top ||
-        e.clientY > rect.bottom
-      ) {
-        modal.close();
-      }
-    });
-  }
-
-  document.addEventListener('keydown', (e) => {
-    // Ignore keystrokes when typing inside inputs, textareas, selects
-    const tag = e.target.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
-      return;
-    }
-
-    if (e.key === '?' || (e.shiftKey && e.key === '/')) {
-      e.preventDefault();
-      if (modal) {
-        if (modal.open) {
-          modal.close();
-        } else {
-          modal.showModal();
-        }
-      }
-    } else if (e.key >= '1' && e.key <= '6') {
-      const idx = parseInt(e.key, 10) - 1;
-      const targetTabId = tabIds[idx];
-      const targetBtn = document.querySelector(`.nav-tab-btn[data-tab="${targetTabId}"]`);
-      if (targetBtn) {
-        targetBtn.click();
-      }
-    } else if (e.key === 't' || e.key === 'T') {
-      if (themeToggle) {
-        themeToggle.click();
-      }
-    } else if (e.key === 'r' || e.key === 'R') {
-      const runBtn = document.getElementById('btn-run-scenario');
-      if (runBtn && !runBtn.disabled) {
-        runBtn.click();
-      }
-    }
-  });
-}
-
-// ============================================================================
-// 3. Canton Network Topology Explorer
-// ============================================================================
-
-// Mirrors deploy/canton/canton.conf and deploy/docker/bootstrap.sh: one
-// organization per participant node. Party namespaces are generated when the
-// topology is bootstrapped, so none are shown here.
-const PARTICIPANT_NODES = {
-  bank: {
-    id: "bank_node",
-    name: "Cash Settlement Bank",
-    role: "Tokenized Deposit Issuer (CashPosition bank)",
-    port: "10012",
-    hostedParties: ["CashSettlementBank"],
-    fingerprint: "Assigned at bootstrap",
-    stores: "CashPosition contracts it issued; PaymentInstructions where it is settlement agent",
-    privacyBoundary: "Stores only contracts where the bank is a stakeholder: the cash positions it issued. It does not see securities positions, loans, or repo agreements it is not party to."
-  },
-  custodian: {
-    id: "custodian_node",
-    name: "Global Custodian / Settlement Agent",
-    role: "Securities Safekeeping & DvP Settlement Agent",
-    port: "10022",
-    hostedParties: ["GlobalCustodian"],
-    fingerprint: "Assigned at bootstrap",
-    stores: "SecurityPositions in custody; DvpInstructions and positions locked to it for settlement",
-    privacyBoundary: "Sees security positions it safekeeps, plus cash positions only while they are locked to it as DvP lock holder. Visibility ends when the lock is released or settled."
-  },
-  dealerA: {
-    id: "dealer_a_node",
-    name: "Dealer Bank A",
-    role: "Seller of US Treasuries",
-    port: "10032",
-    hostedParties: ["DealerBankA"],
-    fingerprint: "Assigned at bootstrap",
-    stores: "Its own positions and the bilateral agreements it signed",
-    privacyBoundary: "Sees only contracts where Dealer A is signatory or observer. It never sees Dealer B's cash position or the Treasury after delivery to Dealer B."
-  },
-  dealerB: {
-    id: "dealer_b_node",
-    name: "Dealer Bank B",
-    role: "Buyer of US Treasuries",
-    port: "10042",
-    hostedParties: ["DealerBankB"],
-    fingerprint: "Assigned at bootstrap",
-    stores: "Its own positions and the bilateral agreements it signed",
-    privacyBoundary: "Sees only contracts where Dealer B is signatory or observer. It never sees Dealer A's security position or the cash after payment to Dealer A."
-  },
-  regulator: {
-    id: "regulator_node",
-    name: "Supervisory Authority",
-    role: "Regulatory Observer",
-    port: "10052",
-    hostedParties: ["SupervisoryAuthority"],
-    fingerprint: "Assigned at bootstrap",
-    stores: "Only contracts it was explicitly added to as an observer, e.g. RegulatoryReportRecords",
-    privacyBoundary: "Has no default visibility. Sees a contract only when the counterparties add it as observer, which on bilateral agreements requires both counterparties' consent."
-  }
-};
-
-function initTopologyVisualizer() {
-  const nodeElements = document.querySelectorAll('.node-group');
-
-  nodeElements.forEach(node => {
-    node.addEventListener('click', () => {
-      const nodeKey = node.getAttribute('data-node');
-      const details = PARTICIPANT_NODES[nodeKey];
-      if (!details) return;
-
-      nodeElements.forEach(n => n.classList.remove('selected'));
-      node.classList.add('selected');
-
-      updateNodeDetailsCard(details);
-    });
-  });
-}
-
-function updateNodeDetailsCard(data) {
-  document.getElementById('node-detail-title').textContent = data.name;
-  document.getElementById('node-detail-id').textContent = data.id;
-  document.getElementById('node-detail-role').textContent = data.role;
-  document.getElementById('node-detail-port').textContent = `localhost:${data.port} (gRPC / JSON)`;
-  document.getElementById('node-detail-parties').textContent = data.hostedParties.join(', ');
-  document.getElementById('node-detail-fp').textContent = data.fingerprint;
-  document.getElementById('node-detail-contracts').textContent = data.stores;
-  document.getElementById('node-detail-privacy').textContent = data.privacyBoundary;
-}
-
-// ============================================================================
-// 4. Multi-Party Scenario Simulator
-// ============================================================================
-
-const SCENARIOS = {
-  dvp: {
-    title: "Tokenized US Treasury + Cash DvP",
-    desc: "Atomic cross-asset Delivery-versus-Payment between primary dealers with SEC CAT regulatory reporting.",
-    steps: [
-      {
-        title: "Compliance Onboarding & Pre-Gating",
-        desc: "The KYC authority and sanctions screener attest Dealer A and Dealer B; each attesting authority checks validity at ledger time. The eligibility policy approves the asset.",
-        log: "2026-09-24T10:00:01Z [COMPLIANCE] KycAttestation IsKycValid = True for DealerBankA & DealerBankB (expiry 2027-09-01). SanctionsAttestation IsSanctionsClear = True. EligibilityPolicy -> Approved."
-      },
-      {
-        title: "Dual Position Lockup & Escrow Staging",
-        desc: "Seller locks the 5M face US Treasury; buyer splits out exactly $4,975,000 and locks it. Both locks are held by the settlement agent, so neither leg can be withdrawn.",
-        log: "2026-09-24T10:00:03Z [LEDGER] LockSecurity(US912828ZM50, Qty 5,000,000, holder: SettlementAgent). SplitCash 5,000,000 -> 4,975,000 + 25,000. LockCash(USD 4,975,000.00, holder: SettlementAgent)."
-      },
-      {
-        title: "DvpInstruction Tri-Party Co-Signature",
-        desc: "Seller, buyer, and settlement agent co-sign the DvpInstruction naming the ISIN, quantity, consideration, accounts, and lock references.",
-        log: "2026-09-24T10:00:05Z [LEDGER] Created DvpInstruction(TRD-US-TREAS-4P25-NOV26-001, Model 1, Status: PendingSettlement) signed by DealerBankA, DealerBankB, SettlementAgent."
-      },
-      {
-        title: "Atomic DvP Execution & Ownership Transfer",
-        desc: "ExecuteDvpSettlement validates both locked legs against the instruction, then delivers the Treasury to the buyer and the cash to the seller in one transaction. Any mismatch aborts both legs.",
-        log: "2026-09-24T10:00:07Z [SETTLEMENT] ExecuteDvpSettlement: legs validated (owner, account, ISIN, qty, amount, lock holder, lock ref). SettleLockedSecurity -> DealerBankB; SettleLockedCash -> DealerBankA. Committed atomically."
-      },
-      {
-        title: "Regulatory Report Submission",
-        desc: "The seller records a RegulatoryReportRecord under the SEC CAT regime; the regulator, an observer on that record only, acknowledges it.",
-        log: "2026-09-24T10:00:09Z [REGULATOR] RegulatoryReportRecord(SEC_CAT) created by DealerBankA. AcknowledgeReport by SupervisoryAuthority. isAcknowledged = True."
-      }
-    ]
-  },
-  seclend: {
-    title: "Institutional Securities Lending Lifecycle",
-    desc: "Stock loan with 102% cash collateral pledge, Act360 borrow fee accrual, recall execution, and pro-rata collateral release.",
-    steps: [
-      {
-        title: "Tri-Party Lending Agreement & Collateral Pledge",
-        desc: "Pension Fund lends 5M par value Treasuries to Broker-Dealer; Borrower pledges $5.1M (102% cash collateral) via AssetPledge.",
-        log: "2026-09-24T10:00:01Z [SECLEND] Created SecuritiesLendingAgreement (BorrowQty: 5M, FeeRate: 75 bps, Collateral: $5,100,000 USD). Pledge linked."
-      },
-      {
-        title: "Periodic Borrow Fee Accrual (Act360)",
-        desc: "Lender and borrower jointly agree the 30-day fee ($5,000,000 × 0.75% × 30/360 = $3,125.00); the lender confirms receipt of payment.",
-        log: "2026-09-24T10:00:03Z [FINANCE] AccrueLendingFee (lender + borrower): $3,125.00 USD. PayLendingFee confirmed by lender. Accrued fee balance: $0.00."
-      },
-      {
-        title: "Mark-to-Market Collateral Revaluation",
-        desc: "Underlying bond price appreciates; counterparties revalue collateral to maintain 102% margin coverage.",
-        log: "2026-09-24T10:00:05Z [MARGIN] Exercise RevalueCollateral. Updated Market Value: $5,050,000. Collateral adjusted to $5,151,000 USD."
-      },
-      {
-        title: "Recall Issuance & Pro-Rata Return",
-        desc: "Lender recalls 2.5M securities; the borrower returns them and releases at most the pro-rata share of collateral ($2.5755M of $5.151M).",
-        log: "2026-09-24T10:00:07Z [RECALL] RecallSecurities (Qty 2,500,000). ReturnSecurities 2,500,000 with collateral release 2,575,500 (pro-rata cap enforced). Recall satisfied."
-      },
-      {
-        title: "Final Return & Agreement Closeout",
-        desc: "Borrower returns remaining balance; SecuritiesLendingAgreement transitions to LendingClosed; full lien discharged.",
-        log: "2026-09-24T10:00:09Z [CLOSEOUT] Final securities returned (borrowed quantity 0). Status transitioned to LendingClosed. AssetPledge released (status Closed)."
-      }
-    ]
-  },
-  treasury: {
-    title: "Treasury Cash Mobility & Zero-Balance Sweep",
-    desc: "Multi-entity account topology, surplus cash identification, zero-balance sweep to master pool, and intercompany SWIFT clearing.",
-    steps: [
-      {
-        title: "Multi-Entity Cash Account Setup",
-        desc: "Global Bank issues cash positions to the US Subsidiary ($25M USD), the EU Subsidiary (20M EUR), and the HQ concentration account ($10M USD).",
-        log: "2026-09-24T10:00:01Z [TREASURY] Created CashPosition ACC-SUB-US-01 ($25M USD), ACC-SUB-EU-01 (20M EUR), ACC-HQ-CONCENTRATION-01 ($10M USD)."
-      },
-      {
-        title: "Surplus Identification via SplitCash",
-        desc: "US Subsidiary splits $15M surplus cash from operating working capital ($10M retained locally).",
-        log: "2026-09-24T10:00:03Z [FINANCE] SplitCash executed: Position A ($10M retained in US ops) + Position B ($15M marked for concentration sweep). Sum invariant holds."
-      },
-      {
-        title: "Concentration Sweep & Pool Consolidation",
-        desc: "US Subsidiary, Global Bank, and Treasury HQ jointly authorize the $15M transfer; HQ merges it into a $25M master liquidity pool.",
-        log: "2026-09-24T10:00:05Z [SWEEP] TransferCash (owner + bank + receiver) to TreasuryHQ. Observers cleared. MergeCash pool balance: $25,000,000.00 USD."
-      },
-      {
-        title: "Intercompany PaymentInstruction & SWIFT UETR Tracing",
-        desc: "Treasury HQ, the US Subsidiary, and Global Bank co-sign an $8M payment instruction; HQ locks $8M to Global Bank for the payment.",
-        log: "2026-09-24T10:00:07Z [PAYMENT] PaymentInstruction created with IdempotencyKey IDEMP-2026-09-24-01. Attached UETR: e1a49f82-3d92-4f10-bf91-b3b281f9a12c."
-      },
-      {
-        title: "Payment Clearing & Atomic Settlement",
-        desc: "Global Bank, as lock holder, delivers the locked $8M to the US Subsidiary and confirms the payment instruction as settled.",
-        log: "2026-09-24T10:00:09Z [SETTLED] SettleLockedCash -> USSubsidiary ($8,000,000.00). ConfirmPaymentSettlement: Settled. EU Subsidiary sees none of these contracts."
-      }
-    ]
-  }
-};
-
-let currentScenarioKey = 'dvp';
-let currentStepIndex = 0;
-let autoRunTimer = null;
-
-function initScenarioSimulator() {
-  const scenarioBtns = document.querySelectorAll('.scenario-select-btn');
-  const runNextBtn = document.getElementById('btn-run-next-step');
-  const runAutoBtn = document.getElementById('btn-run-auto');
-  const resetBtn = document.getElementById('btn-reset-scenario');
-  const exportCsvBtn = document.getElementById('btn-export-audit-csv');
-  const exportJsonBtn = document.getElementById('btn-export-audit-json');
-
-  scenarioBtns.forEach(btn => {
-    btn.addEventListener('click', () => {
-      if (autoRunTimer) clearInterval(autoRunTimer);
-      scenarioBtns.forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-
-      currentScenarioKey = btn.getAttribute('data-scenario');
-      currentStepIndex = 0;
-      renderScenarioView();
-    });
-  });
-
-  if (runNextBtn) {
-    runNextBtn.addEventListener('click', () => {
-      executeNextScenarioStep();
-    });
-  }
-
-  if (runAutoBtn) {
-    runAutoBtn.addEventListener('click', () => {
-      runAutomatedScenario();
-    });
-  }
-
-  if (resetBtn) {
-    resetBtn.addEventListener('click', () => {
-      if (autoRunTimer) clearInterval(autoRunTimer);
-      currentStepIndex = 0;
-      renderScenarioView();
-      clearTerminal();
-      const latencyEl = document.getElementById('metric-latency');
-      if (latencyEl) latencyEl.textContent = '-- ms';
-    });
-  }
-
-  if (exportCsvBtn) {
-    exportCsvBtn.addEventListener('click', () => {
-      exportScenarioAuditCsv();
-    });
-  }
-
-  if (exportJsonBtn) {
-    exportJsonBtn.addEventListener('click', () => {
-      exportScenarioAuditJson();
-    });
-  }
-
-  renderScenarioView();
-}
-
-function renderScenarioView() {
-  const scenario = SCENARIOS[currentScenarioKey];
-  if (!scenario) return;
-
-  document.getElementById('scenario-active-title').textContent = scenario.title;
-  document.getElementById('scenario-active-desc').textContent = scenario.desc;
-
-  const pct = Math.round((currentStepIndex / scenario.steps.length) * 100);
-  const progressBar = document.getElementById('sim-progress-bar');
-  const progressLabel = document.getElementById('sim-progress-label');
-  if (progressBar) progressBar.style.width = `${pct}%`;
-  if (progressLabel) progressLabel.textContent = `${pct}% Completed (Phase ${currentStepIndex} of ${scenario.steps.length})`;
-
-  const timelineContainer = document.getElementById('timeline-steps-container');
-  timelineContainer.innerHTML = '';
-
-  scenario.steps.forEach((step, idx) => {
-    const isCompleted = idx < currentStepIndex;
-    const isActive = idx === currentStepIndex;
-
-    const stepEl = document.createElement('div');
-    stepEl.className = `timeline-step ${isCompleted ? 'completed' : ''} ${isActive ? 'active' : ''}`;
-    stepEl.innerHTML = `
-      <div class="timeline-step-icon">${isCompleted ? '✓' : idx + 1}</div>
-      <div class="timeline-step-body">
-        <div class="timeline-step-header">
-          <span class="timeline-step-title">${step.title}</span>
-          <span class="timeline-step-badge ${isCompleted ? 'badge-done' : (isActive ? 'badge-active' : 'badge-pending')}">
-            ${isCompleted ? 'EXECUTED' : (isActive ? 'READY' : 'PENDING')}
-          </span>
-        </div>
-        <p class="timeline-step-desc">${step.desc}</p>
-      </div>
-    `;
-    timelineContainer.appendChild(stepEl);
-  });
-}
-
-function executeNextScenarioStep() {
-  const scenario = SCENARIOS[currentScenarioKey];
-  if (currentStepIndex >= scenario.steps.length) {
-    appendTerminalLine("Scenario lifecycle fully executed. Click Reset to run again.", "yellow");
-    return;
-  }
-
-  const step = scenario.steps[currentStepIndex];
-  const progressEl = document.getElementById('metric-latency');
-  if (progressEl) progressEl.textContent = `Step ${currentStepIndex + 1} of ${scenario.steps.length}`;
-
-  appendTerminalLine(`Executing Phase ${currentStepIndex + 1}: ${step.title}...`, "cyan");
-  appendTerminalLine(step.log, "green");
-
-  currentStepIndex++;
-  renderScenarioView();
-}
-
-function runAutomatedScenario() {
-  const scenario = SCENARIOS[currentScenarioKey];
-  if (autoRunTimer) clearInterval(autoRunTimer);
-
-  currentStepIndex = 0;
-  renderScenarioView();
-  clearTerminal();
-
-  appendTerminalLine(`Initiating automated execution: ${scenario.title}`, "yellow");
-
-  let step = 0;
-  autoRunTimer = setInterval(() => {
-    if (step < scenario.steps.length) {
-      executeNextScenarioStep();
-      step++;
-    } else {
-      clearInterval(autoRunTimer);
-      autoRunTimer = null;
-      appendTerminalLine("All phases committed and verified with zero errors.", "green");
-    }
-  }, 900);
-}
-
-function exportScenarioAuditCsv() {
-  const scenario = SCENARIOS[currentScenarioKey];
-  if (!scenario) return;
-
-  let csv = 'ExportedAt,Scenario,PhaseIndex,PhaseTitle,SimulatedLedgerLog,SimulationStatus\n';
-  scenario.steps.forEach((step, idx) => {
-    const executed = idx < currentStepIndex;
-    const logClean = step.log.replace(/"/g, '""');
-    csv += `"${new Date().toISOString()}","${scenario.title}","${idx + 1}","${step.title}","${logClean}","${executed ? 'SIMULATED' : 'PENDING'}"\n`;
-  });
-
-  downloadFile(`aryafi_audit_${currentScenarioKey}_${Date.now()}.csv`, 'text/csv', csv);
-  appendTerminalLine(`Exported simulation log: aryafi_audit_${currentScenarioKey}.csv`, "yellow");
-}
-
-function exportScenarioAuditJson() {
-  const scenario = SCENARIOS[currentScenarioKey];
-  if (!scenario) return;
-
-  const data = {
-    exportDate: new Date().toISOString(),
-    disclaimer: "Scripted simulation. Log lines describe the Daml choices the AryaFi library executes in its test scenarios; no ledger was contacted and nothing here is an audit record.",
-    platform: "Daml SDK 3.5.12 / Canton 3.5 (protocol version 35)",
-    scenarioKey: currentScenarioKey,
-    scenarioTitle: scenario.title,
-    currentStepIndex: currentStepIndex,
-    totalSteps: scenario.steps.length,
-    phases: scenario.steps.map((s, idx) => ({
-      phaseNumber: idx + 1,
-      title: s.title,
-      description: s.desc,
-      ledgerLog: s.log,
-      status: idx < currentStepIndex ? "SIMULATED" : "PENDING"
-    }))
+  const effective = () => root.getAttribute('data-theme') || (media.matches ? 'dark' : 'light');
+  const updateLabel = () => {
+    if (btn) btn.setAttribute('aria-label', effective() === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
   };
 
-  downloadFile(`aryafi_audit_${currentScenarioKey}_${Date.now()}.json`, 'application/json', JSON.stringify(data, null, 2));
-  appendTerminalLine(`Exported simulation log (JSON): aryafi_audit_${currentScenarioKey}.json`, "yellow");
-}
-
-function downloadFile(filename, mimeType, content) {
-  const blob = new Blob([content], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
-
-function appendTerminalLine(text, colorClass = "cyan") {
-  const terminal = document.getElementById('scenario-terminal-output');
-  if (!terminal) return;
-
-  const line = document.createElement('div');
-  line.className = `terminal-line ${colorClass}`;
-  line.textContent = `> ${text}`;
-  terminal.appendChild(line);
-  terminal.scrollTop = terminal.scrollHeight;
-}
-
-function clearTerminal() {
-  const terminal = document.getElementById('scenario-terminal-output');
-  if (terminal) {
-    terminal.innerHTML = `
-      <div class="terminal-line gray">> Scripted simulation of the library's Daml test scenarios (no ledger connection).</div>
-      <div class="terminal-line green">> Ready. Select a scenario and click 'Next Phase' or 'Auto-Run' to begin execution.</div>
-    `;
-  }
-}
-
-// ============================================================================
-// 5. SplitCash Conservation Illustration (exact Daml Decimal arithmetic)
-// ============================================================================
-// Daml's Decimal is a fixed-point number with 10 decimal places, so a split is
-// exact. This mirrors that with BigInt arithmetic scaled by 10^10 (JavaScript
-// floats would not be exact). It illustrates the rule SplitCash enforces on
-// ledger; it does not inspect any ledger state.
-
-const DECIMAL_SCALE = 10;
-const DECIMAL_FACTOR = 10n ** BigInt(DECIMAL_SCALE);
-
-function parseDamlDecimal(text) {
-  const m = /^\s*(\d+)(?:\.(\d*))?\s*$/.exec(text || '');
-  if (!m) return null;
-  const frac = m[2] || '';
-  if (frac.length > DECIMAL_SCALE) return null;
-  return BigInt(m[1]) * DECIMAL_FACTOR + BigInt((frac + '0'.repeat(DECIMAL_SCALE)).slice(0, DECIMAL_SCALE));
-}
-
-function formatDamlDecimal(units) {
-  const whole = units / DECIMAL_FACTOR;
-  const cents = (units % DECIMAL_FACTOR) / (DECIMAL_FACTOR / 100n);
-  return `$${whole.toLocaleString('en-US')}.${cents.toString().padStart(2, '0')}`;
-}
-
-function initInvariantCalculator() {
-  const totalInput = document.getElementById('calc-total-amount');
-  const splitInput = document.getElementById('calc-split-amount');
-  const splitBtn = document.getElementById('btn-execute-split');
-  const presetBtns = document.querySelectorAll('.calc-preset-btn');
-
-  function calculateAndDisplay() {
-    const total = parseDamlDecimal(totalInput.value);
-    const split = parseDamlDecimal(splitInput.value);
-    const statusEl = document.getElementById('calc-invariant-status');
-
-    if (total === null || split === null) {
-      statusEl.textContent = "REJECTED: amounts must be non-negative decimals with at most 10 decimal places";
-      statusEl.className = "calc-stat-val rose";
-      return;
-    }
-    if (split <= 0n || split >= total) {
-      statusEl.textContent = "REJECTED by SplitCash: split must be > 0 and < position amount";
-      statusEl.className = "calc-stat-val rose";
-      return;
-    }
-
-    const remainder = total - split;
-    const sum = split + remainder;
-
-    document.getElementById('calc-pos1-val').textContent = formatDamlDecimal(split);
-    document.getElementById('calc-pos2-val').textContent = formatDamlDecimal(remainder);
-    document.getElementById('calc-sum-val').textContent = formatDamlDecimal(sum);
-
-    if (sum === total) {
-      statusEl.textContent = "CONSERVED (exact, Δ = 0)";
-      statusEl.className = "calc-stat-val emerald";
-    } else {
-      statusEl.textContent = "NOT CONSERVED";
-      statusEl.className = "calc-stat-val rose";
-    }
-  }
-
-  if (splitBtn && totalInput && splitInput) {
-    splitBtn.addEventListener('click', calculateAndDisplay);
-  }
-
-  presetBtns.forEach(btn => {
+  updateLabel();
+  if (btn) {
     btn.addEventListener('click', () => {
-      const t = btn.getAttribute('data-total');
-      const s = btn.getAttribute('data-split');
-      if (t && s) {
-        totalInput.value = t;
-        splitInput.value = s;
-        calculateAndDisplay();
+      const next = effective() === 'dark' ? 'light' : 'dark';
+      root.setAttribute('data-theme', next);
+      writeStored('aryafi-theme', next);
+      updateLabel();
+    });
+  }
+  if (media.addEventListener) media.addEventListener('change', updateLabel);
+}
+
+// ============================================================================
+// 2. Views (#overview, #trade, #inside, #developers)
+// ============================================================================
+
+const VIEW_TITLES = {
+  overview: 'AryaFi Core',
+  trade: 'See a trade settle · AryaFi Core',
+  inside: "What's inside · AryaFi Core",
+  developers: 'Developers · AryaFi Core',
+  docs: 'Docs · AryaFi Core'
+};
+
+// Links to the previous site's tabs still land somewhere sensible.
+const LEGACY_HASHES = {
+  'tab-topology': 'trade',
+  'tab-simulator': 'trade',
+  'tab-contracts': 'inside',
+  'tab-iso': 'developers',
+  'tab-security': 'overview',
+  'tab-docs': 'developers'
+};
+
+function initRouter() {
+  let current = null;
+
+  function show(scroll) {
+    // #docs/<document>/<section> addresses a section of a published document.
+    const [first, ...rest] = decodeURIComponent(location.hash.slice(1)).split('/');
+    let id = first;
+    if (LEGACY_HASHES[id]) id = LEGACY_HASHES[id];
+    if (id === '') id = 'overview';
+    if (!(id in VIEW_TITLES)) return; // an in-page anchor such as #main
+
+    document.querySelectorAll('.view').forEach(view => { view.hidden = view.dataset.view !== id; });
+    document.querySelectorAll('.site-nav a').forEach(link => {
+      if (link.dataset.view === id) link.setAttribute('aria-current', 'page');
+      else link.removeAttribute('aria-current');
+    });
+    document.title = VIEW_TITLES[id];
+    if (id === 'docs') showDocsRoute(rest[0] || '', rest.slice(1).join('/'));
+    else if (scroll && current !== id) window.scrollTo(0, 0);
+    current = id;
+  }
+
+  window.addEventListener('hashchange', () => show(true));
+  show(false);
+}
+
+// ============================================================================
+// 3. "See a trade settle": a replay of TreasuryDvpScenario
+// ============================================================================
+// Who holds and sees each record follows the contracts' stakeholders: a
+// position is visible to its owner and the institution that keeps it, plus the
+// settlement agent while the agent holds the lock; the instruction to its three
+// signatories; the report to the seller and the regulator.
+
+const ORGS = [
+  { id: 'seller', name: 'Dealer Bank A', role: 'Seller' },
+  { id: 'buyer', name: 'Dealer Bank B', role: 'Buyer' },
+  { id: 'agent', name: 'Settlement Agent', role: 'Settlement agent' },
+  { id: 'custodian', name: 'Global Custodian', role: 'Custodian' },
+  { id: 'bank', name: 'Cash Settlement Bank', role: 'Cash bank' },
+  { id: 'regulator', name: 'Securities Regulator', role: 'Regulator' }
+];
+
+const STEPS = [
+  {
+    short: 'Before',
+    title: 'Before the trade',
+    text: 'Dealer Bank A owns $5,000,000 (face value) of US Treasury bonds, kept by Global Custodian. Dealer Bank B has $5,000,000 in cash at Cash Settlement Bank.',
+    why: 'Each position is signed by its owner and by the institution that keeps it, so neither can change it alone.',
+    tech: [
+      '`SecurityPosition` signed by the custodian and the owner; `CashPosition` signed by the bank and the owner.'
+    ]
+  },
+  {
+    short: 'Checks',
+    title: 'Both firms are checked',
+    text: 'An independent KYC provider and a sanctions screener issue checks for both dealers. The settlement agent confirms that US Treasuries are eligible for this settlement.',
+    why: "The trade only goes ahead between vetted firms. Each firm sees its own checks, not its counterparty's.",
+    tech: [
+      '`KycAttestation` and `SanctionsAttestation`, issued by the KYC provider and the screener (not shown); `IsKycValid` and `IsSanctionsClear` confirm them at ledger time.',
+      '`EligibilityPolicy` with `EvaluateEligibility`: US Treasuries approved.'
+    ]
+  },
+  {
+    short: 'Lock',
+    title: 'Each side sets aside its asset',
+    text: 'Dealer Bank A locks its bond. Dealer Bank B splits off exactly $4,975,000 and locks it, keeping the other $25,000. Both locks are held by the settlement agent.',
+    why: 'From here on, neither dealer can pull out: only the settlement agent can release or deliver a locked asset.',
+    tech: [
+      '`SplitCash`: $5,000,000 becomes $4,975,000 and $25,000.',
+      '`LockSecurity` and `LockCash` with `holder` = the settlement agent, which becomes an observer of both locked positions.'
+    ]
+  },
+  {
+    short: 'Sign',
+    title: 'All three sign the trade',
+    text: 'The seller, the buyer and the settlement agent sign one instruction: which bond, how much, the price of $4,975,000, the accounts, and the settlement date.',
+    why: 'Everyone works from the same signed record, so there is nothing to reconcile afterwards. The agent can carry it out, but cannot change it.',
+    tech: [
+      '`DvpInstruction` with the agent, seller and buyer as signatories (DvP model 1: each trade settled on its own).',
+      'The agent also shares it with the central securities depository (not shown).'
+    ]
+  },
+  {
+    short: 'Settle',
+    title: 'Settlement: both move at once',
+    text: 'The settlement agent checks that the locked bond and the locked cash match the instruction exactly, then delivers the bond to Dealer Bank B and the cash to Dealer Bank A in a single transaction.',
+    why: 'Neither dealer is ever exposed to the other: the swap happens completely or not at all.',
+    tech: [
+      '`ExecuteDvpSettlement` checks the owner, account, ISIN, quantity, currency, amount, lock holder and lock reference of both legs.',
+      '`SettleLockedSecurity` and `SettleLockedCash` run in the same transaction; the old positions are archived.'
+    ]
+  },
+  {
+    short: 'Report',
+    title: 'The regulator gets a report',
+    text: 'Dealer Bank A files a trade report with the regulator, which acknowledges it.',
+    why: "The regulator gets the report it needs and never sees the firms' positions or accounts.",
+    done: "Done. The bond and the cash changed hands in one transaction, neither dealer was exposed to the other, and each institution's node holds only its own records.",
+    tech: [
+      '`RegulatoryReportRecord` under SEC CAT, signed by the seller with the regulator as observer.',
+      '`AcknowledgeReport`, exercised by the regulator.'
+    ]
+  }
+];
+
+// Each record exists from step `from` to step `to`. `on(step)` places it on
+// institutions' cards with a label; `seenBy(step)` is who stores it.
+// `gone` labels its last appearance, struck through, on the step after `to`.
+const RECORDS = [
+  {
+    id: 'bond-a', kind: 'bond', title: 'US Treasury bond', value: '$5,000,000 face', from: 0, to: 3,
+    seenBy: s => (s >= 2 ? ['seller', 'custodian', 'agent'] : ['seller', 'custodian']),
+    on: s => [['seller', 'Owns'], ['custodian', 'Keeps it for Dealer Bank A']]
+      .concat(s >= 2 ? [['agent', "Holds the lock on Dealer Bank A's bond"]] : []),
+    status: s => (s >= 2 ? 'locked' : null),
+    gone: { seller: 'Delivered to Dealer Bank B', custodian: 'Moved to Dealer Bank B', agent: 'Delivered' }
+  },
+  {
+    id: 'cash-b', kind: 'cash', title: 'Cash', value: '$5,000,000', from: 0, to: 1,
+    seenBy: () => ['buyer', 'bank'],
+    on: () => [['buyer', 'Owns'], ['bank', 'Holds it for Dealer Bank B']],
+    gone: { buyer: 'Split into $4,975,000 and $25,000', bank: 'Split into two positions' }
+  },
+  {
+    id: 'cash-b-trade', kind: 'cash', title: 'Cash for the trade', value: '$4,975,000', from: 2, to: 3,
+    seenBy: () => ['buyer', 'bank', 'agent'],
+    on: () => [['buyer', 'Owns'], ['bank', 'Holds it for Dealer Bank B'], ['agent', "Holds the lock on Dealer Bank B's cash"]],
+    status: () => 'locked',
+    gone: { buyer: 'Paid to Dealer Bank A', bank: 'Moved to Dealer Bank A', agent: 'Delivered' }
+  },
+  {
+    id: 'cash-b-rest', kind: 'cash', title: 'Cash left over', value: '$25,000', from: 2, to: 5,
+    seenBy: () => ['buyer', 'bank'],
+    on: () => [['buyer', 'Owns'], ['bank', 'Holds it for Dealer Bank B']]
+  },
+  {
+    id: 'checks-a', kind: 'check', title: 'KYC and sanctions checks', value: 'Passed', from: 1, to: 5,
+    seenBy: () => ['seller'],
+    on: () => [['seller', 'Its own checks']]
+  },
+  {
+    id: 'checks-b', kind: 'check', title: 'KYC and sanctions checks', value: 'Passed', from: 1, to: 5,
+    seenBy: () => ['buyer'],
+    on: () => [['buyer', 'Its own checks']]
+  },
+  {
+    id: 'eligibility', kind: 'check', title: 'US Treasuries eligible', value: 'Approved', from: 1, to: 5,
+    seenBy: () => ['agent'],
+    on: () => [['agent', 'Its eligibility rule']]
+  },
+  {
+    id: 'instruction', kind: 'doc', title: 'Trade instruction', value: '$5M bond for $4,975,000', from: 3, to: 5,
+    seenBy: () => ['seller', 'buyer', 'agent'],
+    on: () => [['seller', 'Signed'], ['buyer', 'Signed'], ['agent', 'Signed; carries it out']],
+    status: s => (s >= 4 ? 'settled' : 'signed')
+  },
+  {
+    id: 'bond-b', kind: 'bond', title: 'US Treasury bond', value: '$5,000,000 face', from: 4, to: 5,
+    seenBy: () => ['buyer', 'custodian'],
+    on: () => [['buyer', 'Owns'], ['custodian', 'Keeps it for Dealer Bank B']],
+    status: s => (s === 4 ? 'received' : null)
+  },
+  {
+    id: 'cash-a', kind: 'cash', title: 'Cash from the sale', value: '$4,975,000', from: 4, to: 5,
+    seenBy: () => ['seller', 'bank'],
+    on: () => [['seller', 'Owns'], ['bank', 'Holds it for Dealer Bank A']],
+    status: s => (s === 4 ? 'received' : null)
+  },
+  {
+    id: 'report', kind: 'doc', title: 'Trade report (SEC CAT)', value: 'Acknowledged', from: 5, to: 5,
+    seenBy: () => ['seller', 'regulator'],
+    on: () => [['seller', 'Filed it'], ['regulator', 'Received it']]
+  }
+];
+
+const STATUS_LABELS = {
+  locked: 'Locked for settlement',
+  signed: 'Signed by all three',
+  settled: 'Settled',
+  received: 'Changed hands'
+};
+
+const EMPTY_CARD = {
+  regulator: 'Nothing yet. The regulator only sees what is reported to it.',
+  agent: 'Nothing yet. The agent only sees what the trade shares with it.'
+};
+
+const WHAT_IFS = [
+  {
+    id: 'take-back', steps: [2, 3], outcome: 'Blocked',
+    label: 'The seller tries to take its bond back',
+    text: 'Only the settlement agent can release a locked bond, so the seller cannot back out once it has committed. The custodian cannot release it either, and neither can send it anywhere else.',
+    test: 'testLockedLegsCannotBeWithdrawn'
+  },
+  {
+    id: 'agent-cancel', steps: [3], outcome: 'Blocked',
+    label: 'The settlement agent tries to cancel the trade on its own',
+    text: 'Cancelling needs the seller and the buyer as well. The agent can carry out the agreed trade, but cannot undo it alone.',
+    test: 'testAgentCannotCancelAlone'
+  },
+  {
+    id: 'short-bond', steps: [3], outcome: 'Settlement refused',
+    label: 'The seller locked fewer bonds than agreed',
+    text: "Settlement checks each locked asset against the signed instruction. A smaller bond position fails the check, so nothing moves: the seller keeps its bond and the buyer keeps its cash.",
+    test: 'testDvpRejectsMismatchedLegs'
+  },
+  {
+    id: 'seller-settles', steps: [3], outcome: 'Blocked',
+    label: 'The seller tries to settle the trade itself',
+    text: 'Only the settlement agent named in the instruction can carry it out.',
+    test: 'testOnlyAgentCanExecuteDvp'
+  },
+  {
+    id: 'settle-twice', steps: [4, 5], outcome: 'Blocked',
+    label: 'Someone tries to settle the trade again',
+    text: 'A settled trade cannot be settled a second time or retried.',
+    test: 'testCannotReExecuteSettledDvp'
+  },
+  {
+    id: 'outsider', steps: [3, 4, 5], outcome: 'Not visible',
+    label: 'A firm outside the trade looks for it',
+    text: 'A firm that is not named in the trade finds nothing: neither the instruction nor the locked bond is shared with it.',
+    test: 'testDvpPrivacy'
+  }
+];
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// Escapes the text, then renders `code` spans.
+function inlineCode(text) {
+  return escapeHtml(text).replace(/`([^`]+)`/g, '<code>$1</code>');
+}
+
+function orgName(id) {
+  const org = ORGS.find(o => o.id === id);
+  return org ? org.name : id;
+}
+
+function initTradeWalkthrough() {
+  const board = document.getElementById('board');
+  const stepper = document.getElementById('stepper');
+  if (!board || !stepper) return;
+
+  const backBtn = document.getElementById('step-back');
+  const nextBtn = document.getElementById('step-next');
+  const viewSelect = document.getElementById('viewas-select');
+  const viewHint = document.getElementById('viewas-hint');
+  const whatifList = document.getElementById('whatif-list');
+  const whatifResult = document.getElementById('whatif-result');
+
+  let step = 0;
+  let viewAs = '';
+
+  ORGS.forEach(org => {
+    const option = document.createElement('option');
+    option.value = org.id;
+    option.textContent = `${org.name} (${org.role.toLowerCase()})`;
+    viewSelect.appendChild(option);
+  });
+
+  STEPS.forEach((s, i) => {
+    const li = document.createElement('li');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.innerHTML = `<span class="stepper-num">${i + 1}</span><span class="stepper-label">${escapeHtml(s.short)}</span>`;
+    btn.addEventListener('click', () => { step = i; render(); });
+    li.appendChild(btn);
+    stepper.appendChild(li);
+  });
+
+  WHAT_IFS.forEach(w => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'whatif-btn';
+    btn.dataset.whatif = w.id;
+    btn.addEventListener('click', () => showWhatIf(w));
+    whatifList.appendChild(btn);
+  });
+
+  backBtn.addEventListener('click', () => { if (step > 0) { step -= 1; render(); } });
+  nextBtn.addEventListener('click', () => { step = step < STEPS.length - 1 ? step + 1 : 0; render(); });
+  viewSelect.addEventListener('change', () => { viewAs = viewSelect.value; renderBoard(); });
+
+  function active(r, s) { return r.from <= s && s <= r.to; }
+  function statusAt(r, s) { return r.status && active(r, s) ? r.status(s) : null; }
+
+  function showWhatIf(w) {
+    whatifResult.hidden = false;
+    whatifResult.className = `whatif-result outcome-${w.outcome === 'Not visible' ? 'private' : 'blocked'}`;
+    whatifResult.innerHTML =
+      `<p class="whatif-outcome">${escapeHtml(w.outcome)}</p>` +
+      `<p class="whatif-question">${escapeHtml(w.label)}</p>` +
+      `<p>${escapeHtml(w.text)}</p>` +
+      `<p class="whatif-test">Checked by the test <code>DvpSettlementTest.${escapeHtml(w.test)}</code></p>`;
+  }
+
+  function renderWhatIfs() {
+    whatifList.querySelectorAll('.whatif-btn').forEach(btn => {
+      const w = WHAT_IFS.find(x => x.id === btn.dataset.whatif);
+      const available = w.steps.includes(step);
+      btn.disabled = !available;
+      btn.innerHTML = escapeHtml(w.label) +
+        (available ? '' : `<span class="whatif-when">From step ${w.steps[0] + 1}</span>`);
+    });
+    whatifResult.hidden = true;
+  }
+
+  function renderStep() {
+    const s = STEPS[step];
+    document.getElementById('step-count').textContent = `Step ${step + 1} of ${STEPS.length}`;
+    document.getElementById('step-title').textContent = s.title;
+    document.getElementById('step-text').textContent = s.text;
+    const why = document.getElementById('step-why');
+    why.innerHTML = `<strong>Why it matters:</strong> ${escapeHtml(s.why)}` +
+      (s.done ? `<span class="step-done">${escapeHtml(s.done)}</span>` : '');
+    document.getElementById('step-tech').innerHTML =
+      '<ul>' + s.tech.map(t => `<li>${inlineCode(t)}</li>`).join('') + '</ul>' +
+      '<p>Replayed from <code>daml/test/AryaFi/Test/Scenarios/TreasuryDvpScenario.daml</code>.</p>';
+
+    stepper.querySelectorAll('li').forEach((li, i) => {
+      const btn = li.querySelector('button');
+      li.classList.toggle('is-done', i < step);
+      if (i === step) {
+        btn.setAttribute('aria-current', 'step');
+        // Keep the current step visible when the bar scrolls (narrow screens).
+        stepper.scrollTo({ left: li.offsetLeft - (stepper.clientWidth - li.clientWidth) / 2 });
+      } else {
+        btn.removeAttribute('aria-current');
       }
     });
-  });
+    backBtn.disabled = step === 0;
+    nextBtn.textContent = step === STEPS.length - 1 ? 'Start over' : 'Next step →';
+  }
+
+  function hiddenRowHtml(count) {
+    const noun = count === 1 ? 'record' : 'records';
+    return `<li class="rec rec-hidden"><span class="rec-icon" aria-hidden="true"></span>` +
+      `<span class="rec-body"><span class="rec-title">${count} ${noun} not shared with ${escapeHtml(orgName(viewAs))}</span>` +
+      `<span class="rec-label">Not stored on its node</span></span></li>`;
+  }
+
+  function rowHtml(r, label, opts) {
+    const classes = ['rec', `rec-${r.kind}`];
+    if (opts.gone) classes.push('rec-gone');
+    if (opts.changed) classes.push('is-changed');
+    const status = opts.status
+      ? `<span class="rec-status status-${opts.status}">${escapeHtml(STATUS_LABELS[opts.status])}</span>` : '';
+    return `<li class="${classes.join(' ')}"><span class="rec-icon" aria-hidden="true"></span>` +
+      `<span class="rec-body"><span class="rec-title">${escapeHtml(r.title)} <span class="rec-value">${escapeHtml(r.value)}</span></span>` +
+      `<span class="rec-label">${escapeHtml(label)}</span>${status}</span></li>`;
+  }
+
+  function renderBoard() {
+    const visible = RECORDS.filter(r => active(r, step));
+    board.innerHTML = ORGS.map(org => {
+      const rows = [];
+      let hiddenCount = 0;
+      const add = (r, label, seenBy, opts) => {
+        if (viewAs && !seenBy.includes(viewAs)) hiddenCount += 1;
+        else rows.push(rowHtml(r, label, opts));
+      };
+      visible.forEach(r => {
+        const placement = r.on(step).find(([id]) => id === org.id);
+        if (!placement) return;
+        const status = statusAt(r, step);
+        const changed = step > 0 && (r.from === step || status !== statusAt(r, step - 1));
+        add(r, placement[1], r.seenBy(step), { status, changed });
+      });
+      RECORDS.filter(r => r.to === step - 1 && r.gone && r.gone[org.id]).forEach(r => {
+        add(r, r.gone[org.id], r.seenBy(r.to), { gone: true });
+      });
+      if (hiddenCount) rows.push(hiddenRowHtml(hiddenCount));
+      const isYou = viewAs === org.id;
+      const body = rows.length
+        ? `<ul class="rec-list">${rows.join('')}</ul>`
+        : `<p class="org-empty">${escapeHtml(EMPTY_CARD[org.id] || 'Nothing yet.')}</p>`;
+      return `<article class="org${isYou ? ' is-you' : ''}${viewAs && !isYou ? ' is-other' : ''}">` +
+        `<header class="org-head"><span class="org-role">${escapeHtml(org.role)}</span>` +
+        `<h3>${escapeHtml(org.name)}</h3>${isYou ? '<span class="you-tag">This node</span>' : ''}</header>${body}</article>`;
+    }).join('');
+
+    if (viewAs) {
+      const stored = visible.filter(r => r.seenBy(step).includes(viewAs)).length;
+      viewHint.textContent = `${orgName(viewAs)}'s node stores ${stored} of the ${visible.length} records in this trade so far. Everything else is hidden from it.`;
+    } else {
+      viewHint.textContent = 'Pick an institution to see only what its own node stores.';
+    }
+  }
+
+  function render() {
+    renderStep();
+    renderBoard();
+    renderWhatIfs();
+  }
+
+  render();
+}
+
+// ============================================================================
+// 4. Collateral calculator
+// ============================================================================
+
+function formatUsd(value) {
+  return value.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function initCollateralCalculator() {
-  const assetSelect = document.getElementById('calc-collateral-asset');
-  const loanInput = document.getElementById('calc-loan-exposure');
-  const marginInput = document.getElementById('calc-margin-req');
-  const calcBtn = document.getElementById('btn-calculate-margin');
+  const loanInput = document.getElementById('calc-loan');
+  const assetSelect = document.getElementById('calc-asset');
+  const marginInput = document.getElementById('calc-margin');
+  const result = document.getElementById('calc-result');
+  if (!loanInput || !assetSelect || !marginInput || !result) return;
 
-  function updateMarginMatrix() {
-    if (!assetSelect || !loanInput || !marginInput) return;
-
-    const loan = parseFloat(loanInput.value) || 0;
-    const marginPct = (parseFloat(marginInput.value) || 102) / 100;
-    const selectedOption = assetSelect.options[assetSelect.selectedIndex];
-    const haircut = parseFloat(selectedOption.getAttribute('data-haircut')) || 0.02;
-    const hqla = selectedOption.getAttribute('data-hqla') || 'Level 1 HQLA';
-
-    // Required Collateral = (Loan * MarginRatio) / (1 - Haircut)
-    const requiredCollateral = (loan * marginPct) / (1 - haircut);
-    const haircutDeduction = requiredCollateral * haircut;
-    const marginCallThreshold = loan * marginPct;
-
-    const reqColEl = document.getElementById('calc-required-collateral');
-    const effHaircutEl = document.getElementById('calc-effective-haircut');
-    const thresholdEl = document.getElementById('calc-margin-call-threshold');
-    const lcrStatusEl = document.getElementById('calc-lcr-status');
-
-    if (reqColEl) reqColEl.textContent = `$${requiredCollateral.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    if (effHaircutEl) effHaircutEl.textContent = `$${haircutDeduction.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${(haircut * 100).toFixed(1)}%)`;
-    if (thresholdEl) thresholdEl.textContent = `$${marginCallThreshold.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    if (lcrStatusEl) lcrStatusEl.textContent = hqla;
+  function update() {
+    const loan = Math.max(0, parseFloat(loanInput.value) || 0);
+    const margin = Math.max(100, parseFloat(marginInput.value) || 100) / 100;
+    const haircut = parseFloat(assetSelect.value);
+    let assetName = assetSelect.options[assetSelect.selectedIndex].text.replace(/ \(.*\)$/, '');
+    if (/^[A-Z][a-z]/.test(assetName)) assetName = assetName[0].toLowerCase() + assetName.slice(1);
+    const required = (loan * margin) / (1 - haircut);
+    const counted = loan * margin;
+    const buffer = Math.round((margin - 1) * 1000) / 10;
+    result.innerHTML =
+      `Post at least <strong>${formatUsd(required)}</strong> of ${escapeHtml(assetName)} (market value). ` +
+      `After the ${(haircut * 100).toFixed(1).replace(/\.0$/, '')}% haircut it counts as ${formatUsd(counted)}: ` +
+      `the loan plus a ${buffer}% margin.`;
   }
 
-  if (calcBtn) calcBtn.addEventListener('click', updateMarginMatrix);
-  if (assetSelect) assetSelect.addEventListener('change', updateMarginMatrix);
-  if (loanInput) loanInput.addEventListener('input', updateMarginMatrix);
-  if (marginInput) marginInput.addEventListener('input', updateMarginMatrix);
-
-  updateMarginMatrix();
+  [loanInput, assetSelect, marginInput].forEach(el => el.addEventListener('input', update));
+  assetSelect.addEventListener('change', update);
+  update();
 }
 
 // ============================================================================
-// 6. ISO 20022 Financial Messaging Converter
+// 5. ISO 20022 mapping and checks
 // ============================================================================
 // The right-hand pane is a Canton 3.5 JSON Ledger API (v2) request body against
 // the actual AryaFi templates: POST /v2/commands/submit-and-wait for payment
@@ -1031,23 +839,14 @@ function initIsoConverter() {
   const select = document.getElementById('iso-msg-select');
   const xmlDisplay = document.getElementById('iso-xml-display');
   const damlDisplay = document.getElementById('iso-daml-display');
-  const toggleDirBtn = document.getElementById('btn-toggle-iso-dir');
   const validateBtn = document.getElementById('btn-validate-iso');
-  const dirText = document.getElementById('iso-direction-text');
   const statusBadge = document.getElementById('iso-status-badge');
-  const leftTitle = document.getElementById('iso-left-title');
-  const rightTitle = document.getElementById('iso-right-title');
   const tbody = document.getElementById('iso-mapping-tbody');
-
-  let isXmlToDaml = true;
-
   if (!select || !xmlDisplay || !damlDisplay) return;
 
   function resetBadge() {
-    if (statusBadge) {
-      statusBadge.textContent = "Not yet validated";
-      statusBadge.style.color = "var(--text-secondary)";
-    }
+    statusBadge.textContent = 'Not checked yet';
+    statusBadge.className = 'badge';
   }
 
   function render(key) {
@@ -1056,58 +855,25 @@ function initIsoConverter() {
       xmlDisplay.textContent = template.xml;
       damlDisplay.textContent = template.daml;
     }
-
     if (tbody && ISO_MAPPINGS[key]) {
-      tbody.innerHTML = '';
-      ISO_MAPPINGS[key].forEach(row => {
-        const tr = document.createElement('tr');
-        [`<${row.xml}>`, row.path, row.json, row.spec, row.rule].forEach((val, i) => {
-          const td = document.createElement('td');
-          if (i === 0) { const code = document.createElement('code'); code.textContent = val; td.appendChild(code); }
-          else if (i === 2) { const strong = document.createElement('strong'); strong.textContent = val; td.appendChild(strong); }
-          else { td.textContent = val; td.style.color = 'var(--text-secondary)'; }
-          tr.appendChild(td);
-        });
-        tbody.appendChild(tr);
-      });
+      tbody.innerHTML = ISO_MAPPINGS[key].map(row =>
+        `<tr><td><code>&lt;${escapeHtml(row.xml)}&gt;</code></td><td>${escapeHtml(row.path)}</td>` +
+        `<td><strong>${escapeHtml(row.json)}</strong></td><td>${escapeHtml(row.spec)}</td><td>${escapeHtml(row.rule)}</td></tr>`
+      ).join('');
     }
     resetBadge();
   }
 
-  select.addEventListener('change', () => {
-    render(select.value);
-  });
-
-  if (toggleDirBtn) {
-    toggleDirBtn.addEventListener('click', () => {
-      isXmlToDaml = !isXmlToDaml;
-      if (dirText) {
-        dirText.textContent = isXmlToDaml
-          ? "SWIFT MX (XML) → JSON Ledger API request"
-          : "Daml ledger data → SWIFT MX (XML)";
-      }
-      if (leftTitle && rightTitle) {
-        leftTitle.textContent = isXmlToDaml
-          ? "INCOMING ISO 20022 MX (XML PAYLOAD)"
-          : "OUTGOING ISO 20022 MX (GENERATED XML)";
-        rightTitle.textContent = isXmlToDaml
-          ? "JSON LEDGER API v2 REQUEST BODY"
-          : "SOURCE DAML LEDGER DATA (JSON LEDGER API)";
-      }
-      resetBadge();
-    });
-  }
+  select.addEventListener('change', () => render(select.value));
 
   if (validateBtn) {
     validateBtn.addEventListener('click', () => {
       const results = validateIsoPayloads(select.value, xmlDisplay.textContent, damlDisplay.textContent);
       const failed = results.filter(r => !r.ok);
-      if (statusBadge) {
-        statusBadge.textContent = failed.length === 0
-          ? `✓ ${results.length} checks passed`
-          : `✗ ${failed.length} of ${results.length} checks failed: ${failed.map(r => r.name).join('; ')}`;
-        statusBadge.style.color = failed.length === 0 ? "var(--accent-emerald)" : "var(--accent-rose)";
-      }
+      statusBadge.textContent = failed.length === 0
+        ? `✓ All ${results.length} checks passed`
+        : `✗ ${failed.length} of ${results.length} checks failed: ${failed.map(r => r.name).join('; ')}`;
+      statusBadge.className = failed.length === 0 ? 'badge badge-ok' : 'badge badge-bad';
     });
   }
 
@@ -1115,36 +881,35 @@ function initIsoConverter() {
 }
 
 // ============================================================================
-// 7. Daml Code Dossier Interactive Viewer
+// 6. Contract source viewer
 // ============================================================================
 
 // The viewer loads the real module source from the repository (served as
 // static files on the deployed site), so it can never drift from the code.
-const DAML_SOURCE_BASE = "daml/src/AryaFi/";
-const DAML_REPO_URL = "https://github.com/Aryaverse/aryafi-core/blob/main/";
+const DAML_SOURCE_BASE = 'daml/src/AryaFi/';
+const DAML_REPO_URL = 'https://github.com/Aryaverse/aryafi-core/blob/main/';
 
 const DAML_MODULES = {
-  cash: { title: "AryaFi/Finance/Cash.daml (Tokenized Cash Primitive)", path: "Finance/Cash.daml" },
-  security: { title: "AryaFi/Finance/Security.daml (Securities Safekeeping)", path: "Finance/Security.daml" },
-  settlement: { title: "AryaFi/Finance/Settlement.daml (Atomic DvP)", path: "Finance/Settlement.daml" },
-  collateral: { title: "AryaFi/Finance/Collateral.daml (Haircut & Valuation)", path: "Finance/Collateral.daml" },
-  loan: { title: "AryaFi/Contracts/Loan.daml (Credit Facility)", path: "Contracts/Loan.daml" },
-  repo: { title: "AryaFi/Contracts/Repo.daml (Repurchase Agreement)", path: "Contracts/Repo.daml" },
-  transfer: { title: "AryaFi/Compliance/TransferRestrictions.daml (Reg D / Reg S / 144A)", path: "Compliance/TransferRestrictions.daml" }
+  cash: 'Finance/Cash.daml',
+  security: 'Finance/Security.daml',
+  settlement: 'Finance/Settlement.daml',
+  collateral: 'Finance/Collateral.daml',
+  loan: 'Contracts/Loan.daml',
+  repo: 'Contracts/Repo.daml',
+  transfer: 'Compliance/TransferRestrictions.daml'
 };
 
 function initDamlViewer() {
   const select = document.getElementById('daml-file-select');
   const title = document.getElementById('daml-viewer-title');
   const content = document.getElementById('daml-viewer-content');
-
   if (!select || !title || !content) return;
 
   async function render(key) {
-    const mod = DAML_MODULES[key];
-    if (!mod) return;
-    const path = DAML_SOURCE_BASE + mod.path;
-    title.textContent = mod.title;
+    const rel = DAML_MODULES[key];
+    if (!rel) return;
+    const path = DAML_SOURCE_BASE + rel;
+    title.textContent = path;
     content.textContent = `Loading ${path} ...`;
     try {
       const res = await fetch(path, { cache: 'no-cache' });
@@ -1154,46 +919,215 @@ function initDamlViewer() {
     } catch (err) {
       if (select.value === key) {
         content.textContent = `Could not load ${path} (${err.message}).\n\n` +
-          `Open the page through a web server (e.g. the deployed site or "python3 -m http.server"),\n` +
+          'Open the page through a web server (e.g. the deployed site or "python3 -m http.server"),\n' +
           `or read the source on GitHub:\n${DAML_REPO_URL}${path}`;
       }
     }
   }
 
-  select.addEventListener('change', () => {
-    render(select.value);
-  });
-
+  select.addEventListener('change', () => render(select.value));
   render(select.value);
 }
 
 // ============================================================================
-// 8. Clipboard Copy Buttons
+// 7. Copy buttons (data-copy="<id of the element to copy>")
 // ============================================================================
 
 function initCopyButtons() {
-  function handleCopy(btnId, targetElId) {
-    const btn = document.getElementById(btnId);
-    const target = document.getElementById(targetElId);
-    if (!btn || !target) return;
-
+  document.querySelectorAll('[data-copy]').forEach(btn => {
     btn.addEventListener('click', async () => {
+      const target = document.getElementById(btn.dataset.copy);
+      if (!target) return;
+      const original = btn.textContent;
       try {
-        const text = target.textContent;
-        await navigator.clipboard.writeText(text);
-        const origText = btn.textContent;
-        btn.textContent = 'Copied!';
-        setTimeout(() => {
-          btn.textContent = origText;
-        }, 1500);
+        await navigator.clipboard.writeText(target.textContent);
+        btn.textContent = 'Copied';
       } catch (err) {
-        console.error('Failed to copy to clipboard', err);
+        btn.textContent = 'Copy failed';
       }
+      setTimeout(() => { btn.textContent = original; }, 1500);
     });
+  });
+}
+
+// ============================================================================
+// 8. Docs: key documents rendered from the repository's Markdown
+// ============================================================================
+// The Markdown files are deployed with the site (see .vercelignore), so the
+// pages always match the repository. Links between published documents stay
+// on the site; links to files that are not published are shown as plain text.
+
+const DOCS = [
+  { slug: 'known-limitations', path: 'docs/KNOWN_LIMITATIONS.md', title: 'Known limitations', group: 'Start here', summary: 'What the library does not do yet. Read before building on it.' },
+  { slug: 'improvement-plan', path: 'docs/IMPROVEMENT_PLAN.md', title: 'Improvement plan', group: 'Start here', summary: 'What comes next, in what order, and why.' },
+  { slug: 'changelog', path: 'CHANGELOG.md', title: 'Changelog', group: 'Start here', summary: 'What changed in each release.' },
+  { slug: 'user-guide', path: 'docs/USER_GUIDE.md', title: 'User guide', group: 'Start here', summary: 'This website, and building and running the library locally.' },
+  { slug: 'ledger-api-client', path: 'docs/integration/LEDGER_API_CLIENT.md', title: 'Ledger API client guide', group: 'Integrate', summary: 'Submitting commands, tokens and rights, deduplication, streams.' },
+  { slug: 'iso20022-mappings', path: 'docs/integration/ISO20022_MAPPINGS.md', title: 'ISO 20022 mappings', group: 'Integrate', summary: 'How payment and securities messages map to the contracts.' },
+  { slug: 'migration-guide', path: 'docs/governance/MIGRATION_GUIDE.md', title: 'Migration guide', group: 'Integrate', summary: 'Upgrading between versions, including v2 to v3.' },
+  { slug: 'testnet', path: 'deploy/testnet/README.md', title: 'TestNet runbook', group: 'Integrate', summary: 'A first run on the Canton Network TestNet.' },
+  { slug: 'versioning', path: 'docs/governance/VERSIONING_AND_RELEASE.md', title: 'Versioning and releases', group: 'Integrate', summary: 'Version numbers, maturity labels, and the release process.' },
+  { slug: 'authorization-matrix', path: 'docs/security/AUTHORIZATION_MATRIX.md', title: 'Authorization matrix', group: 'Security', summary: 'Who can do what on every contract, generated from the code.' },
+  { slug: 'threat-model', path: 'docs/security/THREAT_MODEL.md', title: 'Threat model', group: 'Security', summary: 'Threats considered and how the contracts address them.' }
+];
+
+const DOC_BY_SLUG = Object.fromEntries(DOCS.map(d => [d.slug, d]));
+const DOC_BY_PATH = Object.fromEntries(DOCS.map(d => [d.path, d]));
+const DOC_GROUPS = ['Start here', 'Integrate', 'Security'];
+
+// Other published files that documents may link to (shown as raw files).
+const PUBLISHED_FILES = new Set(Object.values(DAML_MODULES).map(rel => DAML_SOURCE_BASE + rel));
+
+const REPO_BLOB = /^https:\/\/github\.com\/Aryaverse\/aryafi-core\/blob\/[^/]+\/([^#]*)(#.*)?$/;
+
+let docsRequest = 0;
+
+function initDocs() {
+  const navList = document.getElementById('docs-nav-list');
+  const jump = document.getElementById('docs-jump-select');
+  const groups = document.getElementById('docs-index-groups');
+  if (!navList || !jump || !groups) return;
+
+  navList.innerHTML = DOC_GROUPS.map(g =>
+    `<p class="docs-nav-group">${escapeHtml(g)}</p><ul>` +
+    DOCS.filter(d => d.group === g).map(d => `<li><a href="#docs/${d.slug}" data-doc="${d.slug}">${escapeHtml(d.title)}</a></li>`).join('') +
+    '</ul>').join('');
+
+  jump.innerHTML = '<option value="">All documents</option>' + DOC_GROUPS.map(g =>
+    `<optgroup label="${escapeHtml(g)}">` +
+    DOCS.filter(d => d.group === g).map(d => `<option value="${d.slug}">${escapeHtml(d.title)}</option>`).join('') +
+    '</optgroup>').join('');
+  jump.addEventListener('change', () => { location.hash = jump.value ? `docs/${jump.value}` : 'docs'; });
+
+  groups.innerHTML = DOC_GROUPS.map(g =>
+    `<h2 class="docs-group-title">${escapeHtml(g)}</h2><div class="grid grid-3">` +
+    DOCS.filter(d => d.group === g).map(d =>
+      `<a class="card link-card" href="#docs/${d.slug}"><h3>${escapeHtml(d.title)}</h3><p>${escapeHtml(d.summary)}</p></a>`).join('') +
+    '</div>').join('');
+}
+
+// GitHub's heading anchors: lower case, punctuation dropped, spaces to hyphens.
+function githubSlug(text) {
+  return text.trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/\s/g, '-');
+}
+
+// Maps a repository path (and optional #anchor) to where it lives on this site.
+function siteHref(repoPath, anchor) {
+  const clean = repoPath.replace(/^\/+/, '');
+  const doc = DOC_BY_PATH[clean] || DOC_BY_PATH[clean.replace(/\/?$/, '/README.md')];
+  if (doc) return { href: `#docs/${doc.slug}${anchor ? '/' + anchor : ''}` };
+  if (PUBLISHED_FILES.has(clean)) return { href: clean, external: true };
+  return null;
+}
+
+function rewriteDocLinks(article, doc) {
+  article.querySelectorAll('a[href]').forEach(a => {
+    const href = a.getAttribute('href');
+    let target = null;
+    if (href.startsWith('#')) {
+      target = { href: `#docs/${doc.slug}/${href.slice(1)}` };
+    } else if (/^mailto:/i.test(href)) {
+      return;
+    } else if (/^https?:/i.test(href)) {
+      const m = href.match(REPO_BLOB);
+      if (m) {
+        target = siteHref(decodeURIComponent(m[1]), m[2] ? m[2].slice(1) : '');
+      } else {
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        return;
+      }
+    } else {
+      const url = new URL(href, `https://site.invalid/${doc.path}`);
+      target = siteHref(decodeURIComponent(url.pathname), url.hash.slice(1));
+    }
+    if (target) {
+      a.setAttribute('href', target.href);
+      if (target.external) { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+    } else {
+      const span = document.createElement('span');
+      span.className = 'doc-unlinked';
+      span.title = 'Not published on this site';
+      span.textContent = a.textContent;
+      a.replaceWith(span);
+    }
+  });
+}
+
+function decorateDoc(article) {
+  const seen = {};
+  article.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach(h => {
+    let id = githubSlug(h.textContent);
+    if (seen[id] !== undefined) { seen[id] += 1; id = `${id}-${seen[id]}`; } else { seen[id] = 0; }
+    h.id = id;
+  });
+  article.querySelectorAll('table').forEach(table => {
+    const wrap = document.createElement('div');
+    wrap.className = 'table-wrap';
+    table.replaceWith(wrap);
+    wrap.appendChild(table);
+  });
+}
+
+async function showDocsRoute(slug, anchor) {
+  const index = document.getElementById('docs-index');
+  const article = document.getElementById('doc-article');
+  const source = document.getElementById('doc-source');
+  const jump = document.getElementById('docs-jump-select');
+  if (!index || !article) return;
+
+  const doc = DOC_BY_SLUG[slug];
+  document.querySelectorAll('.docs-nav [data-doc]').forEach(a => {
+    if (doc && a.dataset.doc === doc.slug) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  });
+  jump.value = doc ? doc.slug : '';
+
+  if (!doc) {
+    index.hidden = false;
+    article.hidden = true;
+    source.hidden = true;
+    window.scrollTo(0, 0);
+    return;
   }
 
-  handleCopy('btn-copy-xml', 'iso-xml-display');
-  handleCopy('btn-copy-daml', 'iso-daml-display');
-  handleCopy('btn-copy-source', 'daml-viewer-content');
-  handleCopy('btn-copy-log', 'scenario-terminal-output');
+  index.hidden = true;
+  article.hidden = false;
+  document.title = `${doc.title} · AryaFi Core`;
+
+  const request = ++docsRequest;
+  if (article.dataset.doc !== doc.slug) {
+    article.dataset.doc = '';
+    article.innerHTML = `<p class="fine-print">Loading ${escapeHtml(doc.title)}…</p>`;
+    let text;
+    try {
+      const res = await fetch(doc.path, { cache: 'no-cache' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      text = await res.text();
+    } catch (err) {
+      if (request === docsRequest) {
+        article.innerHTML = `<p>Could not load ${escapeHtml(doc.path)} (${escapeHtml(err.message)}).</p>`;
+      }
+      return;
+    }
+    if (request !== docsRequest) return;
+    if (window.marked && window.DOMPurify) {
+      article.innerHTML = window.DOMPurify.sanitize(window.marked.parse(text, { gfm: true }));
+      decorateDoc(article);
+      rewriteDocLinks(article, doc);
+    } else {
+      // The renderer could not be loaded: show the Markdown as text.
+      const pre = document.createElement('pre');
+      pre.className = 'code code-tall';
+      pre.textContent = text;
+      article.replaceChildren(pre);
+    }
+    article.dataset.doc = doc.slug;
+    source.hidden = false;
+    source.innerHTML = `Source: <a href="${escapeHtml(doc.path)}" target="_blank" rel="noopener noreferrer">${escapeHtml(doc.path)}</a> in the AryaFi Core repository.`;
+  }
+
+  const target = anchor && document.getElementById(anchor);
+  if (target) target.scrollIntoView();
+  else window.scrollTo(0, 0);
 }

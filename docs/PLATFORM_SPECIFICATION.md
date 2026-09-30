@@ -12,7 +12,7 @@ Built with Daml SDK 3.5 for **Canton 3.5** (protocol version 35), AryaFi Core pr
 
 ```
                       +---------------------------------------+
-                      |   AryaFi Web Terminal (Vercel Cloud)  |
+                      |   AryaFi Website (Vercel)             |
                       |   Canton Ledger API Client Gateway    |
                       +-------------------+-------------------+
                                           |

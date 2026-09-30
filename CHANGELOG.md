@@ -5,6 +5,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [Unreleased]
+
+### Website
+- **Rebuilt for the people evaluating AryaFi Core.** The six technical tabs (Topology, Simulator, Contracts & Math, ISO 20022, Security & Rules, Daml Code) are replaced by four views that answer a visitor's questions: **Overview** (what it does, why it matters, who takes part, what works today and what doesn't), **See a trade settle**, **What's inside**, and **Developers**. Links to the old tabs open the matching view.
+- **See a trade settle** replays the tested bond-for-cash scenario step by step, with a card per institution showing what it holds and stores. **Whose view?** hides everything a chosen institution's node does not store, and **What if…?** tries what the contracts prevent, each result naming the test that checks it.
+- Removed claims the code does not support: the Security tab's ticks for regulatory outcomes (capital neutrality, Basel III treatment, UCC perfection) and the regulatory labels on the collateral calculator.
+- The site follows the system light or dark setting, works at phone width without sideways scrolling, and no longer has the hotkey panel or the split calculator.
+- **Docs view.** Eleven key documents are rendered on the site from the repository's Markdown, so readers without access to the private repository can read them. Links between documents, including links to sections, stay on the site.
+- **Only the site's own files are deployed.** Deploys uploaded the whole repository, so everything in it (tests, deployment configuration, the requirements document) could be downloaded from the site. `.vercelignore` now limits the deployment to the site, the published documents, and the seven contract modules the source viewer shows.
+- The GitHub link is removed from the header, because the repository is private.
+
+---
+
 ## [3.0.0] - 2026-09-30
 
 This release moves AryaFi Core to **Daml 3** (Daml SDK 3.5.12, Daml-LF 2.2) and **Canton 3.5**, the platform the Canton Network runs, as decided in [IMPROVEMENT_PLAN.md §2](docs/IMPROVEMENT_PLAN.md). It is a major version: the DAR no longer runs on Canton 2, contract keys are removed, and clients must use Ledger API v2. Template fields and choices are otherwise unchanged from v2.0.0. See [MIGRATION_GUIDE.md §6](docs/governance/MIGRATION_GUIDE.md) for upgrade notes.
