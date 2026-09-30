@@ -170,7 +170,7 @@ daml/src/AryaFi/Test/
 ### 1. Artifact Compilation
 ```bash
 daml build
-# Generates .daml/dist/aryafi-core-1.0.0.dar
+# Generates .daml/dist/aryafi-core-2.0.0.dar
 ```
 
 ### 2. Multi-Node Deployment
@@ -180,7 +180,7 @@ for port in 10012 10022 10032 10042 10052; do
   daml ledger upload-dar \
     --host localhost \
     --port $port \
-    .daml/dist/aryafi-core-1.0.0.dar
+    .daml/dist/aryafi-core-2.0.0.dar
 done
 ```
 
@@ -188,7 +188,7 @@ done
 Execute default init-script against Canton Domain:
 ```bash
 daml script \
-  --dar .daml/dist/aryafi-core-1.0.0.dar \
+  --dar .daml/dist/aryafi-core-2.0.0.dar \
   --script-name AryaFi.Test.Scenarios.TreasuryDvpScenario:testTreasuryDvp \
   --ledger-host localhost \
   --ledger-port 10012

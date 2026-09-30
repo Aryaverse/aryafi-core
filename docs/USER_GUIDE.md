@@ -187,7 +187,7 @@ docker compose ps
 ### 3. Run a Scenario via Daml Script
 ```bash
 daml script \
-  --dar .daml/dist/aryafi-core-1.0.0.dar \
+  --dar .daml/dist/aryafi-core-2.0.0.dar \
   --script-name AryaFi.Test.Scenarios.TreasuryDvpScenario:runTreasuryDvpScenario \
   --ledger-host localhost \
   --ledger-port 10012

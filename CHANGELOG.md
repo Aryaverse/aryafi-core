@@ -5,9 +5,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
-## [1.0.2] - Unreleased
+## [2.0.0] - 2026-09-29
 
-This release makes the library build, makes its test suite run, and corrects the behaviour and documentation that did not match the code. **Breaking:** several choices changed controllers or arguments (listed under *Changed*); see [MIGRATION_GUIDE.md](docs/governance/MIGRATION_GUIDE.md) for upgrade notes.
+This release makes the library build, makes its test suite run, and corrects the behaviour and documentation that did not match the code. It is a major version because of the breaking contract changes below, as required by [VERSIONING_AND_RELEASE.md](docs/governance/VERSIONING_AND_RELEASE.md). **Breaking:** several choices changed controllers or arguments (listed under *Changed*); see [MIGRATION_GUIDE.md](docs/governance/MIGRATION_GUIDE.md) for upgrade notes.
 
 ### Fixed
 - **Build.** `daml build` failed with 13 errors in 12 production modules (a `Text`/`ISIN` type error in `Repo.daml`, multi-field constructors in `SecuritiesLending.daml` and `Redemption.daml`, and `-Werror` warnings). It now builds with `-Wall -Werror`; only `-Wno-name-shadowing` is disabled, for the `maintainer key._1` idiom.
