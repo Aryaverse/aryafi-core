@@ -3,7 +3,7 @@
 [![Daml](https://img.shields.io/badge/Daml_SDK-3.5.12-blue.svg)](https://docs.digitalasset.com)
 [![Canton](https://img.shields.io/badge/Canton-3.5_(protocol_35)-green.svg)](deploy/canton/canton.conf)
 [![Release](https://img.shields.io/badge/Release-v3.0.0-purple.svg)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/dpm_test-290_passing-brightgreen.svg)](daml/test/AryaFi/Test)
+[![Tests](https://img.shields.io/badge/dpm_test-296_passing-brightgreen.svg)](daml/test/AryaFi/Test)
 [![Status](https://img.shields.io/badge/Status-Beta_/_Experimental-orange.svg)](docs/KNOWN_LIMITATIONS.md)
 [![Website](https://img.shields.io/badge/Vercel-Website-black.svg?logo=vercel)](https://aryafi-core.vercel.app)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
@@ -85,7 +85,7 @@ aryafi-core/
 │   │       └── Compliance/        # KYC, Sanctions, Eligibility, TransferRestrictions
 │   └── test/                      # Test package (aryafi-core-test), depends on the production DAR
 │       ├── daml.yaml
-│       └── AryaFi/Test/           # Daml Script test suite (290 scripts, run by `dpm test`)
+│       └── AryaFi/Test/           # Daml Script test suite (296 scripts, run by `dpm test`)
 │           ├── Unit/              # 11 unit suites across primitives, contracts & compliance
 │           ├── Scenarios/         # 9 end-to-end multi-party lifecycle scenarios
 │           ├── Negative/          # Unauthorized access, violation & invalid transition tests
@@ -125,6 +125,7 @@ aryafi-core/
 - **`Cash`**: Tokenized deposit positions with `SplitCash`, `MergeCash`, receiver-authorized `TransferCash`, and locks held by a named lock holder (`LockCash`, `UnlockCash`, `SettleLockedCash`).
 - **`Security`**: Tokenized fixed-income and equity safekeeping with the same lock-holder model (`LockSecurity`, `SettleLockedSecurity`).
 - **`Collateral`**: Haircut valuation ($V = M \times (1 - h)$), mark-to-market revaluation, substitution, and default liquidation.
+- **`TokenStandard`**: Cash, securities, and asset positions implement the Canton Network Token Standard `Holding` interfaces (CIP-56 V1 and CIP-0112 V2), so wallets and apps can list them.
 - **`Settlement`**: Atomic Delivery-versus-Payment. `ExecuteDvpSettlement` validates both locked legs and delivers the security and the cash in a single transaction (BIS Model 1).
 - **`Payment`**: Tri-party payment separation with SWIFT UETR and Fedwire IMAD network reference tracking.
 
@@ -157,7 +158,7 @@ aryafi-core/
 # Build both packages: aryafi-core (production) and aryafi-core-test
 dpm build --all
 
-# Run the test suite (290 scripts); --all includes the production templates in the coverage report
+# Run the test suite (296 scripts); --all includes the production templates in the coverage report
 cd daml/test
 dpm test --all --show-coverage
 ```

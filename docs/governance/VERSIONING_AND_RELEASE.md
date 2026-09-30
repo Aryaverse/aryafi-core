@@ -15,7 +15,7 @@ Every module in the library is tagged with an explicit maturity status:
 
 ## 3. Release Process
 1. Add a `## [X.Y.Z] - YYYY-MM-DD` section to `CHANGELOG.md`, written for the people who use the release.
-2. Set `version: X.Y.Z` in `daml.yaml` and `daml/test/daml.yaml`, and the data-dependency path in `daml/test/daml.yaml`.
+2. Set `version: X.Y.Z` in `daml.yaml` and `daml/test/daml.yaml`, the data-dependency path in `daml/test/daml.yaml`, and the DAR file names in the docs' commands (`git grep 'aryafi-core-[a-z-]*[0-9]'`). Main carries the next version between releases, so a development build never has the same name and version as a released package.
 3. Merge to `main`, then push the tag `vX.Y.Z`.
 
 The release workflow (`.github/workflows/release.yml`) then runs the test suite, publishes the production DAR and its SHA-256 checksum, and uses the CHANGELOG section for `X.Y.Z` as the release notes. It stops before building if that section is missing.

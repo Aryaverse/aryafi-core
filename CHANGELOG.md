@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+Version 3.1.0 (in development): an upgrade-compatible release. Canton's participant upgrade check accepts it as an upgrade of 3.0.0.
+
+### Added
+- **Canton Network Token Standard holdings.** `CashPosition`, `SecurityPosition`, and `AssetHolding` implement the `Holding` interface of CIP-56 (`Splice.Api.Token.HoldingV1`) and of the approved V2 standard, CIP-0112 (`HoldingV2`), so wallets and apps that read token-standard holdings see AryaFi positions. The V2 account is the owner, the bank or custodian as provider, and the AryaFi account ID; the instrument is the currency, ISIN, or asset ID under the bank, custodian, or issuer; a lock shows the lock holder with the trade reference as context. The interface packages are vendored from Splice 0.8.3 in `daml/deps/splice`. See [`AryaFi.Finance.TokenStandard`](daml/src/AryaFi/Finance/TokenStandard.daml).
+- `TokenStandardTest`: six tests for the holding views, including locks during DvP and holdings changing hands at settlement. On a Canton 3.5 participant, a JSON Ledger API query filtered by the standard's `Holding` interfaces returns the settled positions with the right instrument, amount and account, and nothing to an outsider.
+
 ### Website
 - **Rebuilt for the people evaluating AryaFi Core.** The six technical tabs (Topology, Simulator, Contracts & Math, ISO 20022, Security & Rules, Daml Code) are replaced by four views that answer a visitor's questions: **Overview** (what it does, why it matters, who takes part, what works today and what doesn't), **See a trade settle**, **What's inside**, and **Developers**. Links to the old tabs open the matching view.
 - **See a trade settle** replays the tested bond-for-cash scenario step by step, with a card per institution showing what it holds and stores. **Whose view?** hides everything a chosen institution's node does not store, and **What if…?** tries what the contracts prevent, each result naming the test that checks it.
