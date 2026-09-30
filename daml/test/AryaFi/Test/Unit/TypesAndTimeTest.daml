@@ -3,7 +3,7 @@
 
 -- | Unit tests for AryaFi.Common.Types, AryaFi.Common.Identifiers,
 -- and AryaFi.Common.Time modules.
--- Run via: daml test --test-pattern TypesAndTimeTest
+-- Run via (in daml/test): dpm test --files AryaFi/Test/Unit/TypesAndTimeTest.daml
 module AryaFi.Test.Unit.TypesAndTimeTest where
 
 import Daml.Script

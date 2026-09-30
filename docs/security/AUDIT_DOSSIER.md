@@ -5,13 +5,13 @@
 This dossier is the briefing package for an independent security review of **AryaFi Core**. **No independent review has taken place yet.** Until one does, no module carries the `Production Candidate` or `Production Reviewed` label (see [KNOWN_LIMITATIONS.md](../KNOWN_LIMITATIONS.md)).
 
 ### 1.1 Target Platform & Scope of Review
-- **Language / platform**: Daml SDK 2.10.0 (Daml-LF 1.x), deployed on Canton 2.10 (protocol version 5).
+- **Language / platform**: Daml SDK 3.5.12 (Daml-LF 2.2), deployed on Canton 3.5 (protocol version 35).
 - **Source tree in scope**:
   - `daml/src/AryaFi/Common/`: Domain types, day-count conventions, error helpers, identifiers, audit events, policy decisions.
   - `daml/src/AryaFi/Finance/`: `CashPosition`, `SecurityPosition`, `AssetHolding`, `Account`, `InstitutionalParty`, `CollateralPosition`, `FinancialObligation`, `PaymentInstruction`, `DvpInstruction`.
   - `daml/src/AryaFi/Contracts/`: `InstitutionalLoan`, `RepoAgreement`, `ReverseRepoPosition`, `SecuritiesLendingAgreement`, `MarginCall`, `AssetPledge`, `ConditionalEscrow`, `AssetTransferRequest`, `FundSubscription`, `AssetRedemption`.
   - `daml/src/AryaFi/Compliance/`: `KycAttestation`, `SanctionsAttestation`, `JurisdictionProfile`, `EligibilityPolicy`, `TransferRestrictionRule`, `OwnershipRestriction`, `RegulatoryReportRecord`.
-- **Out of scope**: the test scripts under `daml/src/AryaFi/Test/`, the web terminal, and the deployment configuration.
+- **Out of scope**: the test package under `daml/test/AryaFi/Test/`, the web terminal, and the deployment configuration.
 - **Authorization reference**: [AUTHORIZATION_MATRIX.md](AUTHORIZATION_MATRIX.md), generated from the source.
 - **Target release**: `v2.0.0`
 
@@ -76,7 +76,7 @@ Each invariant below is argued from the code and exercised by a named test. They
 
 ## 3. Automated Test Coverage
 
-`daml test --show-coverage` on v2.0.0:
+`dpm test --all --show-coverage` (in `daml/test`) on v3.0.0:
 
 | Measure | Result |
 |:---|:---|
@@ -101,29 +101,31 @@ Not yet covered: property-based tests, multi-participant tests on a real Canton 
 
 1. **Key security**: Participant node keys are managed outside the contract layer (HSM/KMS); see [OPERATIONS_GUIDE.md](../deployment/OPERATIONS_GUIDE.md).
 2. **Market data**: Collateral and repo revaluations take prices as choice arguments from the custodian or both counterparties. There is no on-ledger price oracle; off-ledger price sources must be controlled by the operator.
-3. **Time**: Time-dependent choices (loan accrual and maturity, recall and margin deadlines, KYC and sanctions expiry) use Daml ledger time, which Canton bounds by the domain's ledger-time/record-time tolerance.
-4. **Multi-party submission**: The tests create multi-signatory contracts with `submitMulti`. On separate participants this needs propose/accept workflows (not yet provided).
+3. **Time**: Time-dependent choices (loan accrual and maturity, recall and margin deadlines, KYC and sanctions expiry) use Daml ledger time, which Canton bounds by the synchronizer's ledger-time/record-time tolerance.
+4. **Multi-party submission**: The tests create multi-signatory contracts by submitting as several parties at once (`submit (actAs [...])`). On separate participants this needs propose/accept workflows (not yet provided).
 
 ---
 
 ## 5. Reviewer Verification Runbook
 
 ```bash
-# 1. Clean build with warnings as errors (see daml.yaml build-options)
-daml clean
-daml build
+# 1. Clean build of both packages with warnings as errors (see daml.yaml build-options)
+dpm clean --all
+dpm build --all
 
-# 2. Run the full test suite with coverage
-daml test --show-coverage
+# 2. Run the full test suite with coverage of the production templates
+cd daml/test
+dpm test --all --show-coverage
 
-# 3. Inspect the DAR
-daml damlc inspect-dar .daml/dist/aryafi-core-2.0.0.dar
+# 3. Inspect the production DAR
+dpm inspect-dar ../../.daml/dist/aryafi-core-3.0.0.dar
 
 # 4. Run specific security and privacy suites (--files selects a test module;
 #    --test-pattern would match script names, not file names)
-daml test --files daml/src/AryaFi/Test/Privacy/ObserverPrivacyTest.daml
-daml test --files daml/src/AryaFi/Test/Negative/UnauthorizedAccessTest.daml
-daml test --files daml/src/AryaFi/Test/Scenarios/DvpSettlementTest.daml
+dpm test --files AryaFi/Test/Privacy/ObserverPrivacyTest.daml
+dpm test --files AryaFi/Test/Negative/UnauthorizedAccessTest.daml
+dpm test --files AryaFi/Test/Scenarios/DvpSettlementTest.daml
+cd ../..
 
 # 5. Confirm the authorization matrix matches the source
 python3 scripts/gen_authorization_matrix.py

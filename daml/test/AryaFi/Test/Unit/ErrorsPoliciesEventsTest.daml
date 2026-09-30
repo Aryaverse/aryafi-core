@@ -3,7 +3,7 @@
 
 -- | Unit tests for AryaFi.Common.Errors, AryaFi.Common.Policies,
 -- and AryaFi.Common.Events modules.
--- Run via: daml test --test-pattern ErrorsPoliciesEventsTest
+-- Run via (in daml/test): dpm test --files AryaFi/Test/Unit/ErrorsPoliciesEventsTest.daml
 module AryaFi.Test.Unit.ErrorsPoliciesEventsTest where
 
 import Daml.Script

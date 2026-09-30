@@ -29,7 +29,7 @@ Demonstrates bilateral and tri-party repurchase agreement (Repo) lifecycle manag
 ### 1. Repo Agreement Creation & Opening DvP Leg
 Primary Dealer A (Seller) and Institutional Investor B (Buyer) agree on a 14-day repo with 10M US Treasuries at a 2% haircut and 5.25% repo rate:
 ```daml
-repoCid <- submitMulti [seller, buyer, custodian] [] do
+repoCid <- submit (actAs [seller, buyer, custodian]) do
   createCmd RepoAgreement with
     repoId = "REPO-2026-GS-BLK-001"
     seller = seller
@@ -73,7 +73,7 @@ deficit <- submit buyer do
     requiredMarginRatio = 0.02
 
 -- Buyer serves Variation Margin Call
-marginCallCid <- submitMulti [buyer, seller] [] do
+marginCallCid <- submit (actAs [buyer, seller]) do
   createCmd MarginCall with
     marginCallId = "MC-VAR-2026-001"
     caller = buyer
@@ -104,7 +104,7 @@ If the funds never arrive, the buyer runs `RejectMarginFulfilment` instead, and 
 ### 4. Collateral Substitution & Maturity Closeout
 ```daml
 -- Counterparties execute collateral substitution
-repoCidSubstituted <- submitMulti [seller, buyer] [] do
+repoCidSubstituted <- submit (actAs [seller, buyer]) do
   exerciseCmd repoCidActive SubstituteCollateral with
     newIsin = ISIN "US912828XG01"
     newQuantity = 10100000.0
@@ -125,6 +125,7 @@ repoCidSettled <- submit custodian do
 ## Scenario Verification
 To execute the complete multi-party test scenario:
 ```bash
-daml test --files daml/src/AryaFi/Test/Scenarios/RepoScenario.daml
+cd daml/test
+dpm test --files AryaFi/Test/Scenarios/RepoScenario.daml
 ```
-*Implemented in [RepoScenario.daml](../../daml/src/AryaFi/Test/Scenarios/RepoScenario.daml).*
+*Implemented in [RepoScenario.daml](../../daml/test/AryaFi/Test/Scenarios/RepoScenario.daml).*

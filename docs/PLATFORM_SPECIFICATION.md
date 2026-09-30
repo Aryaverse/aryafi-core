@@ -4,7 +4,7 @@
 
 **AryaFi Core** is an enterprise-grade, privacy-aware smart contract library engineered in [Daml](https://www.digitalasset.com/daml) for wholesale financial institutions, global custodian banks, primary broker-dealers, and institutional asset managers.
 
-Built with Daml SDK 2.10 for **Canton 2.10** (protocol version 5), AryaFi Core provides primitives for tokenized deposits, securities safekeeping, atomic Delivery-versus-Payment (DvP) settlement, repurchase agreements (repo), securities lending, credit facilities, and private credit fund subscription/redemption lifecycles. Module maturity and gaps are listed in [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md).
+Built with Daml SDK 3.5 for **Canton 3.5** (protocol version 35), AryaFi Core provides primitives for tokenized deposits, securities safekeeping, atomic Delivery-versus-Payment (DvP) settlement, repurchase agreements (repo), securities lending, credit facilities, and private credit fund subscription/redemption lifecycles. Module maturity and gaps are listed in [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md).
 
 ---
 
@@ -24,8 +24,8 @@ Built with Daml SDK 2.10 for **Canton 2.10** (protocol version 5), AryaFi Core p
     +-----------+-----------+                           +-----------+-----------+
                 |                                                   |
 +---------------v---------------------------------------------------v---------------+
-|                              Canton Network Sequencer Domain                       |
-|                          (Byzantine Fault Tolerant Consensus)                     |
+|                     Canton Synchronizer (Sequencer + Mediator)                     |
+|                       (BFT ordering, mediator confirmation)                        |
 +---+-------------------+-------------------+-------------------+-------------------+
     |                   |                   |                   |                   |
 +---v-----------+   +---v-----------+   +---v-----------+   +---v-----------+   +---v-----------+
@@ -154,13 +154,13 @@ In the Canton Network, privacy is achieved cryptographically at the sub-transact
 AryaFi Core enforces a multi-tiered testing strategy comprising 36+ test suites and scenarios:
 
 ```
-daml/src/AryaFi/Test/
+daml/test/AryaFi/Test/      # separate test package (aryafi-core-test)
 ├── Unit/                   # High-precision unit tests for every primitive & contract
 ├── Scenarios/              # Multi-party institutional lifecycle scenarios (Dvp, Repo, Loan, Seclend)
 ├── Negative/               # Unauthorized access, compliance violation & invalid transition tests
 ├── Privacy/                # Canton sub-transaction privacy & observer visibility verification
 ├── Authorization/          # Multi-signatory, bilateral & tri-party authorization edge cases
-└── Integration/            # Multi-participant node integration tests
+└── Integration/            # Cross-module workflow tests (single ledger)
 ```
 
 ---
@@ -169,27 +169,28 @@ daml/src/AryaFi/Test/
 
 ### 1. Artifact Compilation
 ```bash
-daml build
-# Generates .daml/dist/aryafi-core-2.0.0.dar
+dpm build --all
+# Generates .daml/dist/aryafi-core-3.0.0.dar (production)
+# and daml/test/.daml/dist/aryafi-core-test-3.0.0.dar (tests)
 ```
 
 ### 2. Multi-Node Deployment
-Upload the DAR across all participant nodes in the topology:
+Upload the production DAR to every participant through its JSON Ledger API (the `deploy/` bootstrap does this automatically):
 ```bash
-for port in 10012 10022 10032 10042 10052; do
-  daml ledger upload-dar \
-    --host localhost \
-    --port $port \
-    .daml/dist/aryafi-core-2.0.0.dar
+for port in 10013 10023 10033 10043 10053; do
+  curl -sf -X POST "http://localhost:$port/v2/dars?vetAllPackages=true" \
+    -H "Content-Type: application/octet-stream" \
+    --data-binary @.daml/dist/aryafi-core-3.0.0.dar
 done
 ```
 
 ### 3. Scenario Verification
-Execute default init-script against Canton Domain:
+Run the treasury DvP scenario against the bank participant:
 ```bash
-daml script \
-  --dar .daml/dist/aryafi-core-2.0.0.dar \
-  --script-name AryaFi.Test.Scenarios.TreasuryDvpScenario:testTreasuryDvp \
+dpm script \
+  --dar daml/test/.daml/dist/aryafi-core-test-3.0.0.dar \
+  --upload-dar=yes \
+  --script-name AryaFi.Test.Scenarios.TreasuryDvpScenario:runTreasuryDvpScenario \
   --ledger-host localhost \
   --ledger-port 10012
 ```

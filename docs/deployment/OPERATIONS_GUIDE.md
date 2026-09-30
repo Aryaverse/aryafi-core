@@ -25,8 +25,8 @@ In a production Canton deployment, each regulated legal entity (e.g. Central Ban
 │                ┌───────────────┴───────────────┐                                       │
 │                ▼                               ▼                                       │
 │   ┌─────────────────────────┐     ┌────────────────────────┐                           │
-│   │ PostgreSQL Primary DB   │     │ Canton Synchronization │                           │
-│   │ (State & Audit Records) │     │ Domain (Sequencer/Med) │                           │
+│   │ PostgreSQL Primary DB   │     │ Canton Synchronizer    │                           │
+│   │ (State & Audit Records) │     │ (Sequencer + Mediator) │                           │
 │   └─────────────────────────┘     └────────────────────────┘                           │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -66,7 +66,7 @@ canton.participants.bank_node.crypto {
 
 ### 3.1 Active-Passive Participant Redundancy
 For Tier-1 financial institutions requiring 99.999% availability:
-1. **Primary Active Node**: Processes client transactions, executes command submissions, and validates domain sequencing.
+1. **Primary Active Node**: Processes client transactions, executes command submissions, and stays connected to the synchronizer.
 2. **Standby Passive Node**: Continuously replicates PostgreSQL state via synchronous streaming replication.
 3. **Automated Failover**: In the event of primary node failure, a virtual IP / load balancer directs traffic to the standby node, which acquires the Canton database lock and resumes Ledger API serving within $< 15$ seconds.
 
@@ -106,10 +106,10 @@ Canton exposes Prometheus metrics and OpenTelemetry tracing endpoints on port `9
 
 | Metric Name | Threshold | Description & Action |
 |:---|:---|:---|
-| `daml_ledger_api_command_duration_seconds` | $> 5.0\text{s}$ (p99) | High command submission latency. Check domain sequencer connection and DB load. |
+| `daml_ledger_api_command_duration_seconds` | $> 5.0\text{s}$ (p99) | High command submission latency. Check the sequencer connection and DB load. |
 | `canton_node_active_contracts` | Steady unexpected spike | Indicates possible unarchived contract leak or delayed settlement workflows. |
 | `canton_db_storage_free_bytes` | $< 20\%$ | Low storage warning. Expand PostgreSQL disk volume immediately. |
-| `canton_domain_mediator_response_timeouts` | $> 0$ in $5\text{m}$ | Mediator communication failure. Risk of transaction aborts across the domain. |
+| `canton_domain_mediator_response_timeouts` | $> 0$ in $5\text{m}$ | Mediator communication failure. Risk of transaction aborts on the synchronizer. |
 
 ---
 
@@ -118,15 +118,17 @@ Canton exposes Prometheus metrics and OpenTelemetry tracing endpoints on port `9
 When releasing upgraded contract templates or bug fixes:
 1. Compile and inspect the new DAR:
    ```bash
-   daml build
-   daml damlc inspect-dar .daml/dist/aryafi-core-2.0.0.dar
+   dpm build --all
+   dpm inspect-dar .daml/dist/aryafi-core-<version>.dar
+   # Check that it is a valid upgrade of the release running today
+   dpm upgrade-check --both aryafi-core-<running>.dar .daml/dist/aryafi-core-<version>.dar
    ```
 2. Upload to the standby/passive node first, followed by the active node:
    ```scala
-   participants.all.dars.upload(".daml/dist/aryafi-core-2.0.0.dar")
+   participants.all.foreach(_.dars.upload(".daml/dist/aryafi-core-<version>.dar"))
    ```
 3. Verify successful validation in the Canton console:
    ```scala
-   participants.bank_node.dars.list()
+   bank_node.dars.list()
    ```
-4. Update client API gateway to reference the new package ID for subsequent contract creation commands. Existing active contracts continue executing under their original package IDs until transitioned via contract upgrade choices.
+4. Canton validates every package named `aryafi-core` as an upgrade of the versions already on the participant and rejects an incompatible one. Clients that use package-name template IDs (`#aryafi-core:...`) need no change: once the new version is vetted, new commands use it, and existing contracts are upgraded when they are next used. A release that is not upgrade-compatible needs a new package name.

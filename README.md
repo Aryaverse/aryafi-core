@@ -1,9 +1,9 @@
 # AryaFi Core (`aryafi-core`)
 
-[![Daml](https://img.shields.io/badge/Daml-2.10.0-blue.svg)](https://daml.com)
-[![Canton](https://img.shields.io/badge/Canton-2.10_(protocol_5)-green.svg)](deploy/canton/canton.conf)
+[![Daml](https://img.shields.io/badge/Daml_SDK-3.5.12-blue.svg)](https://docs.digitalasset.com)
+[![Canton](https://img.shields.io/badge/Canton-3.5_(protocol_35)-green.svg)](deploy/canton/canton.conf)
 [![Release](https://img.shields.io/badge/Release-v2.0.0-purple.svg)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/daml_test-289_passing-brightgreen.svg)](daml/src/AryaFi/Test)
+[![Tests](https://img.shields.io/badge/dpm_test-289_passing-brightgreen.svg)](daml/test/AryaFi/Test)
 [![Status](https://img.shields.io/badge/Status-Beta_/_Experimental-orange.svg)](docs/KNOWN_LIMITATIONS.md)
 [![Vercel Deployment](https://img.shields.io/badge/Vercel-Live_Terminal-black.svg?logo=vercel)](https://aryafi-core.vercel.app)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
@@ -12,7 +12,7 @@
 📖 **Comprehensive User & Operator Guide**: **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)**  
 📐 **Platform & Smart Contract Specification**: **[docs/PLATFORM_SPECIFICATION.md](docs/PLATFORM_SPECIFICATION.md)**  
 
-**AryaFi Core** is a privacy-aware smart contract library written in **Daml 2.10** for **Canton 2.10**. It models wholesale capital markets, tokenized cash, and institutional treasury workflows as Daml contracts with explicit signatories, controllers, and observers.
+**AryaFi Core** is a privacy-aware smart contract library written in **Daml 3** (SDK 3.5) for **Canton 3.5**, the platform the Canton Network runs. It models wholesale capital markets, tokenized cash, and institutional treasury workflows as Daml contracts with explicit signatories, controllers, and observers.
 
 > **Status.** Core primitives and atomic DvP settlement are **Beta**; financing contracts and compliance policies are **Experimental**. The library has **not** had an independent security review. Read [Known Limitations](docs/KNOWN_LIMITATIONS.md) before building on it, and [Improvement Plan](docs/IMPROVEMENT_PLAN.md) for what comes next.
 
@@ -30,7 +30,7 @@ The web terminal at **[https://aryafi-core.vercel.app](https://aryafi-core.verce
 |  • Canton Network Topology: Interactive SVG map of 5 segregated participant nodes       |
 |  • Scenario Simulator: Scripted replay of the DvP, Securities Lending & Treasury tests   |
 |  • Split Calculator: SplitCash value conservation in exact 10-dp Decimal arithmetic     |
-|  • ISO 20022 Hub: MX messages mapped to Daml JSON API requests, with real field checks  |
+|  • ISO 20022 Hub: MX messages mapped to JSON Ledger API requests, with real field checks|
 |  • Security & Rules: STRIDE threat model, regulatory mapping (not independently audited)|
 |  • Daml Code Dossier: Loads the actual module source from this repository              |
 |  • Institutional Themes: Crisp Light Mode (default) & White-on-Black Dark Mode toggle   |
@@ -44,7 +44,7 @@ The web terminal at **[https://aryafi-core.vercel.app](https://aryafi-core.verce
    * **Institutional Securities Lending** (102% cash collateral pledge, Act/360 fee accrual, mark-to-market revaluations, and recalls)
    * **Treasury Cash Mobility & Zero-Balance Sweeps** (surplus identification, concentration pool consolidation, and SWIFT UETR payment tracing)
 3. **Split Conservation Calculator**: Illustrates `SplitCash` using the same exact 10-decimal-place arithmetic as Daml `Decimal` (JavaScript floats would drift). The on-ledger behaviour is covered by the Daml tests.
-4. **ISO 20022 Financial Messaging Hub**: `pacs.008`, `sese.023`, `camt.053`, and `semt.002` messages side by side with the Daml JSON API request each maps to. The validator runs real checks: XML well-formedness, required elements, ISIN (ISO 6166) and LEI (ISO 17442) check digits, UETR format, currency codes, and XML/JSON consistency.
+4. **ISO 20022 Financial Messaging Hub**: `pacs.008`, `sese.023`, `camt.053`, and `semt.002` messages side by side with the JSON Ledger API (v2) request each maps to. The validator runs real checks: XML well-formedness, required elements, ISIN (ISO 6166) and LEI (ISO 17442) check digits, UETR format, currency codes, and XML/JSON consistency.
 5. **Daml Source Viewer**: Loads `Cash.daml`, `Security.daml`, `Settlement.daml`, `Collateral.daml`, `Loan.daml`, `Repo.daml`, and `TransferRestrictions.daml` directly from this repository, so it always shows the current code.
 
 ---
@@ -88,7 +88,8 @@ aryafi-core/
 ├── styles.css                     # Institutional Dark/Light Design System
 ├── app.js                         # Interactive Canton Terminal & Simulator Logic
 ├── vercel.json                    # Production Vercel Deployment & Security Headers
-├── daml.yaml                      # Daml SDK v2.10.0 Package Configuration
+├── daml.yaml                      # Production package (aryafi-core), Daml SDK 3.5.12
+├── multi-package.yaml             # Builds the production and test packages together
 ├── CHANGELOG.md                   # Complete semantic release log
 ├── LICENSE                        # Apache-2.0 License
 ├── README.md                      # Project documentation
@@ -98,14 +99,16 @@ aryafi-core/
 │   │       ├── Common/            # Domain types, errors, day-count time algorithms
 │   │       ├── Finance/           # Cash, Security, Account, Collateral, Settlement, Payment
 │   │       ├── Contracts/         # Loan, Repo, SecuritiesLending, Margin, Subscription, Redemption
-│   │       ├── Compliance/        # KYC, Sanctions, Eligibility, TransferRestrictions
-│   │       └── Test/              # Daml Script test suite (289 scripts, run by `daml test`)
-│   │           ├── Unit/          # 11 unit suites across primitives, contracts & compliance
-│   │           ├── Scenarios/     # 9 end-to-end multi-party lifecycle scenarios
-│   │           ├── Negative/      # Unauthorized access, violation & invalid transition tests
-│   │           ├── Privacy/       # Observer visibility tests
-│   │           ├── Authorization/ # Multi-signatory consent tests
-│   │           └── Integration/   # Cross-module workflow tests (single ledger)
+│   │       └── Compliance/        # KYC, Sanctions, Eligibility, TransferRestrictions
+│   └── test/                      # Test package (aryafi-core-test), depends on the production DAR
+│       ├── daml.yaml
+│       └── AryaFi/Test/           # Daml Script test suite (289 scripts, run by `dpm test`)
+│           ├── Unit/              # 11 unit suites across primitives, contracts & compliance
+│           ├── Scenarios/         # 9 end-to-end multi-party lifecycle scenarios
+│           ├── Negative/          # Unauthorized access, violation & invalid transition tests
+│           ├── Privacy/           # Observer visibility tests
+│           ├── Authorization/     # Multi-signatory consent tests
+│           └── Integration/       # Cross-module workflow tests (single ledger)
 ├── scripts/
 │   └── gen_authorization_matrix.py # Regenerates docs/security/AUTHORIZATION_MATRIX.md from source
 ├── deploy/
@@ -160,25 +163,30 @@ aryafi-core/
 ## Getting Started
 
 ### Prerequisites
-- [Daml SDK](https://docs.daml.com/) 2.10.0 (pinned in `daml.yaml`)
-- Java 11 or 17 (used by `daml test`)
+- Daml SDK 3.5.12 (pinned in `daml.yaml`), installed with the Digital Asset package manager `dpm`:
+  `curl https://get.digitalasset.com/install/install.sh | sh -s 3.5.12`
+- Java 17 or 21 (used by Daml Script and Canton)
 - Docker (optional, for the multi-participant Canton topology)
 
 ### Build and Test
 ```bash
-# Build the Daml Archive (DAR)
-daml build
+# Build both packages: aryafi-core (production) and aryafi-core-test
+dpm build --all
 
-# Run the test suite (289 scripts) with choice coverage
-daml test --show-coverage
+# Run the test suite (289 scripts); --all includes the production templates in the coverage report
+cd daml/test
+dpm test --all --show-coverage
 ```
+
+> Daml SDK 3.5 cannot resolve the test package's dependency when the repository path contains a space
+> (`openBinaryFile: does not exist`). Clone into a path without spaces.
 
 ### Run Local Multi-Node Canton Topology
 ```bash
-# Build the DAR first; the container uploads every .dar in .daml/dist
-daml build
+# Build first; the container uploads every .dar in .daml/dist (the production DAR)
+dpm build --all
 
-# Launch 5 in-memory Canton 2.10 participants and a domain
+# Launch 5 in-memory Canton 3.5 participants and a synchronizer (sequencer + mediator)
 cd deploy/docker
 docker compose up -d --build
 
@@ -201,7 +209,7 @@ docker compose ps
 | | [Privacy Model](docs/architecture/PRIVACY_MODEL.md) | Canton sub-transaction privacy guarantees and observer models |
 | | [Security Assurance](docs/architecture/SECURITY_ASSURANCE.md) | Authorization invariants, error handling, and security guarantees |
 | **Market Integration**| [ISO 20022 Mappings](docs/integration/ISO20022_MAPPINGS.md) | Canonical mapping between Daml contracts and pacs/camt/semt/sese |
-| | [Ledger API Client](docs/integration/LEDGER_API_CLIENT.md) | gRPC / JSON API patterns, submitMulti, and TypeScript/Python SDKs |
+| | [Ledger API Client](docs/integration/LEDGER_API_CLIENT.md) | gRPC and JSON Ledger API v2 patterns, multi-party submission, and TypeScript/Python SDKs |
 | | [EOD Reconciliation](docs/integration/RECONCILIATION.md) | Three-way on-ledger vs Core Banking / CSD reconciliation protocols |
 | | [Rail Adapters](docs/integration/ADAPTERS_SPEC.md) | Fedwire, SWIFT, DTCC DvP, and AML screening microservices |
 | **Deployment & Ops** | [Canton Topology](deploy/canton/canton.conf) | Multi-participant Canton node configuration (Bank, Custodian, Dealers) |

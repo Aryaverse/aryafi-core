@@ -37,7 +37,7 @@ The terminal is structured into six dedicated modules accessible via the top nav
 
 ### Module 1: Canton Multi-Participant Topology Visualizer (`#topology`)
 
-The Topology Visualizer shows the five-participant reference topology defined in `deploy/canton/canton.conf` (Canton 2.10, protocol version 5): one domain and one participant node per organization.
+The Topology Visualizer shows the five-participant reference topology defined in `deploy/canton/canton.conf` (Canton 3.5, protocol version 35): one synchronizer (sequencer and mediator) and one participant node per organization.
 
 #### How to Use:
 1. **Interactive SVG Node Map**:
@@ -113,7 +113,7 @@ Browse detailed operational parameters for:
 
 ### Module 4: ISO 20022 Financial Messaging Hub (`#iso`)
 
-Shows how ISO 20022 MX messages map to Daml 2.10 JSON API (v1) request bodies against the actual AryaFi templates.
+Shows how ISO 20022 MX messages map to Canton 3.5 JSON Ledger API (v2) request bodies against the actual AryaFi templates.
 
 #### Supported Messages:
 * **`pacs.008.001.10`**: Financial Institutional Customer Credit Transfer $\rightarrow$ `PaymentInstruction`
@@ -124,7 +124,7 @@ Shows how ISO 20022 MX messages map to Daml 2.10 JSON API (v1) request bodies ag
 #### How to Use:
 1. Select a message from the dropdown menu.
 2. The left pane renders the incoming ISO 20022 XML with UETR and end-to-end IDs.
-3. The right pane shows the JSON API request body (create or query) with the templates' real field names and encodings; party fields are placeholders because party IDs are assigned at allocation.
+3. The right pane shows the JSON Ledger API request body (`POST /v2/commands/submit-and-wait` to create an instruction, `POST /v2/state/active-contracts` for a statement) with the templates' real field names and encodings; party fields and offsets are placeholders because party IDs are assigned at allocation. Statement queries select by template; the account, currency, or ISIN filter is applied by the client.
 4. Click **"Run Validation Checks"** to check the displayed payloads: XML well-formedness, required elements, ISIN and LEI check digits, UETR format, currency codes, and XML/JSON consistency. The badge reports how many checks passed or which ones failed.
 5. Click **"Copy XML"** or **"Copy Daml"** to copy the payloads.
 
@@ -163,36 +163,40 @@ To run the full stack locally:
 
 ### 1. Compile Daml Contracts
 ```bash
-# Verify Daml toolchain
-daml version
+# Verify Daml toolchain (Daml SDK 3.5.12, installed with dpm)
+dpm version
 
-# Compile Daml Archive (DAR)
-daml build
+# Compile both packages: aryafi-core (production) and aryafi-core-test
+dpm build --all
 
-# Run the test suite (289 scripts; requires Java 11 or 17)
-daml test --show-coverage
+# Run the test suite (289 scripts; requires Java 17 or 21)
+cd daml/test
+dpm test --all --show-coverage
+cd ../..
 ```
 
 ### 2. Start the Multi-Participant Canton Topology
-The container installs Canton 2.10 (open source), starts one domain and five participants, allocates one party per participant, and uploads every DAR in `.daml/dist`.
+The container installs Canton 3.5 (open source), creates one synchronizer (sequencer and mediator), starts five participants, allocates one party per participant, and uploads every DAR in `.daml/dist` (the production DAR).
 ```bash
-daml build            # the DAR must exist before the container starts
+dpm build --all       # the DAR must exist before the container starts
 cd deploy/docker
 docker compose up -d --build
 
-# Verify running participant nodes (Ports 10012, 10022, 10032, 10042, 10052)
+# Verify running participant nodes (gRPC Ledger API ports 10012, 10022, 10032, 10042, 10052;
+# JSON Ledger API ports 10013, 10023, 10033, 10043, 10053)
 docker compose ps
 ```
 
 ### 3. Run a Scenario via Daml Script
 ```bash
-daml script \
-  --dar .daml/dist/aryafi-core-2.0.0.dar \
+dpm script \
+  --dar daml/test/.daml/dist/aryafi-core-test-3.0.0.dar \
+  --upload-dar=yes \
   --script-name AryaFi.Test.Scenarios.TreasuryDvpScenario:runTreasuryDvpScenario \
   --ledger-host localhost \
   --ledger-port 10012
 ```
-This allocates the scenario's parties on the bank participant and runs the DvP there. Workflows whose parties live on different participants need propose/accept templates (see [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)).
+This uploads the test DAR to the bank participant, allocates the scenario's parties there, and runs the DvP. Workflows whose parties live on different participants need propose/accept templates (see [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)).
 
 ---
 
