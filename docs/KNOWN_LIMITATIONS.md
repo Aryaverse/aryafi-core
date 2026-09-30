@@ -2,7 +2,7 @@
 
 This page records what AryaFi Core does **not** do yet, so that nobody builds on an assumption the code does not support. It is required by the *Definition of Done — Production Module* (Technical & Business Requirements §21, §30) and is updated with every release.
 
-Last reviewed: 2026-09-30, against the code at v3.0.0.
+Last reviewed: 2026-09-30, against the code at 3.1.0 (in development).
 
 ---
 
@@ -22,6 +22,7 @@ Maturity labels follow [VERSIONING_AND_RELEASE.md](governance/VERSIONING_AND_REL
 ## 2. Platform
 
 - **Daml 3 / Canton 3.5.** The DAR targets Daml-LF 2.2 (Daml SDK 3.5.12) and is tested on Canton 3.5.19 with protocol version 35. It does not run on Canton 2.x. It has not yet been deployed to the Canton Network; [deploy/testnet](../deploy/testnet/README.md) has the smoke test and runbook for a first TestNet run (TestNet runs Canton 3.5.18 as of 2026-09-30).
+- **Token standard: holdings only.** Cash, securities, and asset positions implement the CIP-56 and CIP-0112 `Holding` interfaces, so wallets and apps can list them. They do not implement transfer instructions, allocations, or the registry's off-ledger APIs (instrument metadata, transfer and allocation factories): AryaFi positions cannot yet be moved through the token standard, wallets do not get instrument names from AryaFi, and AryaFi DvP cannot settle other token-standard assets such as Canton Coin.
 - **No uniqueness guarantees.** Daml-LF 2.2 has no contract keys, so the ledger does not stop a second `Account` with the same custodian and account ID, a second `KycAttestation` or `SanctionsAttestation` for the same authority and subject, or a second `TransferRestrictionRule` or `OwnershipRestriction` for the same ISIN. The issuing party must check its active contracts before creating one.
 - **Upgrades are checked by Canton.** Canton 3 validates every package with the same name (`aryafi-core`) as an upgrade of the versions already on the participant. A release that changes templates incompatibly must use a new package name or a separate participant. Releases are not yet checked with `dpm upgrade-check` in CI.
 
@@ -56,6 +57,6 @@ Maturity labels follow [VERSIONING_AND_RELEASE.md](governance/VERSIONING_AND_REL
 
 ## 7. Test Coverage
 
-`dpm test` runs 290 scripts, all passing. Coverage: 26 of 27 templates created (96%) and 138 of 206 choices exercised (67%, including each template's implicit `Archive`). `JurisdictionProfile` is never created in tests. Property-based tests and multi-participant integration tests do not exist yet.
+`dpm test` runs 296 scripts, all passing. Coverage: 26 of 27 templates created (96%) and 138 of 206 choices exercised (67%, including each template's implicit `Archive`). `JurisdictionProfile` is never created in tests. Property-based tests and multi-participant integration tests do not exist yet.
 
 See [IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md) for how these limitations are addressed.
