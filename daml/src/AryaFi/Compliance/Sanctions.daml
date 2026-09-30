@@ -9,7 +9,9 @@
 --   - screeningAuthority: issues, updates, blocks, and clears attestations.
 --   - subjectParty: read-only observer — cannot control this contract.
 --
--- Key: (screeningAuthority, subjectParty) — one attestation per authority per subject.
+-- One attestation per authority per subject is expected but not enforced on
+-- the ledger (Daml 3 has no unique contract keys); the authority is
+-- responsible for not issuing duplicates.
 module AryaFi.Compliance.Sanctions where
 
 import AryaFi.Common.Identifiers (LEI, ExternalRef)
@@ -57,9 +59,6 @@ template SanctionsAttestation
   where
     signatory screeningAuthority
     observer subjectParty :: observers
-
-    key (screeningAuthority, subjectParty) : (Party, Party)
-    maintainer key._1
 
     -- | Update the sanctions status and extend validity.
     -- The screening timestamp is the current ledger time (cannot be backdated).

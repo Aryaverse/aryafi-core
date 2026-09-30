@@ -22,7 +22,8 @@ type Amount = Decimal
 type Rate = Decimal
 
 -- | Free-form unique reference tag for contracts, trades, positions, or assets.
--- Must be unique within the scope where it is used as a key.
+-- Should be unique within its scope (e.g. per counterparty pair); the ledger does
+-- not enforce this.
 type ReferenceId = Text
 
 -- ---------------------------------------------------------------------------

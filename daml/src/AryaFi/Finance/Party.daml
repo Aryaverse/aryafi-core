@@ -77,9 +77,6 @@ template InstitutionalParty
     signatory operator, party
     observer observers
 
-    key (operator, party) : (Party, Party)
-    maintainer key._1
-
     -- | Update the display name and jurisdiction of this party record.
     -- Only the party itself can update its own profile.
     choice UpdateProfile : ContractId InstitutionalParty
