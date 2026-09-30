@@ -57,3 +57,71 @@ jobs:
         with:
           name: daml-test-results
           path: test-results.xml
+
+  canton-topology:
+    name: Canton 2.10 Topology Integration
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Java (required by daml script)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Cache Daml SDK
+        uses: actions/cache@v4
+        with:
+          path: ~/.daml
+          key: daml-sdk-${{ runner.os }}-2.10.0
+
+      - name: Install Daml SDK
+        run: |
+          if ! "$HOME/.daml/bin/daml" version 2>/dev/null | grep -q "2.10.0"; then
+            curl -sSL https://get.daml.com/ | sh -s 2.10.0
+          fi
+          echo "$HOME/.daml/bin" >> $GITHUB_PATH
+
+      # The topology uploads every DAR in .daml/dist at startup, so build first.
+      - name: Compile Daml Archive (DAR)
+        run: daml build
+
+      - name: Build and start the five-participant topology
+        run: docker compose -f deploy/docker/docker-compose.yml up -d --build
+
+      - name: Wait for the bootstrap to finish
+        run: |
+          for i in $(seq 1 120); do
+            if docker logs aryafi-canton-sandbox 2>&1 | grep -q "AryaFi Canton Cluster Ready"; then
+              echo "Topology ready"; exit 0
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' aryafi-canton-sandbox)" != "true" ]; then
+              echo "Canton container exited"; exit 1
+            fi
+            sleep 5
+          done
+          echo "Timed out waiting for the topology"; exit 1
+
+      # Scenarios that do not call setTime run against a real participant.
+      - name: Run DvP scenarios against the bank participant
+        run: |
+          DAR=$(ls .daml/dist/*.dar | head -n 1)
+          for script in \
+            AryaFi.Test.Scenarios.TreasuryDvpScenario:runTreasuryDvpScenario \
+            AryaFi.Test.Scenarios.DvpSettlementTest:runDvpSettlementTests; do
+            echo "::group::$script"
+            daml script --dar "$DAR" --script-name "$script" --ledger-host localhost --ledger-port 10012
+            echo "::endgroup::"
+          done
+
+      - name: Canton logs
+        if: always()
+        run: docker logs aryafi-canton-sandbox 2>&1 | tail -200
+
+      - name: Stop the topology
+        if: always()
+        run: docker compose -f deploy/docker/docker-compose.yml down
