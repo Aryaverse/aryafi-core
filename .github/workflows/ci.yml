@@ -6,50 +6,55 @@ on:
   pull_request:
     branches: [ "main", "develop" ]
 
+env:
+  # Keep in step with sdk-version in daml.yaml and daml/test/daml.yaml.
+  DPM_SDK_VERSION: "3.5.12"
+
 jobs:
   build-and-test:
-    name: Build & Verify Daml Package
+    name: Build & Verify Daml Packages
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up Java (required by the Daml Script test runner)
+      - name: Set up Java (required by Daml Script and Canton)
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
 
       # Exact-version cache key only: restoring a different SDK version would
       # silently build against the wrong compiler.
       - name: Cache Daml SDK
         uses: actions/cache@v4
         with:
-          path: ~/.daml
-          key: daml-sdk-${{ runner.os }}-2.10.0
+          path: ~/.dpm
+          key: dpm-sdk-${{ runner.os }}-${{ env.DPM_SDK_VERSION }}
 
       - name: Install Daml SDK
         run: |
-          if ! "$HOME/.daml/bin/daml" version 2>/dev/null | grep -q "2.10.0"; then
-            curl -sSL https://get.daml.com/ | sh -s 2.10.0
+          if ! "$HOME/.dpm/bin/dpm" version 2>/dev/null | grep -q "$DPM_SDK_VERSION"; then
+            curl -sSL https://get.digitalasset.com/install/install.sh | sh -s "$DPM_SDK_VERSION"
           fi
-          echo "$HOME/.daml/bin" >> $GITHUB_PATH
+          echo "$HOME/.dpm/bin" >> $GITHUB_PATH
 
       - name: Verify Daml Toolchain
-        run: daml version
+        run: dpm version
 
-      - name: Compile Daml Archive (DAR)
+      # Builds aryafi-core (production) and aryafi-core-test (Daml Script tests).
+      - name: Compile Daml Archives (DARs)
         run: |
-          daml build
-          ls -la .daml/dist/
+          dpm build --all
+          ls -la .daml/dist/ daml/test/.daml/dist/
 
-      - name: Inspect Daml Package Metadata
-        run: |
-          DAR_FILE=$(ls .daml/dist/*.dar | head -n 1)
-          daml damlc inspect-dar "$DAR_FILE"
+      - name: Inspect Production Package Metadata
+        run: dpm inspect-dar .daml/dist/aryafi-core-*.dar
 
+      # --all includes the production package's templates in the coverage report.
       - name: Execute Full Test Suite
-        run: daml test --show-coverage --junit test-results.xml
+        working-directory: daml/test
+        run: dpm test --all --show-coverage --junit ../../test-results.xml
 
       - name: Upload Test Results
         if: always()
@@ -59,36 +64,36 @@ jobs:
           path: test-results.xml
 
   canton-topology:
-    name: Canton 2.10 Topology Integration
+    name: Canton 3.5 Topology Integration
     runs-on: ubuntu-latest
     needs: build-and-test
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up Java (required by daml script)
+      - name: Set up Java (required by dpm script)
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
 
       - name: Cache Daml SDK
         uses: actions/cache@v4
         with:
-          path: ~/.daml
-          key: daml-sdk-${{ runner.os }}-2.10.0
+          path: ~/.dpm
+          key: dpm-sdk-${{ runner.os }}-${{ env.DPM_SDK_VERSION }}
 
       - name: Install Daml SDK
         run: |
-          if ! "$HOME/.daml/bin/daml" version 2>/dev/null | grep -q "2.10.0"; then
-            curl -sSL https://get.daml.com/ | sh -s 2.10.0
+          if ! "$HOME/.dpm/bin/dpm" version 2>/dev/null | grep -q "$DPM_SDK_VERSION"; then
+            curl -sSL https://get.digitalasset.com/install/install.sh | sh -s "$DPM_SDK_VERSION"
           fi
-          echo "$HOME/.daml/bin" >> $GITHUB_PATH
+          echo "$HOME/.dpm/bin" >> $GITHUB_PATH
 
-      # The topology uploads every DAR in .daml/dist at startup, so build first.
-      - name: Compile Daml Archive (DAR)
-        run: daml build
+      # The topology uploads the production DAR in .daml/dist at startup, so build first.
+      - name: Compile Daml Archives (DARs)
+        run: dpm build --all
 
       - name: Build and start the five-participant topology
         run: docker compose -f deploy/docker/docker-compose.yml up -d --build
@@ -106,15 +111,16 @@ jobs:
           done
           echo "Timed out waiting for the topology"; exit 1
 
-      # Scenarios that do not call setTime run against a real participant.
+      # Scenarios that do not call setTime run against a real participant. The
+      # test DAR is uploaded to the bank participant by the script runner.
       - name: Run DvP scenarios against the bank participant
         run: |
-          DAR=$(ls .daml/dist/*.dar | head -n 1)
+          DAR=$(ls daml/test/.daml/dist/aryafi-core-test-*.dar)
           for script in \
             AryaFi.Test.Scenarios.TreasuryDvpScenario:runTreasuryDvpScenario \
             AryaFi.Test.Scenarios.DvpSettlementTest:runDvpSettlementTests; do
             echo "::group::$script"
-            daml script --dar "$DAR" --script-name "$script" --ledger-host localhost --ledger-port 10012
+            dpm script --dar "$DAR" --upload-dar=yes --script-name "$script" --ledger-host localhost --ledger-port 10012
             echo "::endgroup::"
           done
 
