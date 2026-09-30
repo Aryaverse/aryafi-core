@@ -26,7 +26,7 @@
         </div>
         <div class="logo-text-group">
           <span class="logo-title">AryaFi Core</span>
-          <span class="logo-subtitle"><span class="pulse-dot"></span> Daml 2.10 · Canton 2.10</span>
+          <span class="logo-subtitle"><span class="pulse-dot"></span> Daml 3.5 · Canton 3.5</span>
         </div>
       </a>
 
@@ -91,7 +91,7 @@
         <div class="telemetry-card">
           <span class="telemetry-label">Daml Test Scripts</span>
           <span class="telemetry-value emerald">289 Passing</span>
-          <span class="telemetry-sub">daml test, -Wall -Werror build</span>
+          <span class="telemetry-sub">dpm test, -Wall -Werror build</span>
         </div>
         <div class="telemetry-card">
           <span class="telemetry-label">Contract Templates</span>
@@ -101,7 +101,7 @@
         <div class="telemetry-card">
           <span class="telemetry-label">Reference Topology</span>
           <span class="telemetry-value purple">5 Participants</span>
-          <span class="telemetry-sub">Canton 2.10 · protocol version 5</span>
+          <span class="telemetry-sub">Canton 3.5 · protocol version 35</span>
         </div>
         <div class="telemetry-card">
           <span class="telemetry-label">Settlement Model</span>
@@ -125,7 +125,7 @@
           <p class="section-desc">Interactive network architecture showing cryptographic node boundaries, participant segregation, and sub-transaction privacy.</p>
         </div>
         <div class="network-status-chip">
-          <span class="pulse-dot"></span> Domain: aryafi_domain (Online)
+          <span class="pulse-dot"></span> Synchronizer: aryafi (Online)
         </div>
       </div>
 
@@ -153,10 +153,10 @@
                 </marker>
               </defs>
 
-              <!-- Sequencer Domain Hub in Center -->
+              <!-- Synchronizer Hub in Center -->
               <circle cx="400" cy="250" r="85" fill="url(#centerGlow)"/>
               <circle cx="400" cy="250" r="50" class="topology-hub-circle" stroke="#10b981" stroke-width="2"/>
-              <text x="400" y="246" text-anchor="middle" class="topology-hub-title">CANTON DOMAIN</text>
+              <text x="400" y="246" text-anchor="middle" class="topology-hub-title">SYNCHRONIZER</text>
               <text x="400" y="262" text-anchor="middle" fill="#059669" font-family="JetBrains Mono" font-size="9" font-weight="700">Sequencer · Mediator</text>
 
               <!-- Connection Mesh Lines -->
@@ -614,7 +614,7 @@
       <div class="iso-toolbar">
         <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
           <span class="iso-direction-badge" id="iso-direction-display">
-            <span>⇄</span> <span id="iso-direction-text">SWIFT MX (XML) &rarr; Daml JSON API request</span>
+            <span>⇄</span> <span id="iso-direction-text">SWIFT MX (XML) &rarr; JSON Ledger API request</span>
           </span>
           <span class="badge-tag" id="iso-status-badge" style="color: var(--text-secondary);">
             Not yet validated
@@ -642,9 +642,9 @@
         <!-- Daml Ledger API Payload Card -->
         <div class="editor-card">
           <div class="editor-header">
-            <span class="editor-title" id="iso-right-title">DAML JSON API v1 REQUEST BODY</span>
+            <span class="editor-title" id="iso-right-title">JSON LEDGER API v2 REQUEST BODY</span>
             <div class="editor-actions">
-              <span class="badge-tag">Daml v2.10</span>
+              <span class="badge-tag">Canton 3.5</span>
               <button class="btn-copy" id="btn-copy-daml">Copy Daml</button>
             </div>
           </div>
@@ -704,7 +704,7 @@
           </div>
           <div class="checklist-item">
             <span class="check-icon">&#10003;</span>
-            <div><strong>Tampering (T):</strong> Merkle DAG hash validation across Canton sequencer domain. Zero state mutability without consensus.</div>
+            <div><strong>Tampering (T):</strong> Transaction views are hashed in a Merkle tree and confirmed through the Canton synchronizer's mediator; contracts cannot change without their signatories' authorization.</div>
           </div>
           <div class="checklist-item">
             <span class="check-icon">&#10003;</span>
@@ -801,7 +801,7 @@
         <div class="editor-header">
           <span class="editor-title" id="daml-viewer-title">AryaFi/Finance/Cash.daml (Tokenized Cash Primitive)</span>
           <div class="editor-actions">
-            <span class="badge-tag">Daml SDK 2.10.0</span>
+            <span class="badge-tag">Daml SDK 3.5.12</span>
             <button class="btn-copy" id="btn-copy-source">Copy Source</button>
           </div>
         </div>
@@ -814,7 +814,7 @@
   <footer class="footer">
     <div class="footer-container">
       <div class="footer-text">
-        &copy; 2026 Aryaverse. All rights reserved. Licensed under Apache 2.0. Built with Daml SDK 2.10 for Canton 2.10.
+        &copy; 2026 Aryaverse. All rights reserved. Licensed under Apache 2.0. Built with Daml SDK 3.5 for Canton 3.5.
       </div>
       <div class="footer-links">
         <a href="https://github.com/Aryaverse/aryafi-core/blob/main/docs/ROADMAP.md" target="_blank" rel="noopener noreferrer" class="footer-link">Roadmap</a>
