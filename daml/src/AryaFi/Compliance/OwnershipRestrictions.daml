@@ -31,9 +31,6 @@ template OwnershipRestriction
   where
     signatory regulator
 
-    key (regulator, isin) : (Party, ISIN)
-    maintainer key._1
-
     -- | Update the ownership caps.
     choice UpdateCaps : ContractId OwnershipRestriction
       with

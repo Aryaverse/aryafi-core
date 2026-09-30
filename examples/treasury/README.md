@@ -80,13 +80,13 @@ In global banking and enterprise treasury operations, corporate treasurers manag
 
 ## Detailed Step-by-Step Implementation
 
-The snippets below are taken from [TreasuryCashScenario.daml](../../daml/src/AryaFi/Test/Scenarios/TreasuryCashScenario.daml), which runs as part of `daml test`.
+The snippets below are taken from [TreasuryCashScenario.daml](../../daml/test/AryaFi/Test/Scenarios/TreasuryCashScenario.daml), which runs as part of `dpm test`.
 
 ### 1. Multi-Currency Cash Position Setup
 Operating entities and the treasury center hold tokenized cash positions issued by the transaction bank:
 ```daml
 -- SubUS funded with 25M USD
-subUsCashCid <- submitMulti [globalBank, subUS] [] do
+subUsCashCid <- submit (actAs [globalBank, subUS]) do
   createCmd CashPosition with
     bank = globalBank
     accountId = usAccount
@@ -108,7 +108,7 @@ SubEU (20M EUR) and TreasuryHQ (10M USD) are funded the same way.
     splitAmount = 15000000.0
 
 -- Sender, bank, and receiver all authorize the transfer; observers are cleared
-sweptHqCid <- submitMulti [subUS, globalBank, treasuryHQ] [] do
+sweptHqCid <- submit (actAs [subUS, globalBank, treasuryHQ]) do
   exerciseCmd subUsSweepCid TransferCash with
     newOwner = treasuryHQ
     newAccountId = hqAccount
@@ -123,7 +123,7 @@ mergedHqCid <- submit treasuryHQ do
 ### 3. Intercompany Payment Clearing
 ```daml
 -- Payer, payee, and settlement agent co-sign the payment instruction
-paymentInstructionCid <- submitMulti [treasuryHQ, subUS, globalBank] [] do
+paymentInstructionCid <- submit (actAs [treasuryHQ, subUS, globalBank]) do
   createCmd PaymentInstruction with
     payer = treasuryHQ
     payee = subUS
@@ -143,13 +143,13 @@ paymentInstructionCid <- submitMulti [treasuryHQ, subUS, globalBank] [] do
 -- HQ earmarks 8M and locks it to the bank; HQ can no longer withdraw it
 (hqPaymentCashCid, hqRemainingCid) <- submit treasuryHQ do
   exerciseCmd mergedHqCid SplitCash with splitAmount = 8000000.0
-lockedPaymentCashCid <- submitMulti [treasuryHQ, globalBank] [] do
+lockedPaymentCashCid <- submit (actAs [treasuryHQ, globalBank]) do
   exerciseCmd hqPaymentCashCid LockCash with
     lockRef = "LOCK-PAY-INTERCOMPANY-001"
     holder = globalBank
 
 -- The bank, as lock holder, delivers the cash to SubUS and confirms settlement
-paidToSubUsCid <- submitMulti [globalBank, subUS] [] do
+paidToSubUsCid <- submit (actAs [globalBank, subUS]) do
   exerciseCmd lockedPaymentCashCid SettleLockedCash with
     newOwner = subUS
     newAccountId = usAccount
@@ -248,6 +248,7 @@ assertMsg "SubUS cannot see SubEU's EUR position" (euFromUs == None)
 ## Scenario Verification
 To execute the complete multi-party test scenario:
 ```bash
-daml test --files daml/src/AryaFi/Test/Scenarios/TreasuryCashScenario.daml
+cd daml/test
+dpm test --files AryaFi/Test/Scenarios/TreasuryCashScenario.daml
 ```
-*Implemented in [TreasuryCashScenario.daml](../../daml/src/AryaFi/Test/Scenarios/TreasuryCashScenario.daml).*
+*Implemented in [TreasuryCashScenario.daml](../../daml/test/AryaFi/Test/Scenarios/TreasuryCashScenario.daml).*

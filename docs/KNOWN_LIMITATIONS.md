@@ -2,7 +2,7 @@
 
 This page records what AryaFi Core does **not** do yet, so that nobody builds on an assumption the code does not support. It is required by the *Definition of Done — Production Module* (Technical & Business Requirements §21, §30) and is updated with every release.
 
-Last reviewed: 2026-09-29, against the code at v2.0.0.
+Last reviewed: 2026-09-30, against the code at v3.0.0.
 
 ---
 
@@ -21,9 +21,9 @@ Maturity labels follow [VERSIONING_AND_RELEASE.md](governance/VERSIONING_AND_REL
 
 ## 2. Platform
 
-- **Daml SDK 2.10 / Canton 2.10 only.** The DAR targets Daml-LF 1.x and runs on Canton 2.10 (protocol version 5 or 7). It cannot be deployed to Canton 3.x, which the Canton Network Global Synchronizer uses.
-- **Contract keys.** `Account`, `InstitutionalParty`, `FinancialObligation`, `KycAttestation`, `SanctionsAttestation`, `TransferRestrictionRule`, and `OwnershipRestriction` declare keys. Daml 3 does not support contract keys this way, so a Canton 3 migration needs a redesign of these templates.
-- **No smart-contract upgrade path.** Templates are not designed for Daml smart contract upgrading, and the test scripts (with their `daml-script` dependency) are compiled into the same DAR as the production templates.
+- **Daml 3 / Canton 3.5.** The DAR targets Daml-LF 2.2 (Daml SDK 3.5.12) and is tested on Canton 3.5.19 with protocol version 35. It does not run on Canton 2.x. It has not yet been deployed to the Canton Network; [deploy/testnet](../deploy/testnet/README.md) has the smoke test and runbook for a first TestNet run (TestNet runs Canton 3.5.18 as of 2026-09-30).
+- **No uniqueness guarantees.** Daml-LF 2.2 has no contract keys, so the ledger does not stop a second `Account` with the same custodian and account ID, a second `KycAttestation` or `SanctionsAttestation` for the same authority and subject, or a second `TransferRestrictionRule` or `OwnershipRestriction` for the same ISIN. The issuing party must check its active contracts before creating one.
+- **Upgrades are checked by Canton.** Canton 3 validates every package with the same name (`aryafi-core`) as an upgrade of the versions already on the participant. A release that changes templates incompatibly must use a new package name or a separate participant. Releases are not yet checked with `dpm upgrade-check` in CI.
 
 ## 3. Composition and Asset Movement
 
@@ -35,7 +35,7 @@ Maturity labels follow [VERSIONING_AND_RELEASE.md](governance/VERSIONING_AND_REL
 
 ## 4. Multi-Party Workflows and Compliance
 
-- **No propose/accept workflows.** Every multi-signatory contract is created with multi-party submission (`submitMulti`). On a real multi-participant topology, parties hosted on different participants cannot co-submit, so these workflows need proposal templates first. The reference topology in `deploy/` boots and accepts the DAR, but no cross-participant workflow is scripted yet.
+- **No propose/accept workflows.** Every multi-signatory contract is created with multi-party submission (`submit (actAs [...])` in Daml Script, several `actAs` parties on the Ledger API). On a real multi-participant topology, parties hosted on different participants cannot co-submit, so these workflows need proposal templates first. The reference topology in `deploy/` boots and accepts the DAR, but no cross-participant workflow is scripted yet.
 - **Compliance checks are not composable.** `IsKycValid`, `IsSanctionsClear`, `EvaluateEligibility`, `EvaluateTransfer`, and `CheckOwnershipLimit` are controlled by the policy owner. Transfer approval (`ApproveTransfer`) is a manual decision by the compliance officer; it does not evaluate the policies itself.
 - **Simplified policies.** `EvaluateTransfer` maps regulatory categories to investor flags supplied by the caller; it is not legal advice. `EligibilityPolicy.minCreditRating` is stored but not evaluated. Asset classes are free text rather than the `AssetClass` type. `OwnershipRestriction` percentages are supplied by the caller, not computed from holdings. `JurisdictionProfile` has no effective dates.
 - **Identifiers are not validated on-ledger.** ISIN, CUSIP, and LEI values are wrapped in newtypes but their check digits are not verified by any template.
@@ -50,11 +50,12 @@ Maturity labels follow [VERSIONING_AND_RELEASE.md](governance/VERSIONING_AND_REL
 
 - **Idempotency keys are stored, not enforced.** Use the Ledger API command ID and deduplication period for idempotent submission.
 - **Audit events are not emitted automatically.** `AuditLog` and `RegulatoryReportRecord` contracts are created by the reporting party; no workflow emits them on settlement.
-- **Local test topology only.** `deploy/` runs five in-memory Canton 2.10 participants for integration testing. The config and bootstrap script have been run against Canton 2.10, and the DvP scenario and test suites (`runTreasuryDvpScenario`, `runDvpSettlementTests`) pass with `daml script` against one of its participants. CI builds the Docker image, boots the topology, and runs both suites against it on every push and pull request (`canton-topology` job). Scripts that call `setTime` only run on the test ledger.
+- **Local test topology only.** `deploy/` runs five in-memory Canton 3.5 participants and one synchronizer (sequencer and mediator) for integration testing. The config and bootstrap script have been run against Canton 3.5.19, and the DvP scenario and test suites (`runTreasuryDvpScenario`, `runDvpSettlementTests`) pass with `dpm script` against one of its participants. CI builds the Docker image, boots the topology, and runs both suites against it on every push and pull request (`canton-topology` job). Scripts that call `setTime` only run on the test ledger.
+- **No field filters on the JSON Ledger API.** The v2 active-contracts endpoint filters by template and party only, so statement reconciliation (`camt.053`, `semt.002`) filters positions by account, currency, or ISIN in the client. A participant query store (PQS) would move that filtering into SQL.
 - **Web terminal is a simulation.** The site at https://aryafi-core.vercel.app replays scripted scenarios and does not connect to a ledger. Its code viewer shows the real source files.
 
 ## 7. Test Coverage
 
-`daml test` runs 289 scripts, all passing. Coverage: 26 of 27 templates created (96%) and 138 of 206 choices exercised (67%, including each template's implicit `Archive`). `JurisdictionProfile` is never created in tests. Property-based tests and multi-participant integration tests do not exist yet.
+`dpm test` runs 290 scripts, all passing. Coverage: 26 of 27 templates created (96%) and 138 of 206 choices exercised (67%, including each template's implicit `Archive`). `JurisdictionProfile` is never created in tests. Property-based tests and multi-participant integration tests do not exist yet.
 
 See [IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md) for how these limitations are addressed.

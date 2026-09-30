@@ -1,0 +1,535 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Negative test suite: invalid contract state transitions.
+--
+-- Verifies that all contract lifecycle state machines correctly reject
+-- operations that violate the defined state transition rules:
+--   1. Loan: drawdown on closed/defaulted loan, double-default, unlink with balance
+--   2. Repo: opening leg on active repo, substitution on settled repo
+--   3. Transfer: approve completed transfer, cancel approved transfer
+--   4. Margin: satisfy already-satisfied call, dispute non-issued call
+--   5. Obligation: discharge fulfilled, partial discharge non-pending
+--   6. Cash: split locked position, transfer locked position
+--   7. Security: split locked position
+--   8. Loan: drawdown exceeds facility limit
+module AryaFi.Test.Negative.InvalidStateTransitionTest where
+
+import Daml.Script
+import DA.Time (time)
+import DA.Date (date, Month(..))
+import AryaFi.Finance.Cash
+import AryaFi.Finance.Security
+import AryaFi.Finance.Obligation
+import AryaFi.Contracts.Loan
+import AryaFi.Contracts.Repo
+import AryaFi.Contracts.Transfer
+import AryaFi.Contracts.Margin
+import AryaFi.Common.Identifiers
+import AryaFi.Common.Types
+
+-- ---------------------------------------------------------------------------
+-- 1. Loan: cannot drawdown on a closed loan
+-- ---------------------------------------------------------------------------
+
+negativeDrawdownOnClosedLoan : Script ()
+negativeDrawdownOnClosedLoan = script do
+  lender <- allocateParty "Lender"
+  borrower <- allocateParty "Borrower"
+
+  let now = time (date 2026 Sep 1) 0 0 0
+  let maturity = time (date 2027 Sep 1) 0 0 0
+
+  loanCid <- submit (actAs [lender, borrower]) do
+    createCmd InstitutionalLoan with
+      loanId = "LOAN-CLOSED-001"
+      lender = lender
+      borrower = borrower
+      agentBank = None
+      currency = "USD"
+      facilityLimit = 10000000.0
+      drawnPrincipal = 0.0
+      accruedInterest = 0.0
+      interestRate = 0.05
+      dayCountConvention = Act360
+      startDate = now
+      interestAccruedThrough = now
+      maturityDate = maturity
+      collateralPledgeRef = None
+      status = Closed
+      defaultReason = None
+      correlationId = CorrelationId "CORR-CLOSED-001"
+      observers = []
+
+  -- Cannot drawdown on a closed loan
+  submitMustFail borrower do
+    exerciseCmd loanCid DrawdownPrincipal with drawdownAmount = 1000000.0
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- 2. Loan: cannot drawdown exceeding facility limit
+-- ---------------------------------------------------------------------------
+
+negativeDrawdownExceedsFacility : Script ()
+negativeDrawdownExceedsFacility = script do
+  lender <- allocateParty "Lender"
+  borrower <- allocateParty "Borrower"
+
+  let now = time (date 2026 Sep 1) 0 0 0
+  let maturity = time (date 2027 Sep 1) 0 0 0
+
+  loanCid <- submit (actAs [lender, borrower]) do
+    createCmd InstitutionalLoan with
+      loanId = "LOAN-LIMIT-001"
+      lender = lender
+      borrower = borrower
+      agentBank = None
+      currency = "USD"
+      facilityLimit = 10000000.0
+      drawnPrincipal = 8000000.0
+      accruedInterest = 0.0
+      interestRate = 0.055
+      dayCountConvention = Act360
+      startDate = now
+      interestAccruedThrough = now
+      maturityDate = maturity
+      collateralPledgeRef = None
+      status = Active
+      defaultReason = None
+      correlationId = CorrelationId "CORR-LIMIT-001"
+      observers = []
+
+  -- Drawdown of 3M exceeds remaining facility (10M - 8M = 2M available)
+  submitMustFail borrower do
+    exerciseCmd loanCid DrawdownPrincipal with drawdownAmount = 3000000.0
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- 3. Loan: cannot declare default on already defaulted loan
+-- ---------------------------------------------------------------------------
+
+negativeDoubleDefault : Script ()
+negativeDoubleDefault = script do
+  lender <- allocateParty "Lender"
+  borrower <- allocateParty "Borrower"
+
+  let now = time (date 2026 Sep 1) 0 0 0
+  let maturity = time (date 2027 Sep 1) 0 0 0
+
+  loanCid <- submit (actAs [lender, borrower]) do
+    createCmd InstitutionalLoan with
+      loanId = "LOAN-DOUBLE-DEFAULT"
+      lender = lender
+      borrower = borrower
+      agentBank = None
+      currency = "USD"
+      facilityLimit = 25000000.0
+      drawnPrincipal = 15000000.0
+      accruedInterest = 200000.0
+      interestRate = 0.065
+      dayCountConvention = Act360
+      startDate = now
+      interestAccruedThrough = now
+      maturityDate = maturity
+      collateralPledgeRef = None
+      status = AryaFi.Common.Types.Defaulted
+      defaultReason = Some "NON_PAYMENT"
+      correlationId = CorrelationId "CORR-DD-001"
+      observers = []
+
+  -- Cannot re-default an already defaulted loan
+  submitMustFail lender do
+    exerciseCmd loanCid DeclareLoanDefault with reason = "SECOND_DEFAULT"
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- 4. Loan: cannot unlink collateral with outstanding balance
+-- ---------------------------------------------------------------------------
+
+negativeUnlinkWithBalance : Script ()
+negativeUnlinkWithBalance = script do
+  lender <- allocateParty "Lender"
+  borrower <- allocateParty "Borrower"
+
+  let now = time (date 2026 Sep 1) 0 0 0
+  let maturity = time (date 2027 Sep 1) 0 0 0
+
+  loanCid <- submit (actAs [lender, borrower]) do
+    createCmd InstitutionalLoan with
+      loanId = "LOAN-UNLINK-001"
+      lender = lender
+      borrower = borrower
+      agentBank = None
+      currency = "USD"
+      facilityLimit = 20000000.0
+      drawnPrincipal = 10000000.0
+      accruedInterest = 50000.0
+      interestRate = 0.05
+      dayCountConvention = Act360
+      startDate = now
+      interestAccruedThrough = now
+      maturityDate = maturity
+      collateralPledgeRef = Some "PLEDGE-001"
+      status = Active
+      defaultReason = None
+      correlationId = CorrelationId "CORR-UNLINK-001"
+      observers = []
+
+  -- Cannot unlink collateral while principal or interest are outstanding
+  submitMustFail lender do
+    exerciseCmd loanCid UnlinkCollateralPledge
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- 5. Repo: cannot execute opening leg on already active repo
+-- ---------------------------------------------------------------------------
+
+negativeOpeningLegOnActiveRepo : Script ()
+negativeOpeningLegOnActiveRepo = script do
+  seller <- allocateParty "Seller"
+  buyer <- allocateParty "Buyer"
+  custodian <- allocateParty "Custodian"
+
+  let now = time (date 2026 Sep 1) 0 0 0
+  let maturity = time (date 2026 Sep 15) 0 0 0
+
+  repoCid <- submit (actAs [seller, buyer, custodian]) do
+    createCmd RepoAgreement with
+      repoId = "REPO-ACTIVE-001"
+      seller = seller
+      buyer = buyer
+      tripartyAgent = None
+      custodian = custodian
+      isin = ISIN "US912828ZM50"
+      collateralQuantity = 5000000.0
+      collateralAccountId = AccountId "ACC-TRI-001"
+      haircut = 0.02
+      currency = "USD"
+      purchasePrice = 4900000.0
+      repurchasePrice = 4910000.0
+      repoRate = 0.053
+      dayCountConvention = Act360
+      startDate = now
+      endDate = maturity
+      status = RepoActive
+      openingSettlementRef = Some "SETTLE-OPEN-001"
+      closingSettlementRef = None
+      correlationId = CorrelationId "CORR-REPO-ACTIVE"
+      observers = []
+
+  -- Cannot execute opening leg on already active repo
+  submitMustFail custodian do
+    exerciseCmd repoCid ExecuteOpeningLeg with settlementRef = "SETTLE-DUPLICATE"
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- 6. Repo: cannot substitute collateral on settled repo
+-- ---------------------------------------------------------------------------
+
+negativeSubstitutionOnSettledRepo : Script ()
+negativeSubstitutionOnSettledRepo = script do
+  seller <- allocateParty "Seller"
+  buyer <- allocateParty "Buyer"
+  custodian <- allocateParty "Custodian"
+
+  let now = time (date 2026 Sep 1) 0 0 0
+  let maturity = time (date 2026 Sep 15) 0 0 0
+
+  repoCid <- submit (actAs [seller, buyer, custodian]) do
+    createCmd RepoAgreement with
+      repoId = "REPO-SETTLED-001"
+      seller = seller
+      buyer = buyer
+      tripartyAgent = None
+      custodian = custodian
+      isin = ISIN "US912828ZM50"
+      collateralQuantity = 10000000.0
+      collateralAccountId = AccountId "ACC-TRI-002"
+      haircut = 0.02
+      currency = "USD"
+      purchasePrice = 9800000.0
+      repurchasePrice = 9820000.0
+      repoRate = 0.053
+      dayCountConvention = Act360
+      startDate = now
+      endDate = maturity
+      status = RepoSettled
+      openingSettlementRef = Some "SETTLE-OPEN-001"
+      closingSettlementRef = Some "SETTLE-CLOSE-001"
+      correlationId = CorrelationId "CORR-REPO-SETTLED"
+      observers = []
+
+  -- Cannot substitute collateral on settled repo
+  submitMustFail (actAs [seller, buyer]) do
+    exerciseCmd repoCid SubstituteCollateral with
+      newIsin = ISIN "US912828XG01"
+      newQuantity = 10000000.0
+      newHaircut = 0.025
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- 7. Transfer: cannot approve already completed transfer
+-- ---------------------------------------------------------------------------
+
+negativeApproveCompletedTransfer : Script ()
+negativeApproveCompletedTransfer = script do
+  sender <- allocateParty "Sender"
+  receiver <- allocateParty "Receiver"
+  custodian <- allocateParty "Custodian"
+  complianceOfficer <- allocateParty "ComplianceOfficer"
+
+  let now = time (date 2026 Sep 10) 10 0 0
+
+  transferCid <- submit (actAs [sender, custodian]) do
+    createCmd AssetTransferRequest with
+      transferId = "XFR-STATE-001"
+      sender = sender
+      receiver = receiver
+      custodian = custodian
+      complianceOfficer = complianceOfficer
+      assetId = "SEC-US912828ZM50"
+      quantity = 500000.0
+      fromAccount = AccountId "ACC-SENDER"
+      toAccount = AccountId "ACC-RECEIVER"
+      correlationId = CorrelationId "CORR-XFR-STATE"
+      requestTimestamp = now
+      status = TransferCompleted
+      complianceNote = Some "Previously approved"
+      observers = []
+
+  -- Cannot approve a completed transfer
+  submitMustFail complianceOfficer do
+    exerciseCmd transferCid ApproveTransfer with note = "RE-APPROVE"
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- 8. Transfer: cannot cancel an already approved transfer
+-- ---------------------------------------------------------------------------
+
+negativeCancelApprovedTransfer : Script ()
+negativeCancelApprovedTransfer = script do
+  sender <- allocateParty "Sender"
+  receiver <- allocateParty "Receiver"
+  custodian <- allocateParty "Custodian"
+  complianceOfficer <- allocateParty "ComplianceOfficer"
+
+  let now = time (date 2026 Sep 10) 10 0 0
+
+  transferCid <- submit (actAs [sender, custodian]) do
+    createCmd AssetTransferRequest with
+      transferId = "XFR-STATE-002"
+      sender = sender
+      receiver = receiver
+      custodian = custodian
+      complianceOfficer = complianceOfficer
+      assetId = "SEC-US912828ZM50"
+      quantity = 250000.0
+      fromAccount = AccountId "ACC-SENDER"
+      toAccount = AccountId "ACC-RECEIVER"
+      correlationId = CorrelationId "CORR-XFR-STATE-002"
+      requestTimestamp = now
+      status = TransferApproved
+      complianceNote = Some "Approved by compliance"
+      observers = []
+
+  -- Cannot cancel an already approved transfer (can only cancel pending)
+  submitMustFail sender do
+    exerciseCmd transferCid CancelTransfer with reason = "TOO_LATE"
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- 9. Margin: cannot satisfy already-satisfied margin call
+-- ---------------------------------------------------------------------------
+
+negativeSatisfyAlreadySatisfied : Script ()
+negativeSatisfyAlreadySatisfied = script do
+  caller <- allocateParty "Buyer"
+  payer <- allocateParty "Seller"
+  custodian <- allocateParty "Custodian"
+
+  let deadline = time (date 2026 Sep 15) 16 0 0
+
+  marginCid <- submit (actAs [caller, payer]) do
+    createCmd MarginCall with
+      marginCallId = "MC-STATE-001"
+      caller = caller
+      payer = payer
+      custodian = custodian
+      marginType = VariationMargin
+      relatedAgreementRef = "REPO-001"
+      currency = "USD"
+      requiredAmount = 500000.0
+      deadline = deadline
+      status = MarginCallSatisfied (CashMargin "PAY-REF-001")
+      correlationId = CorrelationId "CORR-MC-STATE"
+      observers = []
+
+  -- Cannot satisfy an already satisfied margin call
+  submitMustFail payer do
+    exerciseCmd marginCid SatisfyWithCash with paymentRef = "PAY-REF-002"
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- 10. Margin: cannot dispute a non-issued margin call
+-- ---------------------------------------------------------------------------
+
+negativeDisputeNonIssuedCall : Script ()
+negativeDisputeNonIssuedCall = script do
+  caller <- allocateParty "Buyer"
+  payer <- allocateParty "Seller"
+  custodian <- allocateParty "Custodian"
+
+  let deadline = time (date 2026 Sep 15) 16 0 0
+
+  marginCid <- submit (actAs [caller, payer]) do
+    createCmd MarginCall with
+      marginCallId = "MC-STATE-002"
+      caller = caller
+      payer = payer
+      custodian = custodian
+      marginType = InitialMargin
+      relatedAgreementRef = "REPO-002"
+      currency = "USD"
+      requiredAmount = 1000000.0
+      deadline = deadline
+      status = MarginCallCancelled
+      correlationId = CorrelationId "CORR-MC-STATE-002"
+      observers = []
+
+  -- Cannot dispute a cancelled margin call
+  submitMustFail payer do
+    exerciseCmd marginCid DisputeMarginCall with disputeReason = "INVALID_DISPUTE"
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- 11. Cash: cannot split a locked cash position
+-- ---------------------------------------------------------------------------
+
+negativeSplitLockedCash : Script ()
+negativeSplitLockedCash = script do
+  bank <- allocateParty "Bank"
+  alice <- allocateParty "Alice"
+  let acc = AccountId "ACC-LOCKED-USD"
+
+  cashCid <- submit (actAs [bank, alice]) do
+    createCmd CashPosition with
+      bank = bank
+      owner = alice
+      accountId = acc
+      currency = "USD"
+      amount = 500000.0
+      isLocked = True
+      lockReference = Some "DVP-LOCK-001"
+      lockHolder = Some bank
+      observers = []
+
+  -- Cannot split a locked cash position
+  submitMustFail alice do
+    exerciseCmd cashCid SplitCash with splitAmount = 250000.0
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- 12. Security: cannot split a locked security position
+-- ---------------------------------------------------------------------------
+
+negativeSplitLockedSecurity : Script ()
+negativeSplitLockedSecurity = script do
+  custodian <- allocateParty "Custodian"
+  alice <- allocateParty "Alice"
+  let acc = AccountId "ACC-LOCKED-SEC"
+
+  secCid <- submit (actAs [custodian, alice]) do
+    createCmd SecurityPosition with
+      custodian = custodian
+      owner = alice
+      accountId = acc
+      isin = ISIN "US912828ZM50"
+      cusip = None
+      instrumentName = "US Treasury 4.25% Nov 2026"
+      instrumentType = GovernmentBond
+      quantity = 10000000.0
+      couponRate = Some 0.0425
+      couponType = Some FixedCoupon
+      dayCountConvention = Some Act360
+      maturityDate = Some (time (date 2026 Nov 15) 0 0 0)
+      seniority = Some Senior
+      isLocked = True
+      lockReference = Some "REPO-LOCK-001"
+      lockHolder = Some custodian
+      csdRef = None
+      observers = []
+
+  -- Cannot split a locked security position
+  submitMustFail alice do
+    exerciseCmd secCid SplitSecurity with splitQuantity = 5000000.0
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- 13. Obligation: cannot discharge an already fulfilled obligation
+-- ---------------------------------------------------------------------------
+
+negativeDischargeAlreadyFulfilled : Script ()
+negativeDischargeAlreadyFulfilled = script do
+  obligor <- allocateParty "Obligor"
+  obligee <- allocateParty "Obligee"
+
+  oblCid <- submit (actAs [obligor, obligee]) do
+    createCmd FinancialObligation with
+      obligor = obligor
+      obligee = obligee
+      currency = "USD"
+      amount = 1000000.0
+      dueDate = time (date 2026 Dec 31) 16 0 0
+      status = Fulfilled
+      obligationRef = "OBL-FULFILLED-001"
+      correlationId = CorrelationId "CORR-OBL-FULFILLED"
+      description = "Already discharged obligation"
+      agentObserver = None
+      externalRef = None
+
+  -- Cannot discharge an already fulfilled obligation
+  submitMustFail obligee do
+    exerciseCmd oblCid DischargeObligation
+
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- 14. Obligation: cannot partially discharge a non-pending obligation
+-- ---------------------------------------------------------------------------
+
+negativePartialDischargeDefaulted : Script ()
+negativePartialDischargeDefaulted = script do
+  obligor <- allocateParty "Obligor"
+  obligee <- allocateParty "Obligee"
+
+  oblCid <- submit (actAs [obligor, obligee]) do
+    createCmd FinancialObligation with
+      obligor = obligor
+      obligee = obligee
+      currency = "USD"
+      amount = 5000000.0
+      dueDate = time (date 2026 Dec 31) 16 0 0
+      status = AryaFi.Finance.Obligation.Defaulted
+      obligationRef = "OBL-DEFAULTED-001"
+      correlationId = CorrelationId "CORR-OBL-DEFAULT"
+      description = "Defaulted obligation"
+      agentObserver = None
+      externalRef = None
+
+  -- Cannot partially discharge a defaulted obligation
+  submitMustFail obligee do
+    exerciseCmd oblCid PartialDischarge with amountPaid = 1000000.0
+
+  pure ()

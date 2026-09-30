@@ -1,0 +1,312 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Institutional Secured Loan Reference Application.
+--
+-- Demonstrates the end-to-end institutional workflow for a collateralized credit facility:
+--
+-- Participants:
+--   - Lender:             Global Investment Bank (JPMorgan)
+--   - Borrower:           Institutional Private Credit Borrower (BlackstoneCredit)
+--   - AgentBank:          Facility Administration Agent (BNYMellon)
+--   - Custodian:          Tri-Party Collateral Custodian (StateStreet)
+--   - KycAuthority:       Institutional KYC Attestation Authority
+--   - SanctionsAuthority: Sanctions Screening Provider
+--   - Regulator:          Federal Reserve / SEC
+--
+-- Lifecycle Workflow:
+--   Phase 1 — Institutional Compliance Verification
+--     1. KYC Attestation issued for Lender and Borrower
+--     2. Sanctions Screening Attestation issued for both parties
+--   Phase 2 — Collateral Perfection
+--     3. Tri-party AssetPledge perfected on US Treasury collateral
+--   Phase 3 — Credit Facility Origination & Drawdown
+--     4. InstitutionalLoan facility created with credit limit
+--     5. Collateral pledge linked to the loan contract
+--     6. Borrower executes drawdown against available facility limit
+--   Phase 4 — Interest Accrual & Waterfall Servicing
+--     7. Agent bank accrues interest using Act360 day-count convention
+--     8. Borrower services accrued interest
+--   Phase 5 — Full Principal Paydown & Collateral Discharge
+--     9. Borrower pays down outstanding principal to zero
+--     10. Loan auto-closes upon full discharge
+--     11. Collateral pledge unlinked and released by Lender
+--   Phase 6 — Default & Enforcement Branch
+--     12. Demonstrates default declaration and collateral enforcement
+module AryaFi.Test.Scenarios.SecuredLoanScenario where
+
+import Daml.Script
+import AryaFi.Compliance.KYC
+import AryaFi.Compliance.Sanctions
+import AryaFi.Contracts.Loan
+import AryaFi.Contracts.Pledge
+import AryaFi.Common.Types
+import AryaFi.Common.Identifiers
+import DA.Date (date, Month(..))
+import DA.Time (time, addRelTime, days)
+
+-- ---------------------------------------------------------------------------
+-- Reference Application: Full Secured Institutional Loan Workflow
+-- ---------------------------------------------------------------------------
+
+testSecuredInstitutionalLoanWorkflow : Script ()
+testSecuredInstitutionalLoanWorkflow = script do
+
+  -- =========================================================================
+  -- Party Allocation
+  -- =========================================================================
+  lender <- allocateParty "JPMorganLendingDesk"
+  borrower <- allocateParty "BlackstoneCreditBorrower"
+  agentBank <- allocateParty "BNYMellonFacilityAgent"
+  custodian <- allocateParty "StateStreetCustodian"
+  kycAuth <- allocateParty "FinCENKycAuthority"
+  sanctionsAuth <- allocateParty "OFACSanctionsProvider"
+  regulator <- allocateParty "FederalReserve"
+
+  let now = time (date 2026 Sep 1) 9 0 0
+
+  setTime now
+  let expiryDate = time (date 2027 Sep 1) 9 0 0
+  let maturityDate = time (date 2028 Sep 1) 9 0 0
+
+  -- =========================================================================
+  -- Phase 1: Institutional Compliance Verification
+  -- =========================================================================
+
+  -- 1. KYC attestations for Lender and Borrower
+  lenderKycCid <- submit kycAuth do
+    createCmd KycAttestation with
+      authority = kycAuth
+      subjectParty = lender
+      lei = Some (LEI "5493001KJTIIGC8Y1R12")
+      status = KycVerified
+      verificationTimestamp = now
+      expiryTimestamp = expiryDate
+      jurisdiction = "US"
+      riskTier = "Tier3Institutional (risk score 12)"
+      providerRef = Some (ExternalRef "KYC-LENDER-2026-001")
+      observers = [regulator]
+
+  borrowerKycCid <- submit kycAuth do
+    createCmd KycAttestation with
+      authority = kycAuth
+      subjectParty = borrower
+      lei = Some (LEI "5493000G7M5A0Z5F6S89")
+      status = KycVerified
+      verificationTimestamp = now
+      expiryTimestamp = expiryDate
+      jurisdiction = "US"
+      riskTier = "Tier3Institutional (risk score 18)"
+      providerRef = Some (ExternalRef "KYC-BORROWER-2026-001")
+      observers = [regulator]
+
+  -- 2. Sanctions clearance
+  lenderSanctionsCid <- submit sanctionsAuth do
+    createCmd SanctionsAttestation with
+      screeningAuthority = sanctionsAuth
+      subjectParty = lender
+      lei = None
+      status = SanctionsClear
+      screeningTimestamp = now
+      expiryTimestamp = expiryDate
+      screeningProviderRef = "SCREEN-REF-JP-001" <> " lists: " <> show (["OFAC_SDN", "EU_CONSOLIDATED", "UK_HMT"] : [Text])
+      providerRef = Some (ExternalRef "SANC-LENDER-001")
+      observers = [regulator]
+
+  borrowerSanctionsCid <- submit sanctionsAuth do
+    createCmd SanctionsAttestation with
+      screeningAuthority = sanctionsAuth
+      subjectParty = borrower
+      lei = None
+      status = SanctionsClear
+      screeningTimestamp = now
+      expiryTimestamp = expiryDate
+      screeningProviderRef = "SCREEN-REF-BX-001" <> " lists: " <> show (["OFAC_SDN", "EU_CONSOLIDATED", "UK_HMT"] : [Text])
+      providerRef = Some (ExternalRef "SANC-BORROWER-001")
+      observers = [regulator]
+
+  -- Verify compliance queries
+  isLenderKycValid <- submit kycAuth do exerciseCmd lenderKycCid IsKycValid
+  isBorrowerKycValid <- submit kycAuth do exerciseCmd borrowerKycCid IsKycValid
+  isLenderClear <- submit sanctionsAuth do exerciseCmd lenderSanctionsCid IsSanctionsClear
+  isBorrowerClear <- submit sanctionsAuth do exerciseCmd borrowerSanctionsCid IsSanctionsClear
+
+  assertMsg "Lender KYC must be valid" isLenderKycValid
+  assertMsg "Borrower KYC must be valid" isBorrowerKycValid
+  assertMsg "Lender Sanctions must be clear" isLenderClear
+  assertMsg "Borrower Sanctions must be clear" isBorrowerClear
+
+  -- =========================================================================
+  -- Phase 2: Collateral Perfection (AssetPledge)
+  -- =========================================================================
+
+  pledgeCid <- submit (actAs [borrower, lender, custodian]) do
+    createCmd AssetPledge with
+      pledgeId = "PLEDGE-UST-2026-BX01"
+      pledgor = borrower
+      pledgee = lender
+      custodian = custodian
+      accountId = AccountId "ACC-CUSTODY-STATESTREET-01"
+      assetId = "ISIN-US912828ZM50"
+      quantity = 12000000.0 -- 12M US Treasuries pledged for 10M facility
+      perfectionReference = "UCC-FILING-NY-2026-8812734"
+      correlationId = CorrelationId "CORR-FACILITY-2026-BX"
+      status = Active
+      enforceTimestamp = None
+      observers = [agentBank, regulator]
+
+  -- =========================================================================
+  -- Phase 3: Facility Origination & Drawdown
+  -- =========================================================================
+
+  loanCid <- submit (actAs [lender, borrower]) do
+    createCmd InstitutionalLoan with
+      loanId = "FACILITY-2026-BX-01"
+      lender = lender
+      borrower = borrower
+      agentBank = Some agentBank
+      currency = "USD"
+      facilityLimit = 10000000.0
+      drawnPrincipal = 5000000.0
+      accruedInterest = 0.0
+      interestRate = 0.0575
+      dayCountConvention = Act360
+      startDate = now
+      interestAccruedThrough = now
+      maturityDate = maturityDate
+      collateralPledgeRef = None
+      status = Active
+      defaultReason = None
+      correlationId = CorrelationId "CORR-FACILITY-2026-BX"
+      observers = [regulator]
+
+  -- Link the collateral pledge to the loan
+  loanCidLinked <- submit borrower do
+    exerciseCmd loanCid LinkCollateralPledge with
+      pledgeRef = "PLEDGE-UST-2026-BX01"
+
+  -- Borrower executes additional drawdown of 3M (drawn becomes 8M)
+  loanCidDrawn <- submit borrower do
+    exerciseCmd loanCidLinked DrawdownPrincipal with
+      drawdownAmount = 3000000.0
+
+  Some loanAfterDraw <- queryContractId borrower loanCidDrawn
+  assertMsg "Drawn principal must equal 8,000,000 USD" (loanAfterDraw.drawnPrincipal == 8000000.0)
+
+  -- =========================================================================
+  -- Phase 4: Interest Accrual & Servicing
+  -- =========================================================================
+
+  -- 90 days elapse; the contract accrues 8M * 5.75% * 90 / 360 = 115,000 USD
+  setTime (addRelTime now (days 90))
+  loanCidAccrued <- submit lender do
+    exerciseCmd loanCidDrawn AccrueInterest
+
+  Some loanAccrued <- queryContractId borrower loanCidAccrued
+  assertMsg "Accrued interest must be 115,000 USD" (loanAccrued.accruedInterest == 115000.0)
+
+  -- Lender confirms receipt of the borrower's interest payment
+  loanCidInterestPaid <- submit lender do
+    exerciseCmd loanCidAccrued PayAccruedInterest with
+      paymentAmount = 115000.0
+
+  Some loanInterestPaid <- queryContractId borrower loanCidInterestPaid
+  assertMsg "Accrued interest must be 0" (loanInterestPaid.accruedInterest == 0.0)
+
+  -- =========================================================================
+  -- Phase 5: Principal Repayment & Collateral Discharge
+  -- =========================================================================
+
+  -- Lender confirms receipt of the full 8M principal repayment
+  loanCidClosed <- submit lender do
+    exerciseCmd loanCidInterestPaid PayDownPrincipal with
+      paymentAmount = 8000000.0
+
+  Some loanClosed <- queryContractId borrower loanCidClosed
+  assertMsg "Drawn balance must be 0" (loanClosed.drawnPrincipal == 0.0)
+  assertMsg "Loan must be auto-Closed" (loanClosed.status == Closed)
+
+  -- Lender unlinks collateral pledge from discharged loan
+  loanCidUnlinked <- submit lender do
+    exerciseCmd loanCidClosed UnlinkCollateralPledge
+
+  Some loanUnlinked <- queryContractId lender loanCidUnlinked
+  assertMsg "Pledge reference must be unlinked" (loanUnlinked.collateralPledgeRef == None)
+
+  -- Lender releases the AssetPledge
+  pledgeCidReleased <- submit lender do
+    exerciseCmd pledgeCid ReleasePledge
+
+  Some releasedPledge <- queryContractId borrower pledgeCidReleased
+  assertMsg "Asset pledge status must be Closed" (releasedPledge.status == Closed)
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- Scenario: Loan Default and Collateral Enforcement
+-- ---------------------------------------------------------------------------
+
+testLoanDefaultAndEnforcementScenario : Script ()
+testLoanDefaultAndEnforcementScenario = script do
+  lender <- allocateParty "JPMorganDesk"
+  borrower <- allocateParty "DefaultingBorrower"
+  custodian <- allocateParty "CustodyBank"
+
+  let now = time (date 2026 Sep 1) 9 0 0
+
+  setTime now
+  let maturity = time (date 2027 Sep 1) 9 0 0
+
+  -- 1. Setup pledge
+  pledgeCid <- submit (actAs [borrower, lender, custodian]) do
+    createCmd AssetPledge with
+      pledgeId = "PLEDGE-DEF-001"
+      pledgor = borrower
+      pledgee = lender
+      custodian = custodian
+      accountId = AccountId "ACC-CUST-001"
+      assetId = "ISIN-US912828ZM50"
+      quantity = 5000000.0
+      perfectionReference = "UCC-FILING-DEF-001"
+      correlationId = CorrelationId "CORR-DEF-001"
+      status = Active
+      enforceTimestamp = None
+      observers = []
+
+  -- 2. Setup loan
+  loanCid <- submit (actAs [lender, borrower]) do
+    createCmd InstitutionalLoan with
+      loanId = "LOAN-DEF-001"
+      lender = lender
+      borrower = borrower
+      agentBank = None
+      currency = "USD"
+      facilityLimit = 5000000.0
+      drawnPrincipal = 4000000.0
+      accruedInterest = 50000.0
+      interestRate = 0.07
+      dayCountConvention = Act360
+      startDate = now
+      interestAccruedThrough = now
+      maturityDate = maturity
+      collateralPledgeRef = Some "PLEDGE-DEF-001"
+      status = Active
+      defaultReason = None
+      correlationId = CorrelationId "CORR-DEF-001"
+      observers = []
+
+  -- 3. Lender declares default on loan
+  loanCidDefaulted <- submit lender do
+    exerciseCmd loanCid DeclareLoanDefault with
+      reason = "Non-payment of principal at scheduled payment date"
+
+  Some defLoan <- queryContractId lender loanCidDefaulted
+  assertMsg "Loan status must be Defaulted" (defLoan.status == Defaulted)
+
+  -- 4. Lender enforces collateral pledge
+  pledgeCidEnforced <- submit lender do
+    exerciseCmd pledgeCid EnforcePledge
+
+  Some enforcedPledge <- queryContractId lender pledgeCidEnforced
+  assertMsg "Pledge status must be Defaulted" (enforcedPledge.status == Defaulted)
+  assertMsg "Enforce timestamp must be recorded" (enforcedPledge.enforceTimestamp == Some now)
+  pure ()

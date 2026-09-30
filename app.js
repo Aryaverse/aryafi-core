@@ -535,7 +535,7 @@ function exportScenarioAuditJson() {
   const data = {
     exportDate: new Date().toISOString(),
     disclaimer: "Scripted simulation. Log lines describe the Daml choices the AryaFi library executes in its test scenarios; no ledger was contacted and nothing here is an audit record.",
-    platform: "Daml SDK 2.10.0 / Canton 2.10 (protocol version 5)",
+    platform: "Daml SDK 3.5.12 / Canton 3.5 (protocol version 35)",
     scenarioKey: currentScenarioKey,
     scenarioTitle: scenario.title,
     currentStepIndex: currentStepIndex,
@@ -708,11 +708,16 @@ function initCollateralCalculator() {
 // ============================================================================
 // 6. ISO 20022 Financial Messaging Converter
 // ============================================================================
-// The right-hand pane is a Daml 2.10 HTTP JSON API (v1) request body against
-// the actual AryaFi templates: records for newtype identifiers (AccountId,
-// ISIN, ...), {tag, value} for variants, plain strings for enums. Party
-// fields show "<party-id:Name>" placeholders because Canton party IDs are
-// assigned when parties are allocated.
+// The right-hand pane is a Canton 3.5 JSON Ledger API (v2) request body against
+// the actual AryaFi templates: POST /v2/commands/submit-and-wait for payment
+// and settlement instructions, POST /v2/state/active-contracts for statements.
+// Template IDs use the package-name form (#aryafi-core:Module:Template).
+// Arguments encode newtype identifiers (AccountId, ISIN, ...) as records,
+// variants as {tag, value}, and enums as plain strings. Values in <angle
+// brackets> are placeholders: Canton assigns party IDs when parties are
+// allocated, and offsets come from GET /v2/state/ledger-end.
+// Creating an instruction needs every signatory in actAs, so all of them must
+// be hosted on the submitting participant (see docs/KNOWN_LIMITATIONS.md §4).
 
 const ISO_TEMPLATES = {
   pacs008: {
@@ -741,23 +746,37 @@ const ISO_TEMPLATES = {
   </FIToFICstmrCdtTrf>
 </Document>`,
     daml: `{
-  "templateId": "AryaFi.Finance.Payment:PaymentInstruction",
-  "payload": {
-    "payer": "<party-id:DealerBankA>",
-    "payee": "<party-id:GlobalCustodian>",
-    "settlementAgent": "<party-id:CashSettlementBank>",
-    "payerAccountId": { "unAccountId": "ACC-DLRA-USD-001" },
-    "payeeAccountId": { "unAccountId": "ACC-CUST-USD-001" },
-    "currency": "USD",
-    "amount": "12500000.00",
-    "purpose": { "tag": "RepoOpeningLeg", "value": {} },
-    "obligationRef": "REPO-REF-2026-001",
-    "correlationId": { "unCorrelationId": "CORR-REPO-2026-8831" },
-    "idempotencyKey": { "unIdempotencyKey": "IDEMP-2026-09-24-0042" },
-    "networkRef": { "unPaymentNetworkRef": "e1a49f82-3d92-4f10-bf91-b3b281f9a12c" },
-    "status": { "tag": "PendingSettlement", "value": {} },
-    "observers": []
-  }
+  "commands": [
+    {
+      "CreateCommand": {
+        "templateId": "#aryafi-core:AryaFi.Finance.Payment:PaymentInstruction",
+        "createArguments": {
+          "payer": "<party-id:DealerBankA>",
+          "payee": "<party-id:GlobalCustodian>",
+          "settlementAgent": "<party-id:CashSettlementBank>",
+          "payerAccountId": { "unAccountId": "ACC-DLRA-USD-001" },
+          "payeeAccountId": { "unAccountId": "ACC-CUST-USD-001" },
+          "currency": "USD",
+          "amount": "12500000.00",
+          "purpose": { "tag": "RepoOpeningLeg", "value": {} },
+          "obligationRef": "REPO-REF-2026-001",
+          "correlationId": { "unCorrelationId": "CORR-REPO-2026-8831" },
+          "idempotencyKey": { "unIdempotencyKey": "IDEMP-2026-09-24-0042" },
+          "networkRef": { "unPaymentNetworkRef": "e1a49f82-3d92-4f10-bf91-b3b281f9a12c" },
+          "status": { "tag": "PendingSettlement", "value": {} },
+          "observers": []
+        }
+      }
+    }
+  ],
+  "commandId": "IDEMP-2026-09-24-0042",
+  "userId": "<user-id>",
+  "actAs": [
+    "<party-id:DealerBankA>",
+    "<party-id:GlobalCustodian>",
+    "<party-id:CashSettlementBank>"
+  ],
+  "readAs": []
 }`
   },
   sese023: {
@@ -778,30 +797,44 @@ const ISO_TEMPLATES = {
   </SctiesSttlmTxInstr>
 </Document>`,
     daml: `{
-  "templateId": "AryaFi.Finance.Settlement:DvpInstruction",
-  "payload": {
-    "settlementAgent": "<party-id:GlobalCustodian>",
-    "seller": "<party-id:DealerBankA>",
-    "buyer": "<party-id:DealerBankB>",
-    "tradeId": { "unTradeId": "DVP-2026-TREAS-001" },
-    "isin": { "unISIN": "US912828ZM50" },
-    "securityQuantity": "5000000.00",
-    "sellerSecurityAccount": { "unAccountId": "ACC-DLRA-SEC-001" },
-    "buyerSecurityAccount": { "unAccountId": "ACC-DLRB-SEC-001" },
-    "currency": "USD",
-    "cashAmount": "4975000.00",
-    "sellerCashAccount": { "unAccountId": "ACC-DLRA-USD-001" },
-    "buyerCashAccount": { "unAccountId": "ACC-DLRB-USD-001" },
-    "dvpModel": "DvpModel1",
-    "settlementDate": "2026-09-26T00:00:00Z",
-    "correlationId": { "unCorrelationId": "CORR-DVP-2026-TREAS-001" },
-    "idempotencyKey": { "unIdempotencyKey": "IDEMP-DVP-2026-TREAS-001" },
-    "sellerSecurityLockRef": "DVP-2026-TREAS-001",
-    "buyerCashLockRef": "DVP-2026-TREAS-001",
-    "status": { "tag": "PendingSettlement", "value": {} },
-    "failureReason": null,
-    "observers": []
-  }
+  "commands": [
+    {
+      "CreateCommand": {
+        "templateId": "#aryafi-core:AryaFi.Finance.Settlement:DvpInstruction",
+        "createArguments": {
+          "settlementAgent": "<party-id:GlobalCustodian>",
+          "seller": "<party-id:DealerBankA>",
+          "buyer": "<party-id:DealerBankB>",
+          "tradeId": { "unTradeId": "DVP-2026-TREAS-001" },
+          "isin": { "unISIN": "US912828ZM50" },
+          "securityQuantity": "5000000.00",
+          "sellerSecurityAccount": { "unAccountId": "ACC-DLRA-SEC-001" },
+          "buyerSecurityAccount": { "unAccountId": "ACC-DLRB-SEC-001" },
+          "currency": "USD",
+          "cashAmount": "4975000.00",
+          "sellerCashAccount": { "unAccountId": "ACC-DLRA-USD-001" },
+          "buyerCashAccount": { "unAccountId": "ACC-DLRB-USD-001" },
+          "dvpModel": "DvpModel1",
+          "settlementDate": "2026-09-26T00:00:00Z",
+          "correlationId": { "unCorrelationId": "CORR-DVP-2026-TREAS-001" },
+          "idempotencyKey": { "unIdempotencyKey": "IDEMP-DVP-2026-TREAS-001" },
+          "sellerSecurityLockRef": "DVP-2026-TREAS-001",
+          "buyerCashLockRef": "DVP-2026-TREAS-001",
+          "status": { "tag": "PendingSettlement", "value": {} },
+          "failureReason": null,
+          "observers": []
+        }
+      }
+    }
+  ],
+  "commandId": "IDEMP-DVP-2026-TREAS-001",
+  "userId": "<user-id>",
+  "actAs": [
+    "<party-id:GlobalCustodian>",
+    "<party-id:DealerBankA>",
+    "<party-id:DealerBankB>"
+  ],
+  "readAs": []
 }`
   },
   camt053: {
@@ -823,11 +856,26 @@ const ISO_TEMPLATES = {
   </BkToCstmrStmt>
 </Document>`,
     daml: `{
-  "templateIds": ["AryaFi.Finance.Cash:CashPosition"],
-  "query": {
-    "accountId": { "unAccountId": "ACC-SUB-US-01" },
-    "currency": "USD"
-  }
+  "eventFormat": {
+    "filtersByParty": {
+      "<party-id:CashSettlementBank>": {
+        "cumulative": [
+          {
+            "identifierFilter": {
+              "TemplateFilter": {
+                "value": {
+                  "templateId": "#aryafi-core:AryaFi.Finance.Cash:CashPosition",
+                  "includeCreatedEventBlob": false
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "verbose": true
+  },
+  "activeAtOffset": "<offset from GET /v2/state/ledger-end>"
 }`
   },
   semt002: {
@@ -846,11 +894,26 @@ const ISO_TEMPLATES = {
   </SctiesBalAcctgRpt>
 </Document>`,
     daml: `{
-  "templateIds": ["AryaFi.Finance.Security:SecurityPosition"],
-  "query": {
-    "isin": { "unISIN": "US912828ZM50" },
-    "isLocked": false
-  }
+  "eventFormat": {
+    "filtersByParty": {
+      "<party-id:GlobalCustodian>": {
+        "cumulative": [
+          {
+            "identifierFilter": {
+              "TemplateFilter": {
+                "value": {
+                  "templateId": "#aryafi-core:AryaFi.Finance.Security:SecurityPosition",
+                  "includeCreatedEventBlob": false
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "verbose": true
+  },
+  "activeAtOffset": "<offset from GET /v2/state/ledger-end>"
 }`
   }
 };
@@ -859,7 +922,7 @@ const ISO_TEMPLATES = {
 // reconciliation or ledger rule that applies; it is documentation, not a check.
 const ISO_MAPPINGS = {
   pacs008: [
-    { xml: "MsgId", path: "GrpHdr / MsgId", json: "idempotencyKey", spec: "IdempotencyKey", rule: "Also used as the Ledger API command ID for deduplication" },
+    { xml: "MsgId", path: "GrpHdr / MsgId", json: "idempotencyKey, commandId", spec: "IdempotencyKey", rule: "Also the Ledger API command ID, so a resubmitted message is deduplicated" },
     { xml: "EndToEndId", path: "PmtId / EndToEndId", json: "correlationId", spec: "CorrelationId", rule: "Links payment, obligation, and settlement records" },
     { xml: "UETR", path: "PmtId / UETR", json: "networkRef", spec: "PaymentNetworkRef", rule: "Attached by settlement agent (AttachNetworkRef)" },
     { xml: "IntrBkSttlmAmt", path: "CdtTrfTxInf / IntrBkSttlmAmt", json: "amount & currency", spec: "Decimal & ISO 4217 code", rule: "Template ensure: amount > 0" },
@@ -874,13 +937,13 @@ const ISO_MAPPINGS = {
     { xml: "DlvgPty / RcvgPty", path: "SttlmPties / LEI", json: "seller & buyer", spec: "Party (via LEI directory)", rule: "Both sign the instruction; legs settle in one transaction" }
   ],
   camt053: [
-    { xml: "Acct / Id", path: "Stmt / Acct / Id", json: "query.accountId", spec: "AccountId", rule: "Select the bank's CashPositions for the account" },
-    { xml: "Acct / Ccy", path: "Stmt / Acct / Ccy", json: "query.currency", spec: "ISO 4217 code", rule: "Filter by currency" },
+    { xml: "Acct / Id", path: "Stmt / Acct / Id", json: "createArgument.accountId", spec: "AccountId", rule: "Keep the bank's CashPositions for the account (filtered client-side)" },
+    { xml: "Acct / Ccy", path: "Stmt / Acct / Ccy", json: "createArgument.currency", spec: "ISO 4217 code", rule: "Filter by currency (client-side)" },
     { xml: "Bal / Amt", path: "Stmt / Bal / Amt", json: "sum of amount", spec: "Decimal", rule: "Closing balance must equal the sum of matching positions" }
   ],
   semt002: [
-    { xml: "ISIN", path: "FinInstrmDtls / Id / ISIN", json: "query.isin", spec: "ISIN", rule: "Select custody positions in the instrument" },
-    { xml: "HldgSts = AVLB", path: "AggrtBal / HldgSts", json: "query.isLocked = false", spec: "Bool", rule: "Available holdings exclude locked positions" },
+    { xml: "ISIN", path: "FinInstrmDtls / Id / ISIN", json: "createArgument.isin", spec: "ISIN", rule: "Keep custody positions in the instrument (filtered client-side)" },
+    { xml: "HldgSts = AVLB", path: "AggrtBal / HldgSts", json: "createArgument.isLocked = false", spec: "Bool", rule: "Available holdings exclude locked positions" },
     { xml: "AggrtBal / Qty", path: "AggrtBal / Qty / Unit", json: "sum of quantity", spec: "Decimal", rule: "Aggregate balance must equal the sum of matching positions" }
   ]
 };
@@ -915,7 +978,21 @@ function validateIsoPayloads(key, xmlText, jsonText) {
 
   let json = null;
   try { json = JSON.parse(jsonText); } catch (e) { json = null; }
-  check('JSON API body parses', json !== null);
+  check('JSON Ledger API body parses', json !== null);
+
+  // Submissions carry one CreateCommand; statements are active-contract queries.
+  const create = json && Array.isArray(json.commands) && json.commands.length === 1
+    ? json.commands[0].CreateCommand : null;
+  const args = create ? create.createArguments : null;
+  if (create) {
+    check('Template ID uses the package-name form', /^#aryafi-core:AryaFi\.[A-Za-z.]+:[A-Za-z]+$/.test(create.templateId));
+    check('commandId is set', typeof json.commandId === 'string' && json.commandId.length > 0);
+    check('actAs lists the submitting parties', Array.isArray(json.actAs) && json.actAs.length > 0);
+  } else if (json && json.eventFormat) {
+    const filters = Object.values(json.eventFormat.filtersByParty || {});
+    const tids = filters.flatMap(f => (f.cumulative || []).map(c => c.identifierFilter?.TemplateFilter?.value?.templateId));
+    check('Active-contract query filters by an AryaFi template', tids.length > 0 && tids.every(t => /^#aryafi-core:AryaFi\./.test(t || '')));
+  }
 
   if (xmlOk) {
     const byName = name => Array.from(doc.getElementsByTagNameNS('*', name));
@@ -933,16 +1010,19 @@ function validateIsoPayloads(key, xmlText, jsonText) {
     });
   }
 
-  if (json && json.payload && key === 'sese023' && xmlOk) {
+  if (args && key === 'sese023' && xmlOk) {
     const text = n => (doc.getElementsByTagNameNS('*', n)[0] || {}).textContent;
-    check('ISIN matches between XML and JSON', json.payload.isin.unISIN === text('ISIN'));
-    check('Cash amount matches between XML and JSON', Number(json.payload.cashAmount) === Number(text('SttlmAmt')));
-    check('Quantity matches between XML and JSON', Number(json.payload.securityQuantity) === Number(text('Unit')));
+    check('ISIN matches between XML and JSON', args.isin.unISIN === text('ISIN'));
+    check('Cash amount matches between XML and JSON', Number(args.cashAmount) === Number(text('SttlmAmt')));
+    check('Quantity matches between XML and JSON', Number(args.securityQuantity) === Number(text('Unit')));
+    check('actAs includes seller, buyer, and settlement agent', [args.seller, args.buyer, args.settlementAgent].every(p => json.actAs.includes(p)));
   }
-  if (json && json.payload && key === 'pacs008' && xmlOk) {
+  if (args && key === 'pacs008' && xmlOk) {
     const text = n => (doc.getElementsByTagNameNS('*', n)[0] || {}).textContent;
-    check('Amount matches between XML and JSON', Number(json.payload.amount) === Number(text('IntrBkSttlmAmt')));
-    check('Idempotency key matches MsgId', json.payload.idempotencyKey.unIdempotencyKey === text('MsgId'));
+    check('Amount matches between XML and JSON', Number(args.amount) === Number(text('IntrBkSttlmAmt')));
+    check('Idempotency key matches MsgId', args.idempotencyKey.unIdempotencyKey === text('MsgId'));
+    check('commandId matches MsgId', json.commandId === text('MsgId'));
+    check('actAs includes payer, payee, and settlement agent', [args.payer, args.payee, args.settlementAgent].every(p => json.actAs.includes(p)));
   }
   return results;
 }
@@ -1003,7 +1083,7 @@ function initIsoConverter() {
       isXmlToDaml = !isXmlToDaml;
       if (dirText) {
         dirText.textContent = isXmlToDaml
-          ? "SWIFT MX (XML) → Daml JSON API request"
+          ? "SWIFT MX (XML) → JSON Ledger API request"
           : "Daml ledger data → SWIFT MX (XML)";
       }
       if (leftTitle && rightTitle) {
@@ -1011,8 +1091,8 @@ function initIsoConverter() {
           ? "INCOMING ISO 20022 MX (XML PAYLOAD)"
           : "OUTGOING ISO 20022 MX (GENERATED XML)";
         rightTitle.textContent = isXmlToDaml
-          ? "DAML JSON API v1 REQUEST BODY"
-          : "SOURCE DAML LEDGER DATA (JSON API)";
+          ? "JSON LEDGER API v2 REQUEST BODY"
+          : "SOURCE DAML LEDGER DATA (JSON LEDGER API)";
       }
       resetBadge();
     });

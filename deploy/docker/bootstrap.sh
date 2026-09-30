@@ -11,13 +11,26 @@ BOOTSTRAP_SCRIPT="${BOOTSTRAP_SCRIPT:-/tmp/canton_bootstrap.canton}"
 
 echo "================================================================="
 echo " Starting AryaFi Multi-Participant Canton Cluster"
-echo " Canton 2.10 (open source) | Daml SDK 2.10.0"
+echo " Canton 3.5 (open source) | Daml SDK 3.5"
 echo "================================================================="
 
 # The Canton console script below is Scala, not shell.
 cat << EOF > "$BOOTSTRAP_SCRIPT"
-println("Connecting all participant nodes to aryafi_domain...")
-participants.local.foreach(_.domains.connect_local(aryafi_domain))
+nodes.local.start()
+
+println("Creating synchronizer aryafi...")
+bootstrap.synchronizer(
+  synchronizerName = "aryafi",
+  sequencers = Seq(aryafi_sequencer),
+  mediators = Seq(aryafi_mediator),
+  synchronizerOwners = Seq(aryafi_sequencer),
+  synchronizerThreshold = PositiveInt.one,
+  staticSynchronizerParameters = StaticSynchronizerParameters.defaultsWithoutKMS(ProtocolVersion.forSynchronizer),
+)
+println(s"Protocol version: \${ProtocolVersion.forSynchronizer}")
+
+println("Connecting all participant nodes to aryafi...")
+participants.local.foreach(_.synchronizers.connect_local(aryafi_sequencer, alias = "aryafi"))
 
 println("Allocating institutional parties, one organization per node...")
 val bankParty      = bank_node.parties.enable("CashSettlementBank")
@@ -33,26 +46,27 @@ println(s"  - Dealer A:  \${dealerAParty}")
 println(s"  - Dealer B:  \${dealerBParty}")
 println(s"  - Regulator: \${regulatorParty}")
 
-// Upload every DAR found in the mounted directory (daml build output).
+// Upload every DAR found in the mounted directory (dpm build output).
 val darDir = new java.io.File("$DAR_DIR")
-val dars = Option(darDir.listFiles()).toList.flatten.filter(_.getName.endsWith(".dar"))
+val dars = Option(darDir.listFiles()).toList.flatten.filter(_.getName.endsWith(".dar")).sortBy(_.getName)
 if (dars.isEmpty) {
-  println("Notice: no .dar found in $DAR_DIR (run 'daml build' first). Skipping DAR upload.")
+  println("Notice: no .dar found in $DAR_DIR (run 'dpm build --all' first). Skipping DAR upload.")
 } else {
   dars.foreach { dar =>
     println(s"Uploading \${dar.getName} to all participant nodes...")
-    participants.all.dars.upload(dar.getPath)
+    participants.local.foreach(_.dars.upload(dar.getPath))
   }
   println("DAR upload complete across all nodes.")
 }
 
 println("=================================================================")
 println(" AryaFi Canton Cluster Ready")
-println("  Bank Ledger API:      localhost:10012")
-println("  Custodian Ledger API: localhost:10022")
-println("  Dealer A Ledger API:  localhost:10032")
-println("  Dealer B Ledger API:  localhost:10042")
-println("  Regulator Ledger API: localhost:10052")
+println("                 gRPC Ledger API    JSON Ledger API")
+println("  Bank:          localhost:10012    http://localhost:10013")
+println("  Custodian:     localhost:10022    http://localhost:10023")
+println("  Dealer A:      localhost:10032    http://localhost:10033")
+println("  Dealer B:      localhost:10042    http://localhost:10043")
+println("  Regulator:     localhost:10052    http://localhost:10053")
 println("=================================================================")
 EOF
 

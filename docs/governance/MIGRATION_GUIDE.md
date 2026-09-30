@@ -10,6 +10,8 @@ When upgrading contract templates from version $N$ to $N+1$:
 
 This guide defines the institutional migration protocols for **AryaFi Core**.
 
+**Canton 3 (v3.0.0 and later).** A new version of a package with the same name (`aryafi-core`) that passes Canton's upgrade checks, for example one that adds a choice or an optional field, needs no migration: once it is vetted, existing contracts are upgraded when they are next used. Canton rejects an incompatible version, so the strategies below apply to changes that cannot be expressed as an upgrade; those releases need a new package name.
+
 ---
 
 ## 2. Upgrade Strategies
@@ -49,19 +51,19 @@ For long-running contracts (`InstitutionalLoan`, `RepoAgreement`), the custodian
 ## 3. Migration Verification Runbook
 
 ```bash
-# 1. Inspect package IDs of current and new DAR packages
-daml damlc inspect-dar .daml/dist/aryafi-core-0.1.0.dar | grep "package-id"
-daml damlc inspect-dar .daml/dist/aryafi-core-2.0.0.dar | grep "package-id"
+# 1. Inspect package IDs of the current and new DARs
+dpm inspect-dar aryafi-core-<current>.dar | grep "package-id"
+dpm inspect-dar .daml/dist/aryafi-core-<new>.dar | grep "package-id"
+```
 
-# 2. Upload new DAR to all participant nodes
-canton console --connect=bank_node -c 'participants.all.dars.upload(".daml/dist/aryafi-core-2.0.0.dar")'
+```scala
+// 2. In the Canton console: upload the new DAR to all participant nodes
+participants.all.foreach(_.dars.upload(".daml/dist/aryafi-core-<new>.dar"))
 
-# 3. Query un-migrated contracts on active node
-canton console --connect=bank_node -c '
-  val oldPositions = participants.bank_node.ledger_api.acs.of_all()
-    .filter(_.templateId.packageId == "old_package_id_here")
-  println(s"Remaining V1 positions: ${oldPositions.size}")
-'
+// 3. Query un-migrated contracts on the active node
+val oldPositions = bank_node.ledger_api.state.acs.of_all()
+  .filter(_.templateId.packageId == "old_package_id_here")
+println(s"Remaining old positions: ${oldPositions.size}")
 ```
 
 ---
@@ -109,3 +111,44 @@ v2.0.0 changes template fields and choice signatures, so its package ID differs 
 
 ### 5.4 Verification
 Run the runbook in section 3, then confirm `daml test` passes and regenerate the authorization matrix (`python3 scripts/gen_authorization_matrix.py`) to review the controller changes.
+
+---
+
+## 6. Upgrading to v3.0.0
+
+v3.0.0 moves the library from Daml SDK 2.10 / Canton 2.10 (Daml-LF 1.x) to Daml SDK 3.5.12 / Canton 3.5 (Daml-LF 2.2). Apart from the removed contract keys, template fields and choices are unchanged from v2.0.0.
+
+### 6.1 Ledger Migration
+A Canton 2 ledger cannot run the v3.0.0 DAR, and a Canton 3 ledger cannot run v2.0.0. Move live contracts with Strategy B: take an Active Contract Set snapshot on the Canton 2 participant, recreate each active contract on the Canton 3 ledger with the same arguments and signatories, and reconcile balances before and after. v2.0.0 was released on 2026-09-29, so most deployments have no live contracts.
+
+### 6.2 Removed Contract Keys
+`Account`, `InstitutionalParty`, `FinancialObligation`, `KycAttestation`, `SanctionsAttestation`, `TransferRestrictionRule`, and `OwnershipRestriction` no longer have keys. The library never looked them up, but client code that used `fetchByKey`, `lookupByKey`, or `exerciseByKey` on them must keep contract IDs or query the Active Contract Set instead. The ledger no longer rejects a duplicate (for example a second KYC attestation for the same authority and subject); check before creating.
+
+### 6.3 Client Code Changes
+
+| Before (v2.0.0, Canton 2.10) | After (v3.0.0, Canton 3.5) |
+|:---|:---|
+| HTTP JSON API v1: `POST /v1/create` | JSON Ledger API v2: `POST /v2/commands/submit-and-wait` with a `CreateCommand` |
+| `POST /v1/exercise` | `ExerciseCommand`; use `/v2/commands/submit-and-wait-for-transaction` with the ledger-effects shape to read the choice result |
+| `POST /v1/query` with a field filter | `POST /v2/state/active-contracts` filtered by party and template; filter fields in the client |
+| Template ID `AryaFi.Finance.Cash:CashPosition` | `#aryafi-core:AryaFi.Finance.Cash:CashPosition` (package-name form) |
+| `meta.commandId`, `applicationId` | `commandId`, `userId` |
+| JWT with custom Daml claims (`actAs`, `readAs`, `ledgerId`) | user token (`sub` = user ID); `CanActAs` / `CanReadAs` granted as user rights on the participant |
+| gRPC Ledger API v1 services | Ledger API v2 (`CommandService`, `UpdateService`, `StateService`, ...) |
+
+[LEDGER_API_CLIENT.md](../integration/LEDGER_API_CLIENT.md) shows the v2 requests in full.
+
+### 6.4 Build and Test Changes
+
+| Before | After |
+|:---|:---|
+| `daml build` | `dpm build --all` (production and test packages) |
+| `daml test` | `dpm test --all` in `daml/test` |
+| `daml script --dar .daml/dist/aryafi-core-2.0.0.dar` | `dpm script --dar daml/test/.daml/dist/aryafi-core-test-3.0.0.dar --upload-dar=yes` |
+| Tests in `daml/src/AryaFi/Test`, compiled into the production DAR | Tests in `daml/test/AryaFi/Test`, a separate `aryafi-core-test` package |
+| `submitMulti [a, b] [] do` | `submit (actAs [a, b]) do` |
+| `try ... catch` in scripts | `tryFailureStatus` |
+| `allocateParty "Name"` twice in one run | a unique name per allocation (Canton 3 rejects duplicates) |
+
+### 6.5 Verification
+Run the runbook in section 3, confirm `dpm test --all` passes in `daml/test`, and run the DvP suites against the `deploy/` topology (see [daml/test/AryaFi/Test/Integration/README.md](../../daml/test/AryaFi/Test/Integration/README.md)).
