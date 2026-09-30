@@ -1,0 +1,57 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Canton Network Token Standard holding views for AryaFi positions.
+--
+-- `CashPosition`, `SecurityPosition`, and `AssetHolding` implement the
+-- `Holding` interface of both CIP-56 (Splice.Api.Token.HoldingV1) and CIP-0112
+-- (Splice.Api.Token.HoldingV2), so wallets and apps that read token-standard
+-- holdings see AryaFi positions. The views are read-only: moving a position
+-- still goes through the position's own choices.
+--
+-- Mapping from an AryaFi position to a token-standard holding:
+--   account (V2)  = the owner, the provider that keeps the position (the bank
+--                   for cash, the custodian for securities and other assets),
+--                   and the AryaFi account ID. V1 has only the owner.
+--   instrumentId  = admin: the bank for cash, the custodian for securities,
+--                   the issuer for other assets;
+--                   id: the currency code, the ISIN, or the asset ID.
+--   lock          = the lock holder, with the lock reference as its context.
+--                   AryaFi locks do not expire.
+module AryaFi.Finance.TokenStandard
+  ( holdingAccount
+  , holdingLockV1
+  , holdingLockV2
+  ) where
+
+import qualified Splice.Api.Token.HoldingV1 as HoldingV1
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
+import AryaFi.Common.Identifiers (AccountId(..))
+
+-- | The V2 account of a position: its owner, the institution that keeps it,
+-- and the AryaFi account ID.
+holdingAccount : Party -> Party -> AccountId -> HoldingV2.Account
+holdingAccount owner provider accountId = HoldingV2.Account with
+  owner = Some owner
+  provider = Some provider
+  id = unAccountId accountId
+
+-- | The V1 lock of a position locked to `lockHolder`, if any.
+holdingLockV1 : Optional Party -> Optional Text -> Optional HoldingV1.Lock
+holdingLockV1 lockHolder lockReference = fmap toLock lockHolder
+  where
+    toLock holder = HoldingV1.Lock with
+      holders = [holder]
+      expiresAt = None
+      expiresAfter = None
+      context = lockReference
+
+-- | The V2 lock of a position locked to `lockHolder`, if any.
+holdingLockV2 : Optional Party -> Optional Text -> Optional HoldingV2.Lock
+holdingLockV2 lockHolder lockReference = fmap toLock lockHolder
+  where
+    toLock holder = HoldingV2.Lock with
+      holders = [holder]
+      expiresAt = None
+      expiresAfter = None
+      context = lockReference

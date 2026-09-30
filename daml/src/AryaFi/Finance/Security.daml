@@ -11,10 +11,14 @@
 -- via LockSecurity before being referenced in a financing agreement.
 module AryaFi.Finance.Security where
 
-import AryaFi.Common.Identifiers (AccountId, ISIN, CUSIP, ExternalRef, CorrelationId)
+import AryaFi.Common.Identifiers (AccountId, ISIN(..), CUSIP, ExternalRef, CorrelationId)
 import AryaFi.Common.Types (Amount, Rate, DayCountConvention(..))
 import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
 import DA.Optional (fromOptional, optionalToList)
+import qualified Splice.Api.Token.HoldingV1 as HoldingV1
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
+import Splice.Api.Token.MetadataV1 (emptyMetadata)
+import AryaFi.Finance.TokenStandard (holdingAccount, holdingLockV1, holdingLockV2)
 
 -- ---------------------------------------------------------------------------
 -- Instrument Metadata
@@ -120,6 +124,23 @@ template SecurityPosition
     observer observers, optionalToList lockHolder
 
     ensure quantity > 0.0 && isLocked == (lockHolder /= None)
+
+    -- Canton Network Token Standard views (see AryaFi.Finance.TokenStandard).
+    interface instance HoldingV1.Holding for SecurityPosition where
+      view = HoldingV1.HoldingView with
+        owner = owner
+        instrumentId = HoldingV1.InstrumentId with admin = custodian; id = unISIN isin
+        amount = quantity
+        lock = holdingLockV1 lockHolder lockReference
+        meta = emptyMetadata
+
+    interface instance HoldingV2.Holding for SecurityPosition where
+      view = HoldingV2.HoldingView with
+        account = holdingAccount owner custodian accountId
+        instrumentId = HoldingV2.InstrumentId with admin = custodian; id = unISIN isin
+        amount = quantity
+        lock = holdingLockV2 lockHolder lockReference
+        meta = emptyMetadata
 
     -- | Split this position into two positions, preserving total quantity.
     -- Used for: staging partial settlement, partial repo collateral.
