@@ -16,6 +16,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **Only the site's own files are deployed.** Deploys uploaded the whole repository, so everything in it (tests, deployment configuration, the requirements document) could be downloaded from the site. `.vercelignore` now limits the deployment to the site, the published documents, and the seven contract modules the source viewer shows.
 - The GitHub link is removed from the header, because the repository is private.
 
+### Changed
+- **Release notes come from this file.** The release workflow publishes the CHANGELOG section for the tagged version as the GitHub release notes, with links made absolute, and fails before building if the section is missing. GitHub's generated notes listed pull requests by merge commit, so v3.0.0's first notes named the wrong pull request. The steps are in [VERSIONING_AND_RELEASE.md §3](docs/governance/VERSIONING_AND_RELEASE.md).
+
 ---
 
 ## [3.0.0] - 2026-09-30
