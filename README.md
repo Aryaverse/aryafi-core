@@ -2,7 +2,7 @@
 
 [![Daml](https://img.shields.io/badge/Daml_SDK-3.5.12-blue.svg)](https://docs.digitalasset.com)
 [![Canton](https://img.shields.io/badge/Canton-3.5_(protocol_35)-green.svg)](deploy/canton/canton.conf)
-[![Release](https://img.shields.io/badge/Release-v3.0.0-purple.svg)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/Release-v3.1.0-purple.svg)](CHANGELOG.md)
 [![Tests](https://img.shields.io/badge/dpm_test-296_passing-brightgreen.svg)](daml/test/AryaFi/Test)
 [![Status](https://img.shields.io/badge/Status-Beta_/_Experimental-orange.svg)](docs/KNOWN_LIMITATIONS.md)
 [![Website](https://img.shields.io/badge/Vercel-Website-black.svg?logo=vercel)](https://aryafi-core.vercel.app)
