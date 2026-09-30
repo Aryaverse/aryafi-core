@@ -5,9 +5,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
-## [Unreleased]
+## [3.1.0] - 2026-10-01
 
-Version 3.1.0 (in development): an upgrade-compatible release. Canton's participant upgrade check accepts it as an upgrade of 3.0.0.
+An upgrade-compatible release: Canton's participant upgrade check accepts it as an upgrade of 3.0.0, so participants running 3.0.0 can move to it without migrating contracts. It makes AryaFi positions Canton Network Token Standard holdings and rebuilds the website.
 
 ### Added
 - **Canton Network Token Standard holdings.** `CashPosition`, `SecurityPosition`, and `AssetHolding` implement the `Holding` interface of CIP-56 (`Splice.Api.Token.HoldingV1`) and of the approved V2 standard, CIP-0112 (`HoldingV2`), so wallets and apps that read token-standard holdings see AryaFi positions. The V2 account is the owner, the bank or custodian as provider, and the AryaFi account ID; the instrument is the currency, ISIN, or asset ID under the bank, custodian, or issuer; a lock shows the lock holder with the trade reference as context. The interface packages are vendored from Splice 0.8.3 in `daml/deps/splice`. See [`AryaFi.Finance.TokenStandard`](daml/src/AryaFi/Finance/TokenStandard.daml).
