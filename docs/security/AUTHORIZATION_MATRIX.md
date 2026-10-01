@@ -257,7 +257,7 @@ These principles hold for the current code and are covered by the negative and a
 
 ## 4. Known Gaps (see `docs/KNOWN_LIMITATIONS.md`)
 
-- Multi-signatory contracts are created with multi-party submission. Across separate Canton participants this requires propose/accept workflows, which the library does not provide yet. Token-standard transfers and `TokenDvpInstruction` are the exceptions: each party acts in its own submission.
+- Multi-signatory contracts are created with multi-party submission. Across separate Canton participants this requires propose/accept workflows, which the library does not provide yet. Token-standard transfers and `TokenDvpInstruction` are the exceptions: each party acts in its own submission, and a token-standard DvP has been run with each institution on its own participant.
 - Policy evaluation choices (`IsKycValid`, `IsSanctionsClear`, `EvaluateEligibility`, `EvaluateTransfer`, `CheckOwnershipLimit`) are controlled by the policy owner only, so business workflows cannot call them inside their own transactions.
 - Loans, repos, pledges, collateral, and margin calls reference assets and payments by text reference rather than contract ID, so the ledger does not prevent one asset being referenced by several agreements.
 
