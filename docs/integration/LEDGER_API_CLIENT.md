@@ -183,6 +183,61 @@ stream.on('data', (update) => {
 });
 ```
 
+### 6.3 Token-Standard Holdings and Transfers
+Wallets and apps can list and send AryaFi cash and securities through the Canton Network Token Standard's interfaces, without AryaFi's template IDs. Query by interface (`InterfaceFilter` with `"includeInterfaceView": true`), and use the interface ID as the `templateId` of an exercise command:
+
+| What | Interface ID |
+|:---|:---|
+| Holdings | `#splice-api-token-holding-v2:Splice.Api.Token.HoldingV2:Holding` (CIP-56: `#splice-api-token-holding-v1:Splice.Api.Token.HoldingV1:Holding`) |
+| The bank's or custodian's transfer factory | `#splice-api-token-transfer-instruction-v2:Splice.Api.Token.TransferInstructionV2:TransferFactory` |
+| Pending transfers | `#splice-api-token-transfer-instruction-v2:Splice.Api.Token.TransferInstructionV2:TransferInstruction` |
+
+A holdings query returns every holding the party can see. That includes a sender's locked holding while a transfer to the party is pending, so list a party's own holdings by `account.owner`.
+
+To send, exercise `TransferFactory_Transfer` on the factory, naming the holdings that fund the transfer. `requestedAt` must be in the past and `executeBefore` in the future; the sender must be among the `actors`:
+
+```json
+{
+  "commands": [ { "ExerciseCommand": {
+    "templateId": "#splice-api-token-transfer-instruction-v2:Splice.Api.Token.TransferInstructionV2:TransferFactory",
+    "contractId": "00de1c92f6b8...",
+    "choice": "TransferFactory_Transfer",
+    "choiceArgument": {
+      "transfer": {
+        "sender":   { "owner": "Bob::1220...",   "provider": "Bank::1220...", "id": "ACC-BOB" },
+        "receiver": { "owner": "Alice::1220...", "provider": "Bank::1220...", "id": "ACC-ALICE" },
+        "amount": "300.0",
+        "instrumentId": { "admin": "Bank::1220...", "id": "USD" },
+        "requestedAt": "2026-10-01T05:06:22Z",
+        "executeBefore": "2026-10-02T05:07:22Z",
+        "inputHoldingCids": [ "008e46330953..." ],
+        "meta": { "values": {} } },
+      "actors": [ "Bob::1220..." ],
+      "extraArgs": { "context": { "values": {} }, "meta": { "values": {} } } } } } ],
+  "commandId": "transfer-1",
+  "userId": "wallet-backend",
+  "actAs": [ "Bob::1220..." ]
+}
+```
+
+The sender's change comes back at once. The transferred amount stays in the sender's account, locked to the bank, until the receiver exercises `TransferInstruction_Accept` (or `TransferInstruction_Reject`) on the pending instruction, or the sender exercises `TransferInstruction_Withdraw`:
+
+```json
+{
+  "commands": [ { "ExerciseCommand": {
+    "templateId": "#splice-api-token-transfer-instruction-v2:Splice.Api.Token.TransferInstructionV2:TransferInstruction",
+    "contractId": "<pending instruction>",
+    "choice": "TransferInstruction_Accept",
+    "choiceArgument": { "actors": [ "Alice::1220..." ],
+                        "extraArgs": { "context": { "values": {} }, "meta": { "values": {} } } } } } ],
+  "commandId": "accept-1",
+  "userId": "wallet-backend",
+  "actAs": [ "Alice::1220..." ]
+}
+```
+
+If the receiver is among the `actors` of `TransferFactory_Transfer` too, the transfer completes in one step. These requests were run against a Canton 3.5 participant.
+
 ---
 
 ## 7. Concrete Client Implementation (TypeScript)
