@@ -34,5 +34,5 @@ Both scripts pass this way against Canton 3.5.19, and CI runs them on every push
 
 ## Not Yet Covered
 
-- **Cross-participant workflows.** A test where the seller, buyer, and settlement agent are hosted on different participants needs propose/accept templates, because parties on different participants cannot co-submit. See [KNOWN_LIMITATIONS.md](../../../../../docs/KNOWN_LIMITATIONS.md) and [IMPROVEMENT_PLAN.md](../../../../../docs/IMPROVEMENT_PLAN.md).
+- **Cross-participant workflows.** A test where the seller, buyer, and settlement agent of a `DvpInstruction` are hosted on different participants needs propose/accept templates, because parties on different participants cannot co-submit. The token-standard DvP is the exception: `Network/TokenDvpAcrossNodes.daml` runs it with each institution on its own participant. See [KNOWN_LIMITATIONS.md](../../../../../docs/KNOWN_LIMITATIONS.md) and [IMPROVEMENT_PLAN.md](../../../../../docs/IMPROVEMENT_PLAN.md).
 - **Scripts that set ledger time** (loan accrual, margin deadlines) only run on the Daml test ledger, which supports static time.

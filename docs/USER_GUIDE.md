@@ -52,7 +52,7 @@ Use **Next step** and **Back**, or click a step in the bar.
 * **Settlement** (Beta): cash, securities and delivery versus payment. Moves real assets on the ledger.
 * **Financing** (Experimental): loans, repos, securities lending, margin calls, pledges and collateral, funds and escrow. Tracks each agreement; assets do not move on the ledger yet. Includes a calculator for the collateral a loan needs: `loan × margin ÷ (1 − haircut)`, with illustrative haircuts.
 * **Compliance** (Experimental): KYC and sanctions, transfer rules, eligibility and limits, regulatory reports. Evaluated correctly, but not yet enforced inside transfers.
-* **Coming next**: agreeing trades across nodes, settling other tokens such as Canton Coin through the token standard, financing on real assets, and an independent audit.
+* **Coming next**: agreeing trades across nodes, settling against Canton Coin on a Canton Network, financing on real assets, and an independent audit.
 
 **Developers** has:
 * **Get started**: install the Daml SDK with `dpm`, build, and run the tests.
@@ -77,7 +77,7 @@ dpm version
 # Compile both packages: aryafi-core (production) and aryafi-core-test
 dpm build --all
 
-# Run the test suite (319 scripts; requires Java 17 or 21)
+# Run the test suite (326 scripts; requires Java 17 or 21)
 cd daml/test
 dpm test --all --show-coverage
 cd ../..
@@ -104,7 +104,7 @@ dpm script \
   --ledger-host localhost \
   --ledger-port 10012
 ```
-This uploads the test DAR to the bank participant, allocates the scenario's parties there, and runs the DvP. Workflows whose parties live on different participants need propose/accept templates (see [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)).
+This uploads the test DAR to the bank participant, allocates the scenario's parties there, and runs the DvP. Workflows whose parties live on different participants need propose/accept templates (see [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)). The token-standard DvP does not: `AryaFi.Test.Network.TokenDvpAcrossNodes:runTokenDvpAcrossNodes` runs one with each institution on its own participant, given a participant config (see the CI workflow's topology job for the files).
 
 ---
 

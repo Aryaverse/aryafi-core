@@ -45,6 +45,7 @@
 !/daml/src/AryaFi/Finance/Settlement.daml
 !/daml/src/AryaFi/Finance/TokenTransfer.daml
 !/daml/src/AryaFi/Finance/TokenAllocation.daml
+!/daml/src/AryaFi/Finance/TokenDvp.daml
 !/daml/src/AryaFi/Finance/Collateral.daml
 !/daml/src/AryaFi/Contracts
 /daml/src/AryaFi/Contracts/*

@@ -113,18 +113,38 @@ jobs:
 
       # Scenarios that do not call setTime run against a real participant. The
       # test DAR is uploaded to the bank participant by the script runner.
-      - name: Run DvP scenarios and token-standard transfers and settlement against the bank participant
+      - name: Run DvP scenarios and token-standard transfers, settlement, and DvP against the bank participant
         run: |
           DAR=$(ls daml/test/.daml/dist/aryafi-core-test-*.dar)
           for script in \
             AryaFi.Test.Scenarios.TreasuryDvpScenario:runTreasuryDvpScenario \
             AryaFi.Test.Scenarios.DvpSettlementTest:runDvpSettlementTests \
             AryaFi.Test.Unit.TokenTransferTest:runTokenTransferTests \
-            AryaFi.Test.Unit.TokenAllocationTest:runTokenAllocationTests; do
+            AryaFi.Test.Unit.TokenAllocationTest:runTokenAllocationTests \
+            AryaFi.Test.Scenarios.TokenDvpTest:runTokenDvpTests; do
             echo "::group::$script"
             dpm script --dar "$DAR" --upload-dar=yes --script-name "$script" --ledger-host localhost --ledger-port 10012
             echo "::endgroup::"
           done
+
+      # A token-standard DvP with custodian, bank, seller, buyer, and agent each
+      # on their own participant, so no submission acts for parties on two nodes.
+      - name: Run the token-standard DvP with each institution on its own node
+        run: |
+          DAR=$(ls daml/test/.daml/dist/aryafi-core-test-*.dar)
+          cat > participants.json <<'JSON'
+          { "default_participant": {"host": "localhost", "port": 10012},
+            "participants": {
+              "bank_node": {"host": "localhost", "port": 10012},
+              "custodian_node": {"host": "localhost", "port": 10022},
+              "dealer_a_node": {"host": "localhost", "port": 10032},
+              "dealer_b_node": {"host": "localhost", "port": 10042},
+              "regulator_node": {"host": "localhost", "port": 10052} },
+            "party_participants": {} }
+          JSON
+          echo '{"runId": "ci-${{ github.run_id }}", "custodianNode": "custodian_node", "bankNode": "bank_node", "sellerNode": "dealer_a_node", "buyerNode": "dealer_b_node", "agentNode": "regulator_node"}' > nodes.json
+          dpm script --dar "$DAR" --script-name AryaFi.Test.Network.TokenDvpAcrossNodes:runTokenDvpAcrossNodes \
+            --participant-config participants.json --input-file nodes.json
 
       # The runner used on TestNet (deploy/testnet), here without authentication.
       # It uploads the production DAR through the JSON Ledger API and runs the
