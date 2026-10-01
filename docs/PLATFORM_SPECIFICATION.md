@@ -171,8 +171,8 @@ daml/test/AryaFi/Test/      # separate test package (aryafi-core-test)
 ### 1. Artifact Compilation
 ```bash
 dpm build --all
-# Generates .daml/dist/aryafi-core-3.1.0.dar (production)
-# and daml/test/.daml/dist/aryafi-core-test-3.1.0.dar (tests)
+# Generates .daml/dist/aryafi-core-3.2.0.dar (production)
+# and daml/test/.daml/dist/aryafi-core-test-3.2.0.dar (tests)
 ```
 
 ### 2. Multi-Node Deployment
@@ -181,7 +181,7 @@ Upload the production DAR to every participant through its JSON Ledger API (the 
 for port in 10013 10023 10033 10043 10053; do
   curl -sf -X POST "http://localhost:$port/v2/dars?vetAllPackages=true" \
     -H "Content-Type: application/octet-stream" \
-    --data-binary @.daml/dist/aryafi-core-3.1.0.dar
+    --data-binary @.daml/dist/aryafi-core-3.2.0.dar
 done
 ```
 
@@ -189,7 +189,7 @@ done
 Run the treasury DvP scenario against the bank participant:
 ```bash
 dpm script \
-  --dar daml/test/.daml/dist/aryafi-core-test-3.1.0.dar \
+  --dar daml/test/.daml/dist/aryafi-core-test-3.2.0.dar \
   --upload-dar=yes \
   --script-name AryaFi.Test.Scenarios.TreasuryDvpScenario:runTreasuryDvpScenario \
   --ledger-host localhost \

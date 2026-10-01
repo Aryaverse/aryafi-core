@@ -51,16 +51,74 @@ def first_sentence(doc_lines):
     return text.split(". ")[0].strip().rstrip(".").replace(" ", " ").replace("|", "/")
 
 
+def doc_above(lines, i):
+    doc, j = [], i - 1
+    while j >= 0 and lines[j].strip().startswith("--"):
+        doc.insert(0, re.sub(r"^\s*--\s?\|?\s?", "", lines[j]))
+        j -= 1
+    return doc
+
+
+def block(lines, i, indent):
+    """The lines after line i that are indented by more than `indent` spaces."""
+    body = []
+    for line in lines[i + 1:]:
+        if line.strip() and len(line) - len(line.lstrip()) <= indent:
+            break
+        body.append(line)
+    return body
+
+
+ACTOR_CHECK = re.compile(r"require \((\w+) `elem` arg\.actors\)")
+
+
+def required_actor(lines, body):
+    """The party an interface choice implementation requires among `actors`,
+    looked up in its body or in a top-level function of the same file it calls."""
+    for line in body:
+        m = ACTOR_CHECK.search(line)
+        if m:
+            return m.group(1)
+    functions = {m.group(1): k for k, l in enumerate(lines) for m in [re.match(r"^(\w+) [^:]*=", l)] if m}
+    for name, k in functions.items():
+        if any(re.search(rf"\b{name}\b", line) for line in body):
+            for line in block(lines, k, 0):
+                m = ACTOR_CHECK.search(line)
+                if m:
+                    return m.group(1)
+    return None
+
+
 def parse(path):
     lines = open(path).read().split("\n")
-    templates, cur = [], None
+    templates, cur, interface = [], None, None
     for i, line in enumerate(lines):
         m = re.match(r"^template (\w+)", line)
         if m:
             cur = {"name": m.group(1), "signatory": "", "observer": "", "choices": []}
             templates.append(cur)
+            interface = None
             continue
         if cur is None:
+            continue
+        m = re.match(r"^    interface instance (\S+) for \w+ where", line)
+        if m:
+            interface = m.group(1)
+            continue
+        if re.match(r"^    \S", line):
+            interface = None
+        # A token-standard interface choice: its controllers are the `actors`
+        # argument, and the implementation checks who must be among them.
+        m = re.match(r"^      ([a-z]\w*)_(\w+)Impl ", line)
+        if interface and m:
+            choice = m.group(1)[0].upper() + m.group(1)[1:] + "_" + m.group(2)[0].upper() + m.group(2)[1:]
+            actor = required_actor(lines, [line] + block(lines, i, 6))
+            cur["choices"].append({
+                "name": choice,
+                "readonly": choice.endswith("_PublicFetch"),
+                "controller": f"actors, including {actor}" if actor else "actors",
+                "doc": first_sentence(doc_above(lines, i)) or f"Token standard `{interface}` choice",
+            })
             continue
         m = re.match(r"^    signatory (.+)$", line)
         if m:
@@ -72,10 +130,7 @@ def parse(path):
             continue
         m = re.match(r"^    (nonconsuming )?choice (\w+)", line)
         if m:
-            doc, j = [], i - 1
-            while j >= 0 and lines[j].strip().startswith("--"):
-                doc.insert(0, re.sub(r"^\s*--\s?\|?\s?", "", lines[j]))
-                j -= 1
+            doc = doc_above(lines, i)
             controller = ""
             for k in range(i + 1, min(i + 25, len(lines))):
                 mc = re.match(r"^      controller (.+)$", lines[k])
@@ -126,6 +181,8 @@ In Daml and Canton, contract security is governed by three primitives:
 
 The tables below list every template in the production modules (`daml/src/AryaFi/{Common,Finance,Contracts,Compliance}`) with its signatories, observers, choices, and controllers. They are **generated from the Daml source** by `scripts/gen_authorization_matrix.py`, so they describe what the code enforces rather than intended behaviour.
 
+Choices of the Canton Network Token Standard interfaces (`TransferFactory_*`, `TransferInstruction_*`) are controlled by their `actors` argument. For these, the table names the party the implementation requires among the actors.
+
 ---
 
 ## 2. Authorization Matrix (generated from source)
@@ -140,12 +197,13 @@ FOOTER = """
 These principles hold for the current code and are covered by the negative and authorization tests in `daml/test/AryaFi/Test`:
 
 1. **No position is imposed on a party without its consent.** `TransferCash`, `TransferSecurity`, and `TransferAsset` require the current owner, the holding institution (bank or custodian), and the receiving owner. The receiver becomes a signatory of the new position, so its authority is required.
-2. **Locks bind to a named lock holder.** `LockCash` / `LockSecurity` / `LockAsset` are authorized by owner and bank/custodian and name a lock holder. Only the lock holder can release the lock, or deliver the position to a receiver who co-authorizes (`SettleLockedCash` / `SettleLockedSecurity`). Neither owner nor custodian can withdraw a leg from an agreed settlement.
-3. **Atomic DvP.** `ExecuteDvpSettlement` validates both locked legs against the instruction (owner, account, ISIN, quantity, currency, amount, lock holder, lock reference) and delivers both in one transaction. The settlement agent cannot change economic terms; the instruction is signed by seller and buyer.
-4. **No party reduces its own obligation.** Loan repayments and interest payments are recorded by the lender; loan interest is computed from rate, day count, and ledger time; securities-lending fees need both counterparties to accrue and the lender to confirm payment; margin fulfilment needs the caller to confirm receipt; collateral release on a securities return is capped pro rata.
-5. **Disclosure of bilateral agreements needs both counterparties.** Adding an observer to a loan, repo, securities loan, margin call, pledge, or collateral position requires both principals.
-6. **Timestamps come from the ledger.** KYC verification, sanctions screening, pledge enforcement, redemption settlement, and report amendments record ledger time rather than a caller-supplied value.
-7. **Compliance officers cannot move value.** Their choices only approve, reject, or evaluate; they hold no controller rights over positions.
+2. **Token-standard transfers keep the receiver's consent.** By creating a `PositionTransferFactory`, a bank or custodian agrees in advance to transfers between its clients' accounts. The sender instructs a transfer; the receiver still signs the position it receives, either by accepting the pending `PositionTransferInstruction` or by instructing the transfer together with the sender. Until then the amount stays in the sender's account, locked to the registry.
+3. **Locks bind to a named lock holder.** `LockCash` / `LockSecurity` / `LockAsset` are authorized by owner and bank/custodian and name a lock holder. Only the lock holder can release the lock, or deliver the position to a receiver who co-authorizes (`SettleLockedCash` / `SettleLockedSecurity`). Neither owner nor custodian can withdraw a leg from an agreed settlement.
+4. **Atomic DvP.** `ExecuteDvpSettlement` validates both locked legs against the instruction (owner, account, ISIN, quantity, currency, amount, lock holder, lock reference) and delivers both in one transaction. The settlement agent cannot change economic terms; the instruction is signed by seller and buyer.
+5. **No party reduces its own obligation.** Loan repayments and interest payments are recorded by the lender; loan interest is computed from rate, day count, and ledger time; securities-lending fees need both counterparties to accrue and the lender to confirm payment; margin fulfilment needs the caller to confirm receipt; collateral release on a securities return is capped pro rata.
+6. **Disclosure of bilateral agreements needs both counterparties.** Adding an observer to a loan, repo, securities loan, margin call, pledge, or collateral position requires both principals.
+7. **Timestamps come from the ledger.** KYC verification, sanctions screening, pledge enforcement, redemption settlement, and report amendments record ledger time rather than a caller-supplied value.
+8. **Compliance officers cannot move value.** Their choices only approve, reject, or evaluate; they hold no controller rights over positions.
 
 ## 4. Known Gaps (see `docs/KNOWN_LIMITATIONS.md`)
 

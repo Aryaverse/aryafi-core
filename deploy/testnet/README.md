@@ -59,7 +59,7 @@ It exits with status 0 when every check passes. Each run needs a new `RUN_ID`; t
 ## 5. What This Does Not Test
 
 - **Cross-participant workflows.** All five parties are hosted on one participant. Parties on different participants need propose/accept workflows, which the library does not provide yet (see [KNOWN_LIMITATIONS.md §4](../../docs/KNOWN_LIMITATIONS.md#4-multi-party-workflows-and-compliance)).
-- **The Canton Network token standard (CIP-56).** AryaFi holdings do not implement it yet (Improvement Plan, Workstream 1).
+- **The Canton Network token standard.** The smoke test settles through AryaFi's own DvP. It does not list holdings or send them through the token-standard interfaces, and AryaFi does not yet implement the standard's allocations (see [KNOWN_LIMITATIONS.md §2](../../docs/KNOWN_LIMITATIONS.md#2-platform)).
 - **Your identity provider and TLS.** The rehearsal used an HMAC-signed token without TLS; the first TestNet run is the first test of your node's OIDC tokens and TLS setup.
 
 ## 6. Troubleshooting

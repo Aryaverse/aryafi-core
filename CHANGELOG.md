@@ -5,6 +5,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Token-standard transfers.** Cash and securities can be sent with the Canton Network Token Standard's V2 transfer interfaces (CIP-0112, `Splice.Api.Token.TransferInstructionV2`), so wallets and apps can move AryaFi positions as well as list them. A bank or custodian creates a `PositionTransferFactory` for its clients. The sender instructs a transfer, naming the holdings that fund it, and gets its change back at once. The amount stays in the sender's account, locked to the bank or custodian, until the receiver accepts or rejects it or the sender withdraws it. The receiver still signs every position it receives; if the receiver instructs the transfer together with the sender, it completes in one step. See [`AryaFi.Finance.TokenTransfer`](daml/src/AryaFi/Finance/TokenTransfer.daml). The interface package is vendored from Splice 0.8.3.
+- `TokenTransferTest`: eleven tests covering two-step transfers of cash and securities, rejection, withdrawal, expiry, one-step transfers, the registry's checks (instrument, account provider, clients, inputs, deadlines), who may act, and a wallet's view. CI runs them on the five-participant Canton topology as well.
+- [Ledger API client guide §6.3](docs/integration/LEDGER_API_CLIENT.md#63-token-standard-holdings-and-transfers): listing holdings and sending them with only the token standard's interface IDs. The requests were run against a Canton 3.5 participant.
+- The website's code viewer shows `TokenTransfer.daml`.
+
+### Changed
+- The authorization matrix lists the token-standard choices AryaFi implements, with the party each implementation requires among the `actors`.
+
+### Fixed
+- The TestNet runbook and the user guide no longer say that AryaFi does not implement the token standard.
+
 ## [3.1.0] - 2026-10-01
 
 An upgrade-compatible release: Canton's participant upgrade check accepts it as an upgrade of 3.0.0, so participants running 3.0.0 can move to it without migrating contracts. It makes AryaFi positions Canton Network Token Standard holdings and rebuilds the website.

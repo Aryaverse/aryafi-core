@@ -113,12 +113,13 @@ jobs:
 
       # Scenarios that do not call setTime run against a real participant. The
       # test DAR is uploaded to the bank participant by the script runner.
-      - name: Run DvP scenarios against the bank participant
+      - name: Run DvP scenarios and token-standard transfers against the bank participant
         run: |
           DAR=$(ls daml/test/.daml/dist/aryafi-core-test-*.dar)
           for script in \
             AryaFi.Test.Scenarios.TreasuryDvpScenario:runTreasuryDvpScenario \
-            AryaFi.Test.Scenarios.DvpSettlementTest:runDvpSettlementTests; do
+            AryaFi.Test.Scenarios.DvpSettlementTest:runDvpSettlementTests \
+            AryaFi.Test.Unit.TokenTransferTest:runTokenTransferTests; do
             echo "::group::$script"
             dpm script --dar "$DAR" --upload-dar=yes --script-name "$script" --ledger-host localhost --ledger-port 10012
             echo "::endgroup::"
