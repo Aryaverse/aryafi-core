@@ -893,6 +893,7 @@ const DAML_MODULES = {
   cash: 'Finance/Cash.daml',
   security: 'Finance/Security.daml',
   settlement: 'Finance/Settlement.daml',
+  tokentransfer: 'Finance/TokenTransfer.daml',
   collateral: 'Finance/Collateral.daml',
   loan: 'Contracts/Loan.daml',
   repo: 'Contracts/Repo.daml',

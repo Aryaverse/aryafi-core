@@ -2,7 +2,7 @@
 
 This page records what AryaFi Core does **not** do yet, so that nobody builds on an assumption the code does not support. It is required by the *Definition of Done — Production Module* (Technical & Business Requirements §21, §30) and is updated with every release.
 
-Last reviewed: 2026-10-01, against the code at v3.1.0.
+Last reviewed: 2026-10-01, against the code at 3.2.0 (in development).
 
 ---
 
@@ -22,7 +22,12 @@ Maturity labels follow [VERSIONING_AND_RELEASE.md](governance/VERSIONING_AND_REL
 ## 2. Platform
 
 - **Daml 3 / Canton 3.5.** The DAR targets Daml-LF 2.2 (Daml SDK 3.5.12) and is tested on Canton 3.5.19 with protocol version 35. It does not run on Canton 2.x. It has not yet been deployed to the Canton Network; [deploy/testnet](../deploy/testnet/README.md) has the smoke test and runbook for a first TestNet run (TestNet runs Canton 3.5.18 as of 2026-09-30).
-- **Token standard: holdings only.** Cash, securities, and asset positions implement the CIP-56 and CIP-0112 `Holding` interfaces, so wallets and apps can list them. They do not implement transfer instructions, allocations, or the registry's off-ledger APIs (instrument metadata, transfer and allocation factories): AryaFi positions cannot yet be moved through the token standard, wallets do not get instrument names from AryaFi, and AryaFi DvP cannot settle other token-standard assets such as Canton Coin.
+- **Token standard: holdings and transfers, not yet settlement.** Cash, securities, and asset positions implement the CIP-56 and CIP-0112 `Holding` interfaces, so wallets and apps can list them. Cash and securities can also be sent with the CIP-0112 transfer interfaces (`TransferInstructionV2`), through the bank's or custodian's `PositionTransferFactory`. Not implemented yet:
+  - allocations (`AllocationV2`): AryaFi DvP cannot settle other token-standard assets such as Canton Coin, and other apps cannot settle AryaFi positions;
+  - the V1 transfer interfaces: a wallet that supports only CIP-56 V1 can list AryaFi positions but not send them;
+  - transfers of `AssetHolding`, whose admin (the issuer) cannot move a holding without the custodian;
+  - the registry's off-ledger API (instrument metadata, factory lookup, choice context). Instead, the factory is shown on the ledger to the registry's clients, and wallets find it with an interface query.
+- **Pending transfers are visible to the receiver.** While a token-standard transfer waits for acceptance, the receiver sees the sender's locked holding, because the receiver's participant needs it to accept. A holdings query for the receiver returns it, so wallets should list a party's holdings by account owner.
 - **No uniqueness guarantees.** Daml-LF 2.2 has no contract keys, so the ledger does not stop a second `Account` with the same custodian and account ID, a second `KycAttestation` or `SanctionsAttestation` for the same authority and subject, or a second `TransferRestrictionRule` or `OwnershipRestriction` for the same ISIN. The issuing party must check its active contracts before creating one.
 - **Upgrades are checked by Canton.** Canton 3 validates every package with the same name (`aryafi-core`) as an upgrade of the versions already on the participant. A release that changes templates incompatibly must use a new package name or a separate participant. Releases are not yet checked with `dpm upgrade-check` in CI.
 
@@ -36,7 +41,7 @@ Maturity labels follow [VERSIONING_AND_RELEASE.md](governance/VERSIONING_AND_REL
 
 ## 4. Multi-Party Workflows and Compliance
 
-- **No propose/accept workflows.** Every multi-signatory contract is created with multi-party submission (`submit (actAs [...])` in Daml Script, several `actAs` parties on the Ledger API). On a real multi-participant topology, parties hosted on different participants cannot co-submit, so these workflows need proposal templates first. The reference topology in `deploy/` boots and accepts the DAR, but no cross-participant workflow is scripted yet.
+- **No propose/accept workflows.** Every multi-signatory contract is created with multi-party submission (`submit (actAs [...])` in Daml Script, several `actAs` parties on the Ledger API). On a real multi-participant topology, parties hosted on different participants cannot co-submit, so these workflows need proposal templates first. Token-standard transfers are the exception: the sender instructs and the receiver accepts in separate submissions, so neither needs the other's participant, but this has not yet been tested with the two on different participants. The reference topology in `deploy/` boots and accepts the DAR, but no cross-participant workflow is scripted yet.
 - **Compliance checks are not composable.** `IsKycValid`, `IsSanctionsClear`, `EvaluateEligibility`, `EvaluateTransfer`, and `CheckOwnershipLimit` are controlled by the policy owner. Transfer approval (`ApproveTransfer`) is a manual decision by the compliance officer; it does not evaluate the policies itself.
 - **Simplified policies.** `EvaluateTransfer` maps regulatory categories to investor flags supplied by the caller; it is not legal advice. `EligibilityPolicy.minCreditRating` is stored but not evaluated. Asset classes are free text rather than the `AssetClass` type. `OwnershipRestriction` percentages are supplied by the caller, not computed from holdings. `JurisdictionProfile` has no effective dates.
 - **Identifiers are not validated on-ledger.** ISIN, CUSIP, and LEI values are wrapped in newtypes but their check digits are not verified by any template.
@@ -57,6 +62,6 @@ Maturity labels follow [VERSIONING_AND_RELEASE.md](governance/VERSIONING_AND_REL
 
 ## 7. Test Coverage
 
-`dpm test` runs 296 scripts, all passing. Coverage: 26 of 27 templates created (96%) and 138 of 206 choices exercised (67%, including each template's implicit `Archive`). `JurisdictionProfile` is never created in tests. Property-based tests and multi-participant integration tests do not exist yet.
+`dpm test` runs 307 scripts, all passing. Coverage: 28 of 29 templates created (97%) and 142 of 210 template choices exercised (68%, including each template's implicit `Archive`). The coverage report does not count the token-standard interface choices; the tests exercise all five that AryaFi implements. `JurisdictionProfile` is never created in tests. Property-based tests and multi-participant integration tests do not exist yet.
 
 See [IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md) for how these limitations are addressed.

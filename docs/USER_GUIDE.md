@@ -52,7 +52,7 @@ Use **Next step** and **Back**, or click a step in the bar.
 * **Settlement** (Beta): cash, securities and delivery versus payment. Moves real assets on the ledger.
 * **Financing** (Experimental): loans, repos, securities lending, margin calls, pledges and collateral, funds and escrow. Tracks each agreement; assets do not move on the ledger yet. Includes a calculator for the collateral a loan needs: `loan × margin ÷ (1 − haircut)`, with illustrative haircuts.
 * **Compliance** (Experimental): KYC and sanctions, transfer rules, eligibility and limits, regulatory reports. Evaluated correctly, but not yet enforced inside transfers.
-* **Coming next**: agreeing trades across nodes, the CIP-56 token standard, financing on real assets, and an independent audit.
+* **Coming next**: agreeing trades across nodes, settling other tokens such as Canton Coin through the token standard, financing on real assets, and an independent audit.
 
 **Developers** has:
 * **Get started**: install the Daml SDK with `dpm`, build, and run the tests.
@@ -77,7 +77,7 @@ dpm version
 # Compile both packages: aryafi-core (production) and aryafi-core-test
 dpm build --all
 
-# Run the test suite (296 scripts; requires Java 17 or 21)
+# Run the test suite (307 scripts; requires Java 17 or 21)
 cd daml/test
 dpm test --all --show-coverage
 cd ../..
@@ -98,7 +98,7 @@ docker compose ps
 ### 3. Run a Scenario via Daml Script
 ```bash
 dpm script \
-  --dar daml/test/.daml/dist/aryafi-core-test-3.1.0.dar \
+  --dar daml/test/.daml/dist/aryafi-core-test-3.2.0.dar \
   --upload-dar=yes \
   --script-name AryaFi.Test.Scenarios.TreasuryDvpScenario:runTreasuryDvpScenario \
   --ledger-host localhost \
