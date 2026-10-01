@@ -5,7 +5,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
-## [Unreleased]
+## [3.2.0] - 2026-10-01
+
+An upgrade-compatible release: Canton's participant upgrade check accepts it as an upgrade of 3.1.0, so participants running 3.1.0 can move to it without migrating contracts. AryaFi cash and securities can now be sent and settled through the Canton Network Token Standard, not only listed, and a new delivery-versus-payment settles through the standard against AryaFi cash or another registry's token, with each institution on its own node. It has not yet been run against Canton Coin itself, which needs a Canton Network; see [KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md#2-platform).
 
 ### Added
 - **Token-standard transfers.** Cash and securities can be sent with the Canton Network Token Standard's V2 transfer interfaces (CIP-0112, `Splice.Api.Token.TransferInstructionV2`), so wallets and apps can move AryaFi positions as well as list them. A bank or custodian creates a `PositionTransferFactory` for its clients. The sender instructs a transfer, naming the holdings that fund it, and gets its change back at once. The amount stays in the sender's account, locked to the bank or custodian, until the receiver accepts or rejects it or the sender withdraws it. The receiver still signs every position it receives; if the receiver instructs the transfer together with the sender, it completes in one step. See [`AryaFi.Finance.TokenTransfer`](daml/src/AryaFi/Finance/TokenTransfer.daml). The interface package is vendored from Splice 0.8.3.
