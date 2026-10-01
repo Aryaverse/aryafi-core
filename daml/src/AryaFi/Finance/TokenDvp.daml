@@ -1,0 +1,248 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Delivery versus payment through the Canton Network Token Standard
+-- (CIP-0112 allocations): AryaFi's settlement agent settles a security against
+-- cash, or against any other token-standard asset such as Canton Coin, at
+-- whichever registries keep them.
+--
+-- A `DvpInstruction` is signed by seller, buyer, and agent, and moves AryaFi
+-- positions itself. A `TokenDvpInstruction` is signed by the agent alone. The
+-- seller and buyer consent through their own allocations, each made from its
+-- own node at each registry:
+--
+--   1. The agent records the trade and asks for the allocations
+--      (`RequestTokenDvpAllocations`). Seller and buyer each get a
+--      token-standard `AllocationRequest`, which their wallets show, listing
+--      the allocations to make.
+--   2. Each allocates its sides of the legs at each registry: the seller sends
+--      the security and receives the payment, the buyer the reverse.
+--   3. The agent settles (`ExecuteTokenDvp`) by calling every registry's
+--      `SettlementFactory_SettleBatch` in one transaction. Each registry
+--      settles only if the allocations authorize exactly both sides of its
+--      legs, so both legs settle or neither does.
+--   4. Until then, the agent can cancel the DvP and the allocations it was
+--      given (`CancelTokenDvp`), and each party can withdraw its own.
+--
+-- The trade ID identifies the settlement in every allocation; the agent must
+-- not reuse it.
+module AryaFi.Finance.TokenDvp where
+
+import qualified DA.Map as Map
+import DA.Assert (assertWithinDeadline)
+import DA.Foldable (forA_)
+import DA.List (sort)
+import DA.Optional (fromSome)
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
+import Splice.Api.Token.MetadataV1 (ExtraArgs, emptyMetadata)
+import Splice.Api.Token.AllocationV2
+import Splice.Api.Token.AllocationRequestV2
+import AryaFi.Common.Errors (require, requireNonEmpty)
+import AryaFi.Common.Identifiers (TradeId(..))
+import AryaFi.Common.Types (SettlementStatus(..))
+import AryaFi.Finance.TokenAllocation (legSides)
+
+-- | One leg of the trade, with the registry that settles it.
+data DvpLeg = DvpLeg
+  with
+    admin : Party
+    -- ^ The instrument's registry: the custodian, the bank, or another token's admin.
+    leg : TransferLeg
+  deriving (Eq, Show)
+
+-- | What the agent settles at one registry: its settlement factory, the
+-- allocations made there, and the choice context the registry asks for.
+data RegistryBatch = RegistryBatch
+  with
+    factoryCid : ContractId SettlementFactory
+    allocationCids : [ContractId Allocation]
+    extraArgs : ExtraArgs
+  deriving (Eq, Show)
+
+-- | Result of a settled token-standard DvP.
+data TokenDvpResult = TokenDvpResult
+  with
+    instructionCid : ContractId TokenDvpInstruction
+    -- ^ The instruction, now Settled.
+    batchResults : [(Party, SettlementFactory_SettleBatchResult)]
+    -- ^ Each registry's result, with the holdings it created.
+  deriving (Eq, Show)
+
+-- ---------------------------------------------------------------------------
+-- TokenDvpInstruction Template
+-- ---------------------------------------------------------------------------
+
+-- | A delivery-versus-payment trade settled through token-standard
+-- allocations. The delivery leg moves the security from the seller to the
+-- buyer; the payment leg moves the consideration from the buyer to the seller.
+template TokenDvpInstruction
+  with
+    settlementAgent : Party
+    -- ^ Executes the settlement; the allocations name it as executor.
+    seller : Party
+    buyer : Party
+    tradeId : TradeId
+    -- ^ The settlement ID in every allocation.
+    delivery : DvpLeg
+    payment : DvpLeg
+    requestedAt : Time
+    settleBefore : Time
+    -- ^ The settlement deadline: allocations are requested with it, and the
+    --   agent cannot settle after it.
+    status : SettlementStatus
+    observers : [Party]
+    -- ^ Additional observers (e.g. CSD, trade repository, regulator).
+  where
+    signatory settlementAgent
+    observer seller, buyer, observers
+
+    ensure
+      delivery.leg.sender.owner == Some seller && delivery.leg.receiver.owner == Some buyer
+      && payment.leg.sender.owner == Some buyer && payment.leg.receiver.owner == Some seller
+      && delivery.leg.amount > 0.0 && payment.leg.amount > 0.0
+      && delivery.leg.transferLegId /= payment.leg.transferLegId
+      && requestedAt < settleBefore
+
+    -- | Ask the seller and the buyer for their allocations: each gets a
+    -- token-standard AllocationRequest listing the allocations to make.
+    nonconsuming choice RequestTokenDvpAllocations : [ContractId TokenDvpAllocationRequest]
+      controller settlementAgent
+      do
+        require (status == PendingSettlement) "Allocations can only be requested for a pending DvP"
+        forA [seller, buyer] \party -> create TokenDvpAllocationRequest with
+          settlementAgent
+          party
+          settlement = settlementInfo this
+          allocations = requestedAllocations this party
+          requestedAt
+          settleAt = settleBefore
+
+    -- | Settle both legs in one transaction through each registry's
+    -- SettlementFactory_SettleBatch, one batch per registry, before the
+    -- deadline. If any registry refuses its batch, nothing settles. Archives
+    -- the allocation requests still open.
+    choice ExecuteTokenDvp : TokenDvpResult
+      with
+        batches : [RegistryBatch]
+        openRequests : [ContractId TokenDvpAllocationRequest]
+      controller settlementAgent
+      do
+        require (status == PendingSettlement) "DvP can only be executed from PendingSettlement status"
+        assertWithinDeadline "settleBefore" settleBefore
+        let legsByRegistry = Map.fromListWithR (flip (++)) [(l.admin, [l.leg]) | l <- [delivery, payment]]
+        -- Each factory names its registry; the agent cannot fetch another
+        -- registry's factory, so it asks with the standard's PublicFetch.
+        admins <- forA batches \batch ->
+          (.admin) <$> exercise batch.factoryCid SettlementFactory_PublicFetch with actors = [settlementAgent]
+        require (sort admins == Map.keys legsByRegistry) "DvP: give exactly one batch for each registry"
+        batchResults <- forA (zip admins batches) \(admin, batch) -> do
+          result <- exercise batch.factoryCid SettlementFactory_SettleBatch with
+            settlement = settlementInfo this
+            transferLegs = fromSome (Map.lookup admin legsByRegistry)
+            allocations =
+              [ FinalizedAllocation with allocationCid; extraTransferLegSides = []; nextIterationFunding = None
+              | allocationCid <- batch.allocationCids ]
+            actors = [settlementAgent]
+            extraArgs = batch.extraArgs
+          pure (admin, result)
+        forA_ openRequests archive
+        instructionCid <- create this with status = Settled
+        pure TokenDvpResult with instructionCid; batchResults
+
+    -- | Cancel the DvP before settlement: cancel the given allocations, which
+    -- returns their funding, and archive the allocation requests still open.
+    choice CancelTokenDvp : ContractId TokenDvpInstruction
+      with
+        reason : Text
+        allocations : [(ContractId Allocation, ExtraArgs)]
+        openRequests : [ContractId TokenDvpAllocationRequest]
+      controller settlementAgent
+      do
+        require (status == PendingSettlement) "Can only cancel a PendingSettlement DvP"
+        requireNonEmpty reason "reason"
+        forA_ allocations \(allocationCid, extraArgs) -> do
+          allocation <- fetch allocationCid
+          require ((view allocation).settlement == settlementInfo this) "DvP: an allocation is for another settlement"
+          exercise allocationCid Allocation_Cancel with actors = [settlementAgent]; extraArgs
+        forA_ openRequests archive
+        create this with status = Cancelled reason
+
+-- | How the allocations identify this trade.
+settlementInfo : TokenDvpInstruction -> SettlementInfo
+settlementInfo dvp = SettlementInfo with
+  executors = [dvp.settlementAgent]
+  id = unTradeId dvp.tradeId
+  cid = None
+  meta = emptyMetadata
+
+-- | The allocations `party` makes: one per registry and account, with its
+-- sides of the legs there.
+requestedAllocations : TokenDvpInstruction -> Party -> [AllocationSpecification]
+requestedAllocations dvp party =
+  [ AllocationSpecification with
+      admin
+      authorizer
+      transferLegSides
+      settlementDeadline = Some dvp.settleBefore
+      nextIterationFunding = None
+      committed = False
+      meta = emptyMetadata
+  | ((admin, authorizer), transferLegSides) <- Map.toList bySide ]
+  where
+    bySide : Map.Map (Party, HoldingV2.Account) [TransferLegSide]
+    bySide = Map.fromListWithR (flip (++))
+      [ ((l.admin, account), [side])
+      | l <- [dvp.delivery, dvp.payment]
+      , (account, side) <- legSides l.leg
+      , account.owner == Some party ]
+
+-- ---------------------------------------------------------------------------
+-- TokenDvpAllocationRequest Template
+-- ---------------------------------------------------------------------------
+
+-- | A request to one party to make its allocations for a token-standard DvP.
+-- Wallets show it through the token standard's AllocationRequest interface.
+template TokenDvpAllocationRequest
+  with
+    settlementAgent : Party
+    party : Party
+    -- ^ The party asked to allocate.
+    settlement : SettlementInfo
+    allocations : [AllocationSpecification]
+    requestedAt : Time
+    settleAt : Time
+  where
+    signatory settlementAgent
+    observer party
+
+    interface instance AllocationRequest for TokenDvpAllocationRequest where
+      view = AllocationRequestView with
+        originalRequestCid = None
+        settlement
+        allocations
+        requestedAt
+        settleAt = Some settleAt
+        availableActions = Map.fromList [(ARA_Accept, [[party]]), (ARA_Reject, [[party]])]
+        meta = emptyMetadata
+
+      -- | Tell the agent that the party has made, or will make, its allocations.
+      allocationRequest_acceptImpl self arg = do
+        require (party `elem` arg.actors) "Only the party asked can accept the request"
+        archive (fromInterfaceContractId @TokenDvpAllocationRequest self)
+        pure AllocationRequest_AcceptResult with meta = emptyMetadata
+
+      -- | Tell the agent that the party will not allocate.
+      allocationRequest_rejectImpl self arg = do
+        require (party `elem` arg.actors) "Only the party asked can reject the request"
+        archive (fromInterfaceContractId @TokenDvpAllocationRequest self)
+        pure AllocationRequest_RejectResult with meta = emptyMetadata
+
+      -- | Withdraw the request, as the settlement agent.
+      allocationRequest_withdrawImpl self arg = do
+        require (settlementAgent `elem` arg.actors) "Only the settlement agent can withdraw the request"
+        archive (fromInterfaceContractId @TokenDvpAllocationRequest self)
+        pure AllocationRequest_WithdrawResult with meta = emptyMetadata
+
+      allocationRequest_acceptExtraObservers _ = []
+      allocationRequest_rejectExtraObservers _ = []
+      allocationRequest_withdrawExtraObservers _ = []

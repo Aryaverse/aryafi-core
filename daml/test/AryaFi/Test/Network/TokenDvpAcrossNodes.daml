@@ -1,0 +1,186 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | A token-standard DvP with every institution on its own participant node,
+-- as on a real network: custodian, bank, seller, buyer, and settlement agent
+-- each submit only from their own node, and no submission acts for parties on
+-- two nodes.
+--
+-- The positions are issued across nodes too: a registry creates a position in
+-- its own inventory account and sends it with a token-standard transfer, which
+-- the owner accepts from its node.
+--
+-- Run it against the deploy/ topology with a participant config that names
+-- the nodes, for example:
+--
+--   dpm script --dar daml/test/.daml/dist/aryafi-core-test-3.2.0.dar \
+--     --script-name AryaFi.Test.Network.TokenDvpAcrossNodes:runTokenDvpAcrossNodes \
+--     --participant-config participants.json --input-file nodes.json
+module AryaFi.Test.Network.TokenDvpAcrossNodes where
+
+import DA.Foldable (forA_)
+import DA.List (unique)
+import DA.Time (addRelTime, days, minutes, seconds)
+import Daml.Script
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
+import Splice.Api.Token.MetadataV1 (emptyMetadata)
+import Splice.Api.Token.AllocationV2 (Allocation, TransferLeg(..))
+import Splice.Api.Token.AllocationRequestV2 (AllocationRequest)
+import Splice.Api.Token.TransferInstructionV2
+import AryaFi.Common.Identifiers
+import AryaFi.Common.Types (SettlementStatus(..))
+import AryaFi.Finance.Cash
+import AryaFi.Finance.Security
+import AryaFi.Finance.TokenDvp
+import AryaFi.Finance.TokenTransfer
+import AryaFi.Test.Scenarios.DvpSettlementTest (bondIsin)
+import AryaFi.Test.Scenarios.TokenDvpTest
+
+-- | The participant node of each institution, as named in the participant config.
+data NodesInput = NodesInput
+  with
+    runId : Text
+    -- ^ Names this run's parties, so reruns do not collide.
+    custodianNode : Text
+    bankNode : Text
+    sellerNode : Text
+    buyerNode : Text
+    agentNode : Text
+
+-- | Retry `check` until it returns a value: contracts reach other nodes
+-- shortly after the submitting node.
+eventually : Text -> Script (Optional a) -> Script a
+eventually = retry 60
+
+retry : Int -> Text -> Script (Optional a) -> Script a
+retry attempts what check = do
+  found <- check
+  case found of
+    Some a -> pure a
+    None | attempts > 0 -> sleep (seconds 1) >> retry (attempts - 1) what check
+    None -> abort ("Timed out waiting for " <> what)
+
+-- | `party`'s holdings, once they are exactly `expected`.
+holdingsAre : Party -> [(Text, Decimal, Bool)] -> Script ()
+holdingsAre party expected = eventually ("the holdings of " <> show party) do
+  holdings <- ownHoldings party
+  pure (if holdings == expected then Some () else None)
+
+-- | A registry issues `amount` to `owner`: it creates the position in its own
+-- inventory account, then sends it with a token-standard transfer that the
+-- owner accepts from its own node.
+issue : Party -> Party -> ContractId HoldingV2.Holding -> Text -> Decimal -> ContractId PositionTransferFactory -> Script ()
+issue registry owner inventory account amount factory = do
+  now <- getTime
+  Some holding <- queryInterfaceContractId registry inventory
+  result <- submit registry do
+    exerciseCmd (toInterfaceContractId @TransferFactory factory) TransferFactory_Transfer with
+      transfer = Transfer with
+        sender = holding.account
+        receiver = HoldingV2.Account with owner = Some owner; provider = Some registry; id = account
+        amount
+        instrumentId = holding.instrumentId
+        requestedAt = addRelTime now (minutes (-1))
+        executeBefore = addRelTime now (days 1)
+        inputHoldingCids = [inventory]
+        meta = emptyMetadata
+      actors = [registry]
+      extraArgs = noExtraArgs
+  instructionCid <- case result.output of
+    TransferInstructionResult_Pending cid -> pure cid
+    other -> abort ("Expected a pending transfer, got " <> show other)
+  _ <- eventually "the transfer instruction on the owner's node" (queryInterfaceContractId owner instructionCid)
+  _ <- submit owner do
+    exerciseCmd instructionCid TransferInstruction_Accept with actors = [owner]; extraArgs = noExtraArgs
+  pure ()
+
+runTokenDvpAcrossNodes : NodesInput -> Script ()
+runTokenDvpAcrossNodes input = do
+  let on name node = allocatePartyOn (name <> "-" <> input.runId) (ParticipantName node)
+  custodian <- on "Custodian" input.custodianNode
+  bank <- on "Bank" input.bankNode
+  seller <- on "Seller" input.sellerNode
+  buyer <- on "Buyer" input.buyerNode
+  agent <- on "Agent" input.agentNode
+  -- Let every node learn where the new parties are hosted
+  sleep (seconds 5)
+
+  -- Each institution is hosted on its own node, and only there
+  let hosted = [(custodian, input.custodianNode), (bank, input.bankNode), (seller, input.sellerNode), (buyer, input.buyerNode), (agent, input.agentNode)]
+  assertMsg "Every institution has its own node" (unique (map snd hosted))
+  forA_ hosted \(_, node) -> do
+    known <- listKnownPartiesOn (ParticipantName node)
+    let local = [d.party | d <- known, d.isLocal]
+    assertMsg ("Node " <> node <> " hosts exactly one of the institutions")
+      ([p | (p, _) <- hosted, p `elem` local] == [p | (p, n) <- hosted, n == node])
+
+  -- Each registry issues to its client from its own node
+  let clients = [seller, buyer, agent]
+  custodianTransfers <- submit custodian do
+    createCmd PositionTransferFactory with admin = custodian; clients = custodian :: clients
+  bankTransfers <- submit bank do
+    createCmd PositionTransferFactory with admin = bank; clients = bank :: clients
+  bondInventory <- submit custodian do
+    createCmd SecurityPosition with
+      custodian; owner = custodian; accountId = AccountId "INVENTORY"; isin = bondIsin
+      cusip = Some (CUSIP "912828ZM5"); instrumentName = "US Treasury 4.25% Nov 2026"
+      instrumentType = GovernmentBond; quantity = 5000000.0; couponRate = Some 0.0425
+      couponType = Some FixedCoupon; dayCountConvention = None; maturityDate = None
+      seniority = Some Senior; isLocked = False; lockReference = None; lockHolder = None
+      csdRef = None; observers = []
+  cashInventory <- submit bank do
+    createCmd CashPosition with
+      bank; owner = bank; accountId = AccountId "INVENTORY"; currency = "USD"; amount = 1000000.0
+      isLocked = False; lockReference = None; lockHolder = None; observers = []
+  issue custodian seller (toInterfaceContractId bondInventory) "ACC-SELLER-SEC" 5000000.0 custodianTransfers
+  issue bank buyer (toInterfaceContractId cashInventory) "ACC-BUYER-CASH" 1000000.0 bankTransfers
+  holdingsAre seller [(bond, 5000000.0, False)]
+  holdingsAre buyer [("USD", 1000000.0, False)]
+
+  -- The registries' allocation factories
+  custodianRegistry <- aryafiRegistry custodian clients
+  bankRegistry <- aryafiRegistry bank clients
+
+  -- The agent alone records the trade and asks for allocations
+  now <- getTime
+  let account registry owner id = HoldingV2.Account with owner = Some owner; provider = Some registry; id
+  dvpCid <- submit agent do
+    createCmd TokenDvpInstruction with
+      settlementAgent = agent; seller; buyer
+      tradeId = TradeId ("TDVP-NODES-" <> input.runId)
+      delivery = DvpLeg with
+        admin = custodian
+        leg = TransferLeg with
+          transferLegId = "delivery"; sender = account custodian seller "ACC-SELLER-SEC"
+          receiver = account custodian buyer "ACC-BUYER-SEC"; amount = 1000000.0
+          instrumentId = bond; meta = emptyMetadata
+      payment = DvpLeg with
+        admin = bank
+        leg = TransferLeg with
+          transferLegId = "payment"; sender = account bank buyer "ACC-BUYER-CASH"
+          receiver = account bank seller "ACC-SELLER-CASH"; amount = 995000.0
+          instrumentId = "USD"; meta = emptyMetadata
+      requestedAt = addRelTime now (minutes (-1))
+      settleBefore = addRelTime now (days 1)
+      status = PendingSettlement
+      observers = []
+  requests <- submit agent do exerciseCmd dvpCid RequestTokenDvpAllocations
+  let f = Fixture with custodian = custodianRegistry; payments = bankRegistry; seller; buyer; agent; dvpCid; requests
+
+  -- Seller and buyer each allocate from their own node
+  forA_ [seller, buyer] \party -> do
+    _ <- eventually ("the allocation request on the node of " <> show party) do
+      found <- queryInterface @AllocationRequest party
+      pure (if length found == 1 then Some () else None)
+    allocateAsRequested f party
+
+  -- The agent settles both registries in one transaction from its node
+  _ <- eventually "all four allocations on the agent's node" do
+    found <- queryInterface @Allocation agent
+    pure (if length found == 4 then Some () else None)
+  result <- execute f
+  Some dvp <- queryContractId agent result.instructionCid
+  assertMsg "The DvP is settled" (dvp.status == Settled)
+
+  holdingsAre seller [(bond, 4000000.0, False), ("USD", 995000.0, False)]
+  holdingsAre buyer [(bond, 1000000.0, False), ("USD", 5000.0, False)]

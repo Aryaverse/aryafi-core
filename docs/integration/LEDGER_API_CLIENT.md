@@ -97,7 +97,7 @@ Many AryaFi contracts (such as `PaymentInstruction`, `AssetTransferRequest`, and
        │    Transaction committed                               │
 ```
 
-A single submission cannot act for parties hosted on different participants. Until AryaFi provides propose/accept workflows (see [KNOWN_LIMITATIONS.md §4](../KNOWN_LIMITATIONS.md#4-multi-party-workflows-and-compliance)), all signatories of such a contract must be hosted on the submitting participant.
+A single submission cannot act for parties hosted on different participants. Until AryaFi provides propose/accept workflows (see [KNOWN_LIMITATIONS.md §4](../KNOWN_LIMITATIONS.md#4-multi-party-workflows-and-compliance)), all signatories of such a contract must be hosted on the submitting participant. Token-standard transfers and `TokenDvpInstruction` do not have this limit (§6.3): each party submits from its own participant.
 
 ---
 
@@ -294,6 +294,8 @@ The buyer allocates the receiving side of the bond leg with no holdings, and the
 ```
 
 Each registry settles only if the allocations authorize exactly both sides of each of its legs, and only for the settlement's executors. Until then the agent can cancel an allocation (`Allocation_Cancel`) and its owner can withdraw it (`Allocation_Withdraw`). These requests were run against a Canton 3.5 participant.
+
+AryaFi's `TokenDvpInstruction` (`#aryafi-core:AryaFi.Finance.TokenDvp:TokenDvpInstruction`) does this for a settlement agent. The agent creates it alone and exercises `RequestTokenDvpAllocations`; seller and buyer then see an allocation request (`#splice-api-token-allocation-request-v2:Splice.Api.Token.AllocationRequestV2:AllocationRequest`) listing the allocations to make. `ExecuteTokenDvp` takes one batch per registry (its settlement factory, the allocations made there, and the choice context the registry asks for) and settles them in one transaction. A registry other than AryaFi's, such as Canton Coin's, supplies the choice context and the contracts to disclose through its off-ledger API; pass them in the batch's `extraArgs` and the submission's `disclosedContracts`.
 
 ---
 

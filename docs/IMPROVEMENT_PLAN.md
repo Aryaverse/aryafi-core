@@ -7,14 +7,14 @@
 
 ## 1. Where We Are
 
-v2.0.0 made the library honest and working, and v3.0.0 moved it to Daml 3 / Canton 3.5, the platform the Canton Network runs. It builds with `-Wall -Werror`, 319 test scripts pass, and atomic DvP moves real positions on a real five-participant Canton 3.5 topology. Authorization defects are fixed: receiver-authorized transfers, locks held by a named lock holder, and no party able to reduce its own obligation. The docs and website now describe the code as it is.
+v2.0.0 made the library honest and working, and v3.0.0 moved it to Daml 3 / Canton 3.5, the platform the Canton Network runs. It builds with `-Wall -Werror`, 326 test scripts pass, and atomic DvP moves real positions on a real five-participant Canton 3.5 topology. Authorization defects are fixed: receiver-authorized transfers, locks held by a named lock holder, and no party able to reduce its own obligation. The docs and website now describe the code as it is.
 
 What v3.0.0 is **not** yet is what the requirements call for: *"software infrastructure — not a collection of sample contracts."* Today, only DvP composes primitives. Every other workflow (loan, repo, securities lending, margin, pledge, escrow, subscription, redemption, transfer) is a standalone status record that references assets by text. Compliance policies are correct but cannot be called from those workflows. Every multi-party contract depends on co-submission, which does not work across separate participants.
 
 | Requirement (TBRD) | v3.0.0 | Gap closed by |
 |:---|:---|:---|
 | Composable primitives (§5, §9) | DvP composes Cash + Security; nothing else does | Workstreams 1, 4 |
-| Synchronized DvP (§3, §26) | Done, Model 1, single-participant tested | Workstream 2 (cross-participant) |
+| Synchronized DvP (§3, §26) | Done, Model 1. `DvpInstruction` single-participant tested; the token-standard DvP runs with each institution on its own participant | Workstream 2 (cross-participant for the other workflows) |
 | Loan references compliance via controlled interfaces (§10) | No | Workstream 3 |
 | Repo substitution re-runs eligibility (§11) | No | Workstreams 3, 5 |
 | Generic, policy-driven transfer engine (§12) | Manual officer approval | Workstream 3 |
@@ -47,7 +47,7 @@ The options as they were weighed:
 **1. Holdings standard.** Replace the three separate position templates (`CashPosition`, `SecurityPosition`, `AssetHolding`) with one holding model behind interfaces: *Holding* (view: owner, instrument, amount, custodian), *Lockable* (lock to a holder), and *Transferable*. On Option B, implement the CIP-56 holding and allocation interfaces. Everything else in the library will hold and move assets through these interfaces.
 *Done when:* every workflow that moves value does so through a holding interface, and DvP settles any pair of holdings (cash for security, security for security).
 *Progress (3.1.0):* the three position templates implement the token standard's `Holding` interface, V1 (CIP-56) and V2 (CIP-0112), whose account model (owner, provider, account ID) matches AryaFi's.
-*Progress (3.2.0):* cash and securities can be sent with the V2 transfer interfaces (`TransferInstructionV2`): the bank or custodian creates a transfer factory for its clients, the sender instructs a transfer, and the receiver accepts. They can also be settled with the V2 allocation interfaces (`AllocationV2`): each account allocates its sides of a trade's legs at each registry, and the settlement agent settles every registry's batch in one transaction. Next: settle AryaFi DvP through allocations, so it can settle other tokens such as Canton Coin; then the registry's off-ledger APIs.
+*Progress (3.2.0):* cash and securities can be sent with the V2 transfer interfaces (`TransferInstructionV2`): the bank or custodian creates a transfer factory for its clients, the sender instructs a transfer, and the receiver accepts. They can also be settled with the V2 allocation interfaces (`AllocationV2`): each account allocates its sides of a trade's legs at each registry, and the settlement agent settles every registry's batch in one transaction. `TokenDvpInstruction` settles a DvP through allocations at any V2 registry; the tests settle a bond against Splice's reference V2 token as well as AryaFi cash. Next: settle against Canton Coin on a Canton Network, with the choice context and disclosed contracts from its registry's off-ledger API; and AryaFi's own off-ledger registry API.
 
 **2. Propose/accept for every multi-signatory workflow.** Add a proposal template (or a delegation role contract) for each agreement that today needs multi-party submission: DvP instructions, loans, repos, securities loans, margin calls, pledges, payment instructions, transfers. This is what makes the library usable across separate participants; it is the single largest blocker to real deployment.
 *Done when:* the reference scenarios run with each institution's party on its own participant in `deploy/` (see Workstream 7).
