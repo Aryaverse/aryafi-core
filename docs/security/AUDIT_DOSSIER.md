@@ -8,8 +8,8 @@ This dossier is the briefing package for an independent security review of **Ary
 - **Language / platform**: Daml SDK 3.5.12 (Daml-LF 2.2), deployed on Canton 3.5 (protocol version 35).
 - **Source tree in scope**:
   - `daml/src/AryaFi/Common/`: Domain types, day-count conventions, error helpers, identifiers, audit events, policy decisions.
-  - `daml/src/AryaFi/Finance/`: `CashPosition`, `SecurityPosition`, `AssetHolding`, `Account`, `InstitutionalParty`, `CollateralPosition`, `FinancialObligation`, `PaymentInstruction`, `DvpInstruction`, and the Canton Network Token Standard implementation: the `Holding` views (`TokenStandard`), `PositionTransferFactory` and `PositionTransferInstruction` (`TokenTransfer`), `PositionAllocationFactory` and `PositionAllocation` (`TokenAllocation`), and their shared helpers (`TokenRegistry`).
-  - The token-standard interface packages in `daml/deps/splice` are vendored from Splice 0.8.3 and are out of scope.
+  - `daml/src/AryaFi/Finance/`: `CashPosition`, `SecurityPosition`, `AssetHolding`, `Account`, `InstitutionalParty`, `CollateralPosition`, `FinancialObligation`, `PaymentInstruction`, `DvpInstruction`, and the Canton Network Token Standard implementation: the `Holding` views (`TokenStandard`), `PositionTransferFactory` and `PositionTransferInstruction` (`TokenTransfer`), `PositionAllocationFactory` and `PositionAllocation` (`TokenAllocation`), `TokenDvpInstruction` and `TokenDvpAllocationRequest` (`TokenDvp`), and their shared helpers (`TokenRegistry`).
+  - The token-standard interface packages in `daml/deps/splice` are vendored from Splice 0.8.3 and are out of scope, as is Splice's reference token (`splice-test-token-v2`), which only the tests use.
   - `daml/src/AryaFi/Contracts/`: `InstitutionalLoan`, `RepoAgreement`, `ReverseRepoPosition`, `SecuritiesLendingAgreement`, `MarginCall`, `AssetPledge`, `ConditionalEscrow`, `AssetTransferRequest`, `FundSubscription`, `AssetRedemption`.
   - `daml/src/AryaFi/Compliance/`: `KycAttestation`, `SanctionsAttestation`, `JurisdictionProfile`, `EligibilityPolicy`, `TransferRestrictionRule`, `OwnershipRestriction`, `RegulatoryReportRecord`.
 - **Out of scope**: the test package under `daml/test/AryaFi/Test/`, the website, and the deployment configuration.
@@ -61,9 +61,9 @@ Each invariant below is argued from the code and exercised by a named test. They
 
 *Argument*: `ExecuteDvpSettlement` fetches both locked legs, checks owner, account, ISIN, quantity, currency, amount, lock holder, and lock reference against the instruction, then exercises `SettleLockedSecurity` and `SettleLockedCash` and records `Settled`, all within one Daml transaction. Any failed check aborts the whole transaction.
 
-Token-standard settlement is atomic in the same way when the settlement agent settles every registry's batch in one transaction: if any registry rejects its batch, the transaction fails and no registry settles.
+Token-standard settlement is atomic in the same way when the settlement agent settles every registry's batch in one transaction, as `ExecuteTokenDvp` does: if any registry rejects its batch, the transaction fails and no registry settles. `ExecuteTokenDvp` first checks that it has exactly one batch for each registry of the trade's legs.
 
-*Tests*: `Scenarios/DvpSettlementTest.daml` (`testDvpFullLifecycle`, `testDvpRejectsMismatchedLegs`, `testCannotReExecuteSettledDvp`), `Scenarios/TreasuryDvpScenario.daml`, `Unit/TokenAllocationTest.daml` (`testDvpThroughAllocations`, `testSettlementChecks`).
+*Tests*: `Scenarios/DvpSettlementTest.daml` (`testDvpFullLifecycle`, `testDvpRejectsMismatchedLegs`, `testCannotReExecuteSettledDvp`), `Scenarios/TreasuryDvpScenario.daml`, `Unit/TokenAllocationTest.daml` (`testDvpThroughAllocations`, `testSettlementChecks`), `Scenarios/TokenDvpTest.daml` (`testTokenDvpWithAryaFiCash`, `testTokenDvpWithAnotherToken`, `testTokenDvpNeedsBothSides`).
 
 ### Invariant 5: No Party Reduces Its Own Obligation
 *Claim*: An obligor cannot record its own payment, and a creditor cannot unilaterally increase what is owed.
@@ -75,7 +75,7 @@ Token-standard settlement is atomic in the same way when the settlement agent se
 ### Invariant 6: Consent for Ownership and Disclosure
 *Claim*: No position is created for a party without its authority, and bilateral agreements are only disclosed with both counterparties' consent.
 
-*Argument*: transfers are controlled by owner, bank/custodian, and the receiving owner; a token-standard transfer reaches the receiver only when the receiver accepts it or instructs it with the sender, and only between clients the registry listed on its factory; token-standard settlement creates a position only for an account whose owner allocated to receive it; `Add*Observer` choices on loans, repos, securities loans, margin calls, pledges, and collateral positions are controlled by both principals; observers are cleared on transfer.
+*Argument*: transfers are controlled by owner, bank/custodian, and the receiving owner; a token-standard transfer reaches the receiver only when the receiver accepts it or instructs it with the sender, and only between clients the registry listed on its factory; token-standard settlement creates a position only for an account whose owner allocated to receive it, so a `TokenDvpInstruction`, signed by the agent alone, moves nothing the seller and buyer did not allocate; `Add*Observer` choices on loans, repos, securities loans, margin calls, pledges, and collateral positions are controlled by both principals; observers are cleared on transfer.
 
 *Tests*: `Authorization/MultiSignatoryTest.daml`, `Privacy/ObserverPrivacyTest.daml`, `Scenarios/EscrowScenario.daml` (`testPledgeAddObserver`), `Unit/TokenTransferTest.daml` (`testInstructionActors`, `testFactoryClients`, `testTransferRejected`), `Unit/TokenAllocationTest.daml` (`testSettlementChecks`, `testAllocateChecks`, `testAllocationVisibility`).
 
@@ -87,14 +87,14 @@ Token-standard settlement is atomic in the same way when the settlement agent se
 
 | Measure | Result |
 |:---|:---|
-| Test scripts | 319, all passing |
-| Templates created | 30 of 31 (96.8%); `JurisdictionProfile` is never created |
-| Choices exercised | 146 of 215 (67.9%), counting each template's implicit `Archive`; the report does not count the token-standard interface choices, which the tests exercise |
+| Test scripts | 326, all passing |
+| Templates created | 32 of 33 in `aryafi-core` (97.0%); `JurisdictionProfile` is never created |
+| Choices exercised | 150 of 220 in `aryafi-core` (68.2%), counting each template's implicit `Archive`; the report does not count the token-standard interface choices, which the tests exercise |
 
 | Suite | Files | Focus |
 |:---|:---|:---|
 | `Unit/` | 14 | Types, day counts, primitives, contracts, compliance policies, token-standard holdings, transfers, and settlement |
-| `Scenarios/` | 9 | End-to-end DvP, repo, loan, securities lending, treasury, escrow, private credit, transfer |
+| `Scenarios/` | 10 | End-to-end DvP (including through the token standard), repo, loan, securities lending, treasury, escrow, private credit, transfer |
 | `Negative/` | 3 | Unauthorized submitters, compliance violations, invalid state transitions |
 | `Authorization/` | 1 | Multi-signatory consent |
 | `Privacy/` | 1 | Observer visibility from each party's viewpoint |
