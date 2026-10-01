@@ -9,6 +9,8 @@ In Daml and Canton, contract security is governed by three primitives:
 
 The tables below list every template in the production modules (`daml/src/AryaFi/{Common,Finance,Contracts,Compliance}`) with its signatories, observers, choices, and controllers. They are **generated from the Daml source** by `scripts/gen_authorization_matrix.py`, so they describe what the code enforces rather than intended behaviour.
 
+Choices of the Canton Network Token Standard interfaces (`TransferFactory_*`, `TransferInstruction_*`) are controlled by their `actors` argument. For these, the table names the party the implementation requires among the actors.
+
 ---
 
 ## 2. Authorization Matrix (generated from source)
@@ -89,6 +91,13 @@ The tables below list every template in the production modules (`daml/src/AryaFi
 |  |  |  | `RetrySettlement` | `settlementAgent, seller, buyer` | Retry a failed settlement instruction |
 |  |  |  | `AddDvpObserver` | `settlementAgent` | Add an observer to this DvP instruction |
 |  |  |  | `IsFinalized` *(read-only)* | `settlementAgent` | Nonconsuming query: has this instruction been finalized (settled, failed, or cancelled)? |
+| **`PositionTransferFactory`** (TokenTransfer.daml) | `admin` | `clients` | `TransferFactory_Transfer` | `actors, including sender` | Instruct a transfer between two clients' accounts (see instructTransfer) |
+|  |  |  | `TransferFactory_PublicFetch` *(read-only)* | `actors` | Return the factory's view: its admin |
+|  |  |  | `AddTransferFactoryClient` | `admin` | Let another account owner send and receive through this factory |
+|  |  |  | `RemoveTransferFactoryClient` | `admin` | Stop an account owner sending and receiving through this factory |
+| **`PositionTransferInstruction`** (TokenTransfer.daml) | `admin, sender` | `receiver` | `TransferInstruction_Accept` | `actors, including receiver` | Deliver the locked amount to the receiver's account, before executeBefore |
+|  |  |  | `TransferInstruction_Reject` | `actors, including receiver` | Refuse the transfer: the amount is unlocked for the sender |
+|  |  |  | `TransferInstruction_Withdraw` | `actors, including sender` | Take the transfer back: the amount is unlocked for the sender |
 
 ### Financial Contracts
 
@@ -220,12 +229,13 @@ The tables below list every template in the production modules (`daml/src/AryaFi
 These principles hold for the current code and are covered by the negative and authorization tests in `daml/test/AryaFi/Test`:
 
 1. **No position is imposed on a party without its consent.** `TransferCash`, `TransferSecurity`, and `TransferAsset` require the current owner, the holding institution (bank or custodian), and the receiving owner. The receiver becomes a signatory of the new position, so its authority is required.
-2. **Locks bind to a named lock holder.** `LockCash` / `LockSecurity` / `LockAsset` are authorized by owner and bank/custodian and name a lock holder. Only the lock holder can release the lock, or deliver the position to a receiver who co-authorizes (`SettleLockedCash` / `SettleLockedSecurity`). Neither owner nor custodian can withdraw a leg from an agreed settlement.
-3. **Atomic DvP.** `ExecuteDvpSettlement` validates both locked legs against the instruction (owner, account, ISIN, quantity, currency, amount, lock holder, lock reference) and delivers both in one transaction. The settlement agent cannot change economic terms; the instruction is signed by seller and buyer.
-4. **No party reduces its own obligation.** Loan repayments and interest payments are recorded by the lender; loan interest is computed from rate, day count, and ledger time; securities-lending fees need both counterparties to accrue and the lender to confirm payment; margin fulfilment needs the caller to confirm receipt; collateral release on a securities return is capped pro rata.
-5. **Disclosure of bilateral agreements needs both counterparties.** Adding an observer to a loan, repo, securities loan, margin call, pledge, or collateral position requires both principals.
-6. **Timestamps come from the ledger.** KYC verification, sanctions screening, pledge enforcement, redemption settlement, and report amendments record ledger time rather than a caller-supplied value.
-7. **Compliance officers cannot move value.** Their choices only approve, reject, or evaluate; they hold no controller rights over positions.
+2. **Token-standard transfers keep the receiver's consent.** By creating a `PositionTransferFactory`, a bank or custodian agrees in advance to transfers between its clients' accounts. The sender instructs a transfer; the receiver still signs the position it receives, either by accepting the pending `PositionTransferInstruction` or by instructing the transfer together with the sender. Until then the amount stays in the sender's account, locked to the registry.
+3. **Locks bind to a named lock holder.** `LockCash` / `LockSecurity` / `LockAsset` are authorized by owner and bank/custodian and name a lock holder. Only the lock holder can release the lock, or deliver the position to a receiver who co-authorizes (`SettleLockedCash` / `SettleLockedSecurity`). Neither owner nor custodian can withdraw a leg from an agreed settlement.
+4. **Atomic DvP.** `ExecuteDvpSettlement` validates both locked legs against the instruction (owner, account, ISIN, quantity, currency, amount, lock holder, lock reference) and delivers both in one transaction. The settlement agent cannot change economic terms; the instruction is signed by seller and buyer.
+5. **No party reduces its own obligation.** Loan repayments and interest payments are recorded by the lender; loan interest is computed from rate, day count, and ledger time; securities-lending fees need both counterparties to accrue and the lender to confirm payment; margin fulfilment needs the caller to confirm receipt; collateral release on a securities return is capped pro rata.
+6. **Disclosure of bilateral agreements needs both counterparties.** Adding an observer to a loan, repo, securities loan, margin call, pledge, or collateral position requires both principals.
+7. **Timestamps come from the ledger.** KYC verification, sanctions screening, pledge enforcement, redemption settlement, and report amendments record ledger time rather than a caller-supplied value.
+8. **Compliance officers cannot move value.** Their choices only approve, reject, or evaluate; they hold no controller rights over positions.
 
 ## 4. Known Gaps (see `docs/KNOWN_LIMITATIONS.md`)
 

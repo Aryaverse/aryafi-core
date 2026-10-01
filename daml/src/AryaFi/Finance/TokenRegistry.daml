@@ -1,0 +1,148 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | What AryaFi's Canton Network Token Standard registry code shares: finding
+-- the AryaFi position behind a token-standard holding, and creating,
+-- delivering, and releasing positions.
+--
+-- The registry for an instrument is its admin: the bank for cash and the
+-- custodian for securities (see AryaFi.Finance.TokenStandard). `AssetHolding`
+-- is not supported: its admin is the issuer, who cannot move a holding
+-- without the custodian.
+module AryaFi.Finance.TokenRegistry
+  ( Position(..)
+  , fetchPosition
+  , positionView
+  , positionObservers
+  , fundingPositions
+  , archivePosition
+  , createPosition
+  , deliverLocked
+  , releaseLocked
+  , accountOwner
+  ) where
+
+import DA.Action (foldlA)
+import DA.List (unique)
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
+import AryaFi.Common.Errors (require)
+import AryaFi.Common.Identifiers (AccountId(..))
+import AryaFi.Finance.Cash
+import AryaFi.Finance.Security
+
+-- | The AryaFi position behind a token-standard holding.
+data Position
+  = CashHolding with
+      cashCid : ContractId CashPosition
+      cash : CashPosition
+  | SecurityHolding with
+      securityCid : ContractId SecurityPosition
+      security : SecurityPosition
+
+-- | Fetch the AryaFi position behind a token-standard holding.
+fetchPosition : ContractId HoldingV2.Holding -> Update Position
+fetchPosition cid = do
+  cash <- fetchFromInterface @CashPosition cid
+  case cash of
+    Some (cashCid, position) -> pure (CashHolding cashCid position)
+    None -> do
+      security <- fetchFromInterface @SecurityPosition cid
+      case security of
+        Some (securityCid, position) -> pure (SecurityHolding securityCid position)
+        None -> abort "Holding is not an AryaFi cash or security position"
+
+-- | The token-standard view of a position.
+positionView : Position -> HoldingV2.HoldingView
+positionView (CashHolding _ position) = view (toInterface @HoldingV2.Holding position)
+positionView (SecurityHolding _ position) = view (toInterface @HoldingV2.Holding position)
+
+-- | The parties a position is shown to besides its signatories and lock holder.
+positionObservers : Position -> [Party]
+positionObservers (CashHolding _ position) = position.observers
+positionObservers (SecurityHolding _ position) = position.observers
+
+-- | Fetch the holdings that fund a transfer: each must be an unlocked AryaFi
+-- position of `instrumentId` in `account`. Returns the first one, which
+-- serves as the template for the positions the transfer creates, and the rest.
+fundingPositions
+  : HoldingV2.Account -> HoldingV2.InstrumentId -> [ContractId HoldingV2.Holding]
+  -> Update (Position, [Position])
+fundingPositions account instrumentId cids = do
+  require (unique cids) "Input holdings must be distinct"
+  positions <- forA cids \cid -> do
+    position <- fetchPosition cid
+    let holding = positionView position
+    require (holding.account == account) "Input holding is not in the sender's account"
+    require (holding.instrumentId == instrumentId) "Input holding is a different instrument"
+    require (holding.lock == None) "Input holding is locked"
+    pure position
+  case positions of
+    first :: rest -> pure (first, rest)
+    [] -> abort "Name the holdings that fund the transfer (inputHoldingCids)"
+
+-- | Archive a position. Needs the authority of its signatories: the bank or
+-- custodian and the owner.
+archivePosition : Position -> Update ()
+archivePosition (CashHolding cid _) = archive cid
+archivePosition (SecurityHolding cid _) = archive cid
+
+-- | Create a position of the same instrument as `like`: owned by `owner` in
+-- account `accountId`, of `amount`, locked to `lock` (holder and reference)
+-- if given, and seen by `observers`.
+createPosition
+  : Position -> Party -> Text -> Decimal -> Optional (Party, Text) -> [Party]
+  -> Update (ContractId HoldingV2.Holding)
+createPosition like owner accountId amount lock observers = case like of
+  CashHolding _ position -> toInterfaceContractId <$> create position with
+    owner
+    accountId = AccountId accountId
+    amount
+    isLocked = lock /= None
+    lockHolder = fst <$> lock
+    lockReference = snd <$> lock
+    observers
+  SecurityHolding _ position -> toInterfaceContractId <$> create position with
+    owner
+    accountId = AccountId accountId
+    quantity = amount
+    isLocked = lock /= None
+    lockHolder = fst <$> lock
+    lockReference = snd <$> lock
+    observers
+
+-- | Deliver a locked position to `newOwner`'s account `accountId`, with
+-- SettleLockedCash or SettleLockedSecurity. Needs the authority of the lock
+-- holder and the new owner.
+deliverLocked : ContractId HoldingV2.Holding -> Party -> Text -> Update (ContractId HoldingV2.Holding)
+deliverLocked cid newOwner accountId = do
+  position <- fetchPosition cid
+  let newAccountId = AccountId accountId
+  case position of
+    CashHolding cashCid _ ->
+      toInterfaceContractId <$> exercise cashCid SettleLockedCash with newOwner; newAccountId
+    SecurityHolding securityCid _ ->
+      toInterfaceContractId <$> exercise securityCid SettleLockedSecurity with newOwner; newAccountId
+
+-- | Unlock a locked position for its owner and remove its observers. Needs the
+-- authority of the lock holder and the owner.
+releaseLocked : ContractId HoldingV2.Holding -> Update (ContractId HoldingV2.Holding)
+releaseLocked cid = do
+  position <- fetchPosition cid
+  case position of
+    CashHolding cashCid cash -> do
+      unlocked <- exercise cashCid UnlockCash
+      toInterfaceContractId <$> foldlA
+        (\c observerToRemove -> exercise c RemoveCashObserver with observerToRemove)
+        unlocked cash.observers
+    SecurityHolding securityCid security -> do
+      unlocked <- exercise securityCid UnlockSecurity
+      toInterfaceContractId <$> foldlA
+        (\c observerToRemove -> exercise c RemoveSecurityObserver with observerToRemove)
+        unlocked security.observers
+
+-- | The owner of a token-standard account. The standard reserves accounts
+-- without an owner for the instrument admin; AryaFi positions always have one.
+accountOwner : Text -> HoldingV2.Account -> Update Party
+accountOwner side account = case account.owner of
+  Some owner -> pure owner
+  None -> abort (side <> " account has no owner")
