@@ -183,14 +183,17 @@ stream.on('data', (update) => {
 });
 ```
 
-### 6.3 Token-Standard Holdings and Transfers
-Wallets and apps can list and send AryaFi cash and securities through the Canton Network Token Standard's interfaces, without AryaFi's template IDs. Query by interface (`InterfaceFilter` with `"includeInterfaceView": true`), and use the interface ID as the `templateId` of an exercise command:
+### 6.3 Token-Standard Holdings, Transfers, and Settlement
+Wallets and apps can list, send, and settle AryaFi cash and securities through the Canton Network Token Standard's interfaces, without AryaFi's template IDs. Query by interface (`InterfaceFilter` with `"includeInterfaceView": true`), and use the interface ID as the `templateId` of an exercise command:
 
 | What | Interface ID |
 |:---|:---|
 | Holdings | `#splice-api-token-holding-v2:Splice.Api.Token.HoldingV2:Holding` (CIP-56: `#splice-api-token-holding-v1:Splice.Api.Token.HoldingV1:Holding`) |
 | The bank's or custodian's transfer factory | `#splice-api-token-transfer-instruction-v2:Splice.Api.Token.TransferInstructionV2:TransferFactory` |
 | Pending transfers | `#splice-api-token-transfer-instruction-v2:Splice.Api.Token.TransferInstructionV2:TransferInstruction` |
+| The bank's or custodian's allocation factory | `#splice-api-token-allocation-instruction-v2:Splice.Api.Token.AllocationInstructionV2:AllocationFactory` |
+| The same factory, for settling | `#splice-api-token-allocation-v2:Splice.Api.Token.AllocationV2:SettlementFactory` |
+| Allocations | `#splice-api-token-allocation-v2:Splice.Api.Token.AllocationV2:Allocation` |
 
 A holdings query returns every holding the party can see. That includes a sender's locked holding while a transfer to the party is pending, so list a party's own holdings by `account.owner`.
 
@@ -236,7 +239,61 @@ The sender's change comes back at once. The transferred amount stays in the send
 }
 ```
 
-If the receiver is among the `actors` of `TransferFactory_Transfer` too, the transfer completes in one step. These requests were run against a Canton 3.5 participant.
+If the receiver is among the `actors` of `TransferFactory_Transfer` too, the transfer completes in one step.
+
+To settle a trade, for example a bond for cash, every account allocates its sides of the legs at each registry with `AllocationFactory_Allocate`. The seller's bond allocation, funded from its bond holdings:
+
+```json
+{
+  "commands": [ { "ExerciseCommand": {
+    "templateId": "#splice-api-token-allocation-instruction-v2:Splice.Api.Token.AllocationInstructionV2:AllocationFactory",
+    "contractId": "<custodian's factory>",
+    "choice": "AllocationFactory_Allocate",
+    "choiceArgument": {
+      "settlement": { "executors": [ "Agent::1220..." ], "id": "TRADE-1", "cid": null, "meta": { "values": {} } },
+      "allocation": {
+        "admin": "Custodian::1220...",
+        "authorizer": { "owner": "Seller::1220...", "provider": "Custodian::1220...", "id": "ACC-SELLER-SEC" },
+        "transferLegSides": [ {
+          "transferLegId": "bond", "side": "SenderSide",
+          "otherside": { "owner": "Buyer::1220...", "provider": "Custodian::1220...", "id": "ACC-BUYER-SEC" },
+          "amount": "1000000.0", "instrumentId": "US912828ZM50", "meta": { "values": {} } } ],
+        "settlementDeadline": null, "nextIterationFunding": null, "committed": false, "meta": { "values": {} } },
+      "requestedAt": "2026-10-01T05:40:00Z",
+      "inputHoldingCids": [ "<seller's bond holding>" ],
+      "extraArgs": { "context": { "values": {} }, "meta": { "values": {} } },
+      "actors": [ "Seller::1220..." ] } } } ],
+  "commandId": "alloc-1",
+  "userId": "settlement-app",
+  "actAs": [ "Seller::1220..." ]
+}
+```
+
+The buyer allocates the receiving side of the bond leg with no holdings, and the two do the same for the cash leg at the bank. The settlement agent then settles both registries' batches in one submission, so both legs settle or neither does:
+
+```json
+{
+  "commands": [
+    { "ExerciseCommand": {
+      "templateId": "#splice-api-token-allocation-v2:Splice.Api.Token.AllocationV2:SettlementFactory",
+      "contractId": "<custodian's factory>",
+      "choice": "SettlementFactory_SettleBatch",
+      "choiceArgument": {
+        "settlement": { "executors": [ "Agent::1220..." ], "id": "TRADE-1", "cid": null, "meta": { "values": {} } },
+        "transferLegs": [ { "transferLegId": "bond", "sender": { "...": "seller's account" }, "receiver": { "...": "buyer's account" },
+                            "amount": "1000000.0", "instrumentId": "US912828ZM50", "meta": { "values": {} } } ],
+        "allocations": [ { "allocationCid": "<seller's bond allocation>", "extraTransferLegSides": [], "nextIterationFunding": null },
+                         { "allocationCid": "<buyer's bond allocation>", "extraTransferLegSides": [], "nextIterationFunding": null } ],
+        "actors": [ "Agent::1220..." ],
+        "extraArgs": { "context": { "values": {} }, "meta": { "values": {} } } } } },
+    { "ExerciseCommand": { "...": "the same at the bank's factory, for the cash leg" } } ],
+  "commandId": "settle-1",
+  "userId": "settlement-app",
+  "actAs": [ "Agent::1220..." ]
+}
+```
+
+Each registry settles only if the allocations authorize exactly both sides of each of its legs, and only for the settlement's executors. Until then the agent can cancel an allocation (`Allocation_Cancel`) and its owner can withdraw it (`Allocation_Withdraw`). These requests were run against a Canton 3.5 participant.
 
 ---
 
