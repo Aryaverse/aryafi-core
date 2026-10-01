@@ -12,6 +12,8 @@ data-dependencies:
   - ../deps/splice/splice-api-token-holding-v1-1.0.0.dar
   - ../deps/splice/splice-api-token-holding-v2-1.0.0.dar
   - ../deps/splice/splice-api-token-transfer-instruction-v2-1.0.0.dar
+  - ../deps/splice/splice-api-token-allocation-v2-1.0.0.dar
+  - ../deps/splice/splice-api-token-allocation-instruction-v2-1.0.0.dar
 build-options:
   - --ghc-option=-Wall
   - --ghc-option=-Werror
