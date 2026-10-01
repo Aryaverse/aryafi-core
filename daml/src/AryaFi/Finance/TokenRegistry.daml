@@ -2,8 +2,8 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 -- | What AryaFi's Canton Network Token Standard registry code shares: finding
--- the AryaFi position behind a token-standard holding, and creating,
--- delivering, and releasing positions.
+-- the AryaFi position behind a token-standard holding; creating, delivering,
+-- and releasing positions; and the instrument details a new position needs.
 --
 -- The registry for an instrument is its admin: the bank for cash and the
 -- custodian for securities (see AryaFi.Finance.TokenStandard). `AssetHolding`
@@ -12,6 +12,7 @@
 module AryaFi.Finance.TokenRegistry
   ( Position(..)
   , fetchPosition
+  , positionCid
   , positionView
   , positionObservers
   , fundingPositions
@@ -20,13 +21,18 @@ module AryaFi.Finance.TokenRegistry
   , deliverLocked
   , releaseLocked
   , accountOwner
+  , InstrumentDetails(..)
+  , instrumentDetails
+  , detailsInstrumentId
+  , createFromDetails
   ) where
 
 import DA.Action (foldlA)
 import DA.List (unique)
 import qualified Splice.Api.Token.HoldingV2 as HoldingV2
 import AryaFi.Common.Errors (require)
-import AryaFi.Common.Identifiers (AccountId(..))
+import AryaFi.Common.Identifiers (AccountId(..), CUSIP, ISIN(..))
+import AryaFi.Common.Types (Currency, DayCountConvention, Rate)
 import AryaFi.Finance.Cash
 import AryaFi.Finance.Security
 
@@ -50,6 +56,11 @@ fetchPosition cid = do
       case security of
         Some (securityCid, position) -> pure (SecurityHolding securityCid position)
         None -> abort "Holding is not an AryaFi cash or security position"
+
+-- | The position as a token-standard holding.
+positionCid : Position -> ContractId HoldingV2.Holding
+positionCid (CashHolding cid _) = toInterfaceContractId cid
+positionCid (SecurityHolding cid _) = toInterfaceContractId cid
 
 -- | The token-standard view of a position.
 positionView : Position -> HoldingV2.HoldingView
@@ -146,3 +157,75 @@ accountOwner : Text -> HoldingV2.Account -> Update Party
 accountOwner side account = case account.owner of
   Some owner -> pure owner
   None -> abort (side <> " account has no owner")
+
+-- | The instrument details an AryaFi position carries: what a registry needs
+-- to create a position of the instrument for a new holder.
+data InstrumentDetails
+  = CashDetails with
+      currency : Currency
+  | SecurityDetails with
+      isin : ISIN
+      cusip : Optional CUSIP
+      instrumentName : Text
+      instrumentType : InstrumentType
+      couponRate : Optional Rate
+      couponType : Optional CouponType
+      dayCountConvention : Optional DayCountConvention
+      maturityDate : Optional Time
+      seniority : Optional SeniorityRank
+  deriving (Eq, Show)
+
+-- | The details of a position's instrument, without anything about its holder.
+instrumentDetails : Position -> InstrumentDetails
+instrumentDetails (CashHolding _ cash) = CashDetails with currency = cash.currency
+instrumentDetails (SecurityHolding _ security) = SecurityDetails with
+  isin = security.isin
+  cusip = security.cusip
+  instrumentName = security.instrumentName
+  instrumentType = security.instrumentType
+  couponRate = security.couponRate
+  couponType = security.couponType
+  dayCountConvention = security.dayCountConvention
+  maturityDate = security.maturityDate
+  seniority = security.seniority
+
+-- | The token-standard instrument ID of an instrument: the currency or the ISIN.
+detailsInstrumentId : InstrumentDetails -> Text
+detailsInstrumentId (CashDetails currency) = currency
+detailsInstrumentId details@SecurityDetails{} = unISIN details.isin
+
+-- | Create an unlocked position, without observers, of an instrument that
+-- `admin` keeps: for `owner`, in account `accountId`, of `amount`. Needs the
+-- authority of `admin` and `owner`.
+createFromDetails
+  : Party -> InstrumentDetails -> Party -> Text -> Decimal -> Update (ContractId HoldingV2.Holding)
+createFromDetails admin details owner accountId amount = case details of
+  CashDetails currency -> toInterfaceContractId <$> create CashPosition with
+    bank = admin
+    owner
+    accountId = AccountId accountId
+    currency
+    amount
+    isLocked = False
+    lockReference = None
+    lockHolder = None
+    observers = []
+  SecurityDetails{..} -> toInterfaceContractId <$> create SecurityPosition with
+    custodian = admin
+    owner
+    accountId = AccountId accountId
+    isin
+    cusip
+    instrumentName
+    instrumentType
+    quantity = amount
+    couponRate
+    couponType
+    dayCountConvention
+    maturityDate
+    seniority
+    isLocked = False
+    lockReference = None
+    lockHolder = None
+    csdRef = None
+    observers = []

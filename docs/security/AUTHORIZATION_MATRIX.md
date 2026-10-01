@@ -9,7 +9,7 @@ In Daml and Canton, contract security is governed by three primitives:
 
 The tables below list every template in the production modules (`daml/src/AryaFi/{Common,Finance,Contracts,Compliance}`) with its signatories, observers, choices, and controllers. They are **generated from the Daml source** by `scripts/gen_authorization_matrix.py`, so they describe what the code enforces rather than intended behaviour.
 
-Choices of the Canton Network Token Standard interfaces (`TransferFactory_*`, `TransferInstruction_*`) are controlled by their `actors` argument. For these, the table names the party the implementation requires among the actors.
+Choices of the Canton Network Token Standard interfaces (`TransferFactory_*`, `TransferInstruction_*`, `AllocationFactory_*`, `SettlementFactory_*`, `Allocation_*`) are controlled by their `actors` argument. For these, the table names the party the implementation requires among the actors.
 
 ---
 
@@ -91,6 +91,16 @@ Choices of the Canton Network Token Standard interfaces (`TransferFactory_*`, `T
 |  |  |  | `RetrySettlement` | `settlementAgent, seller, buyer` | Retry a failed settlement instruction |
 |  |  |  | `AddDvpObserver` | `settlementAgent` | Add an observer to this DvP instruction |
 |  |  |  | `IsFinalized` *(read-only)* | `settlementAgent` | Nonconsuming query: has this instruction been finalized (settled, failed, or cancelled)? |
+| **`PositionAllocationFactory`** (TokenAllocation.daml) | `admin` | `clients` | `AllocationFactory_Allocate` | `actors, including authorizer` | Lock a client's funding for a settlement and record its authorization (see allocate) |
+|  |  |  | `AllocationFactory_PublicFetch` *(read-only)* | `actors` | Return the factory's view: its admin |
+|  |  |  | `SettlementFactory_SettleBatch` | `actors: exactly settlement.executors` | Settle the allocations for a settlement's legs at this registry (see settleBatch) |
+|  |  |  | `SettlementFactory_PublicFetch` *(read-only)* | `actors` | Return the factory's view: its admin |
+|  |  |  | `AddAllocationFactoryClient` | `admin` | Let another account owner or settlement agent use this factory |
+|  |  |  | `RemoveAllocationFactoryClient` | `admin` | Stop an account owner or settlement agent using this factory |
+| **`PositionAllocation`** (TokenAllocation.daml) | `admin, authorizer` | `settlement.executors` | `Allocation_Settle` | `nobody (refused)` | Refused: an allocation settles only with the others of its batch, through SettlementFactory_SettleBatch, which checks every leg's other side |
+|  |  |  | `Allocation_Cancel` | `actors, including all of settlement.executors` | Release the funding to the authorizer, when the settlement will not happen |
+|  |  |  | `Allocation_Withdraw` | `actors, including authorizer` | Take the allocation back; a committed one only after its settlement deadline |
+|  |  |  | `SettleInBatch` | `admin, settlement.executors` | Settle this allocation as part of the registry's SettlementFactory_SettleBatch, which supplies the details of the instruments being settled |
 | **`PositionTransferFactory`** (TokenTransfer.daml) | `admin` | `clients` | `TransferFactory_Transfer` | `actors, including sender` | Instruct a transfer between two clients' accounts (see instructTransfer) |
 |  |  |  | `TransferFactory_PublicFetch` *(read-only)* | `actors` | Return the factory's view: its admin |
 |  |  |  | `AddTransferFactoryClient` | `admin` | Let another account owner send and receive through this factory |
@@ -230,12 +240,13 @@ These principles hold for the current code and are covered by the negative and a
 
 1. **No position is imposed on a party without its consent.** `TransferCash`, `TransferSecurity`, and `TransferAsset` require the current owner, the holding institution (bank or custodian), and the receiving owner. The receiver becomes a signatory of the new position, so its authority is required.
 2. **Token-standard transfers keep the receiver's consent.** By creating a `PositionTransferFactory`, a bank or custodian agrees in advance to transfers between its clients' accounts. The sender instructs a transfer; the receiver still signs the position it receives, either by accepting the pending `PositionTransferInstruction` or by instructing the transfer together with the sender. Until then the amount stays in the sender's account, locked to the registry.
-3. **Locks bind to a named lock holder.** `LockCash` / `LockSecurity` / `LockAsset` are authorized by owner and bank/custodian and name a lock holder. Only the lock holder can release the lock, or deliver the position to a receiver who co-authorizes (`SettleLockedCash` / `SettleLockedSecurity`). Neither owner nor custodian can withdraw a leg from an agreed settlement.
-4. **Atomic DvP.** `ExecuteDvpSettlement` validates both locked legs against the instruction (owner, account, ISIN, quantity, currency, amount, lock holder, lock reference) and delivers both in one transaction. The settlement agent cannot change economic terms; the instruction is signed by seller and buyer.
-5. **No party reduces its own obligation.** Loan repayments and interest payments are recorded by the lender; loan interest is computed from rate, day count, and ledger time; securities-lending fees need both counterparties to accrue and the lender to confirm payment; margin fulfilment needs the caller to confirm receipt; collateral release on a securities return is capped pro rata.
-6. **Disclosure of bilateral agreements needs both counterparties.** Adding an observer to a loan, repo, securities loan, margin call, pledge, or collateral position requires both principals.
-7. **Timestamps come from the ledger.** KYC verification, sanctions screening, pledge enforcement, redemption settlement, and report amendments record ledger time rather than a caller-supplied value.
-8. **Compliance officers cannot move value.** Their choices only approve, reject, or evaluate; they hold no controller rights over positions.
+3. **Token-standard settlement needs both sides' allocations.** A registry's `SettlementFactory_SettleBatch` settles only when the allocations authorize exactly both sides of every leg, and only for the settlement's executors; a single allocation cannot be settled on its own. Each allocation is signed by its account owner, so a receiver signs the position it receives through its own allocation. Funding stays locked to the registry until settlement, cancellation by the executors, or withdrawal by the owner (for a committed allocation, only after its settlement deadline).
+4. **Locks bind to a named lock holder.** `LockCash` / `LockSecurity` / `LockAsset` are authorized by owner and bank/custodian and name a lock holder. Only the lock holder can release the lock, or deliver the position to a receiver who co-authorizes (`SettleLockedCash` / `SettleLockedSecurity`). Neither owner nor custodian can withdraw a leg from an agreed settlement.
+5. **Atomic DvP.** `ExecuteDvpSettlement` validates both locked legs against the instruction (owner, account, ISIN, quantity, currency, amount, lock holder, lock reference) and delivers both in one transaction. The settlement agent cannot change economic terms; the instruction is signed by seller and buyer.
+6. **No party reduces its own obligation.** Loan repayments and interest payments are recorded by the lender; loan interest is computed from rate, day count, and ledger time; securities-lending fees need both counterparties to accrue and the lender to confirm payment; margin fulfilment needs the caller to confirm receipt; collateral release on a securities return is capped pro rata.
+7. **Disclosure of bilateral agreements needs both counterparties.** Adding an observer to a loan, repo, securities loan, margin call, pledge, or collateral position requires both principals.
+8. **Timestamps come from the ledger.** KYC verification, sanctions screening, pledge enforcement, redemption settlement, and report amendments record ledger time rather than a caller-supplied value.
+9. **Compliance officers cannot move value.** Their choices only approve, reject, or evaluate; they hold no controller rights over positions.
 
 ## 4. Known Gaps (see `docs/KNOWN_LIMITATIONS.md`)
 

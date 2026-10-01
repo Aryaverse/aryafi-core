@@ -1,0 +1,496 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Settling AryaFi positions through the Canton Network Token Standard's V2
+-- allocation interfaces (CIP-0112 `AllocationV2`), as a settlement app would:
+-- each account allocates at each registry with `AllocationFactory_Allocate`,
+-- then the settlement agent settles every registry's batch with
+-- `SettlementFactory_SettleBatch`, in one transaction.
+module AryaFi.Test.Unit.TokenAllocationTest where
+
+import qualified DA.Map as Map
+import qualified DA.TextMap as TextMap
+import DA.List (sort)
+import DA.Optional (fromOptional)
+import DA.Text (isInfixOf)
+import DA.Time (addRelTime, days, minutes)
+import Daml.Script
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
+import Splice.Api.Token.MetadataV1 (ExtraArgs(..), emptyChoiceContext, emptyMetadata)
+import Splice.Api.Token.AllocationV2
+import Splice.Api.Token.AllocationInstructionV2
+import AryaFi.Common.Identifiers
+import AryaFi.Finance.Cash
+import AryaFi.Finance.Security
+import AryaFi.Finance.TokenAllocation
+import AryaFi.Test.Scenarios.DvpSettlementTest (allocateTestParty, bondIsin, setupCashPosition, setupSecurityPosition)
+import AryaFi.Test.Unit.TokenStandardTest (holdingsV2, viewV2)
+
+-- ---------------------------------------------------------------------------
+-- Fixture and helpers
+-- ---------------------------------------------------------------------------
+
+-- | A bond-for-cash trade: the seller delivers 1,000,000 of the bond at the
+-- custodian, the buyer pays 995,000 USD at the bank, and the agent settles.
+data Fixture = Fixture
+  with
+    custodian : Party
+    bank : Party
+    seller : Party
+    buyer : Party
+    agent : Party
+    custodianFactory : ContractId PositionAllocationFactory
+    bankFactory : ContractId PositionAllocationFactory
+    settlement : SettlementInfo
+    bondLeg : TransferLeg
+    cashLeg : TransferLeg
+    sellerBond : ContractId HoldingV2.Holding
+    buyerCash : ContractId HoldingV2.Holding
+
+bond : Text
+bond = unISIN bondIsin
+
+setup : Text -> Script Fixture
+setup test = do
+  custodian <- allocateTestParty "Custodian" test
+  bank <- allocateTestParty "Bank" test
+  seller <- allocateTestParty "Seller" test
+  buyer <- allocateTestParty "Buyer" test
+  agent <- allocateTestParty "Agent" test
+  let clients = [seller, buyer, agent]
+  custodianFactory <- submit custodian do createCmd PositionAllocationFactory with admin = custodian; clients
+  bankFactory <- submit bank do createCmd PositionAllocationFactory with admin = bank; clients
+  sellerBond <- toInterfaceContractId <$> setupSecurityPosition custodian seller (AccountId "ACC-SELLER-SEC") 5000000.0
+  buyerCash <- toInterfaceContractId <$> setupCashPosition bank buyer (AccountId "ACC-BUYER-CASH") 1000000.0
+  let account provider owner id = HoldingV2.Account with owner = Some owner; provider = Some provider; id
+      settlement = SettlementInfo with executors = [agent]; id = "TRADE-" <> test; cid = None; meta = emptyMetadata
+      bondLeg = TransferLeg with
+        transferLegId = "bond"
+        sender = account custodian seller "ACC-SELLER-SEC"
+        receiver = account custodian buyer "ACC-BUYER-SEC"
+        amount = 1000000.0
+        instrumentId = bond
+        meta = emptyMetadata
+      cashLeg = TransferLeg with
+        transferLegId = "cash"
+        sender = account bank buyer "ACC-BUYER-CASH"
+        receiver = account bank seller "ACC-SELLER-CASH"
+        amount = 995000.0
+        instrumentId = "USD"
+        meta = emptyMetadata
+  pure Fixture with ..
+
+noExtraArgs : ExtraArgs
+noExtraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+
+sendSide, receiveSide : TransferLeg -> TransferLegSide
+sendSide leg = case legSides leg of
+  [(_, side), _] -> side
+  _ -> error "a leg has two sides"
+receiveSide leg = case legSides leg of
+  [_, (_, side)] -> side
+  _ -> error "a leg has two sides"
+
+-- | An uncommitted allocation, with no settlement deadline.
+spec : Party -> HoldingV2.Account -> [TransferLegSide] -> AllocationSpecification
+spec admin authorizer transferLegSides = AllocationSpecification with
+  admin
+  authorizer
+  transferLegSides
+  settlementDeadline = None
+  nextIterationFunding = None
+  committed = False
+  meta = emptyMetadata
+
+allocateCmd
+  : ContractId PositionAllocationFactory -> SettlementInfo -> AllocationSpecification
+  -> [ContractId HoldingV2.Holding] -> Time -> Commands AllocationInstructionResult
+allocateCmd factory settlement allocation inputHoldingCids now =
+  exerciseCmd (toInterfaceContractId @AllocationFactory factory) AllocationFactory_Allocate with
+    settlement
+    allocation
+    requestedAt = addRelTime now (minutes (-1))
+    inputHoldingCids
+    extraArgs = noExtraArgs
+    actors = [authorizerOwner allocation]
+
+authorizerOwner : AllocationSpecification -> Party
+authorizerOwner allocation = case allocation.authorizer.owner of
+  Some owner -> owner
+  None -> error "the authorizer account has an owner"
+
+-- | Allocate as the owner of the authorizer account, and return the allocation and the change.
+allocateAs
+  : ContractId PositionAllocationFactory -> SettlementInfo -> AllocationSpecification
+  -> [ContractId HoldingV2.Holding]
+  -> Script (ContractId Allocation, TextMap.TextMap [ContractId HoldingV2.Holding])
+allocateAs factory settlement allocation inputs = do
+  now <- getTime
+  result <- submit (authorizerOwner allocation) (allocateCmd factory settlement allocation inputs now)
+  case result.output of
+    AllocationInstructionResult_Completed allocationCid -> pure (allocationCid, result.authorizerChangeCids)
+    other -> abort ("Expected an allocation, got " <> show other)
+
+-- | The four allocations of the trade: each side of each leg.
+data Allocations = Allocations
+  with
+    sellerSends : ContractId Allocation
+    buyerReceives : ContractId Allocation
+    buyerPays : ContractId Allocation
+    sellerIsPaid : ContractId Allocation
+
+allocateTrade : Fixture -> Script Allocations
+allocateTrade f = do
+  (sellerSends, _) <- allocateAs f.custodianFactory f.settlement
+    (spec f.custodian f.bondLeg.sender [sendSide f.bondLeg]) [f.sellerBond]
+  (buyerReceives, _) <- allocateAs f.custodianFactory f.settlement
+    (spec f.custodian f.bondLeg.receiver [receiveSide f.bondLeg]) []
+  (buyerPays, _) <- allocateAs f.bankFactory f.settlement
+    (spec f.bank f.cashLeg.sender [sendSide f.cashLeg]) [f.buyerCash]
+  (sellerIsPaid, _) <- allocateAs f.bankFactory f.settlement
+    (spec f.bank f.cashLeg.receiver [receiveSide f.cashLeg]) []
+  pure Allocations with ..
+
+settleBatchCmd
+  : ContractId PositionAllocationFactory -> SettlementInfo -> [TransferLeg] -> [ContractId Allocation] -> [Party]
+  -> Commands SettlementFactory_SettleBatchResult
+settleBatchCmd factory settlement transferLegs allocationCids actors =
+  exerciseCmd (toInterfaceContractId @SettlementFactory factory) SettlementFactory_SettleBatch with
+    settlement
+    transferLegs
+    allocations = [FinalizedAllocation with allocationCid; extraTransferLegSides = []; nextIterationFunding = None | allocationCid <- allocationCids]
+    actors
+    extraArgs = noExtraArgs
+
+-- | The agent settles both registries' batches in one transaction.
+settleTrade : Fixture -> Allocations -> Script (SettlementFactory_SettleBatchResult, SettlementFactory_SettleBatchResult)
+settleTrade f a = submit f.agent $ (,)
+  <$> settleBatchCmd f.custodianFactory f.settlement [f.bondLeg] [a.sellerSends, a.buyerReceives] [f.agent]
+  <*> settleBatchCmd f.bankFactory f.settlement [f.cashLeg] [a.buyerPays, a.sellerIsPaid] [f.agent]
+
+-- | Submit as `parties` and check that it fails with an error mentioning `expected`.
+submitFailsWith : Text -> [Party] -> Commands a -> Script ()
+submitFailsWith expected parties cmds = do
+  result <- trySubmit (actAs parties) cmds
+  case result of
+    Left err -> assertMsg
+      ("Expected an error mentioning \"" <> expected <> "\", got: " <> show err)
+      (expected `isInfixOf` show err)
+    Right _ -> abort ("Expected the submission to fail with: " <> expected)
+
+-- | The token-standard holdings `party` owns, as (instrument, amount, locked).
+ownHoldings : Party -> Script [(Text, Decimal, Bool)]
+ownHoldings party = do
+  views <- holdingsV2 party
+  pure (sort [(v.instrumentId.id, v.amount, v.lock /= None) | v <- views, v.account.owner == Some party])
+
+-- ---------------------------------------------------------------------------
+-- Allocating
+-- ---------------------------------------------------------------------------
+
+-- The seller allocates 1,000,000 of its 5,000,000 bond: that much is locked to
+-- the custodian and shown to the agent; the rest comes back as change.
+testAllocationLocksFunding : Script ()
+testAllocationLocksFunding = script do
+  f <- setup "TA-FUND"
+  (allocationCid, change) <- allocateAs f.custodianFactory f.settlement
+    (spec f.custodian f.bondLeg.sender [sendSide f.bondLeg]) [f.sellerBond]
+
+  [changeCid] <- pure (fromOptional [] (TextMap.lookup bond change))
+  Some changeView <- viewV2 f.seller changeCid
+  assertMsg "The seller keeps 4,000,000 unlocked" (changeView.amount == 4000000.0 && changeView.lock == None)
+
+  Some allocation <- queryInterfaceContractId f.agent allocationCid
+  assertMsg "The agent sees the allocation" (allocation.settlement == f.settlement)
+  [lockedCid] <- pure allocation.holdingCids
+  Some locked <- viewV2 f.agent lockedCid
+  let expectedLock = HoldingV2.Lock with
+        holders = [f.custodian]
+        expiresAt = None
+        expiresAfter = None
+        context = Some ("Allocation for settlement " <> f.settlement.id)
+  assertMsg "1,000,000 is locked to the custodian for the trade"
+    (locked.amount == 1000000.0 && locked.lock == Some expectedLock)
+  assertMsg "The seller can withdraw; the agent can cancel"
+    (allocation.availableActions == Map.fromList [(AA_Cancel, [[f.agent]]), (AA_Withdraw, [[f.seller]])])
+
+  -- A receiving allocation needs no holdings
+  (receiving, noChange) <- allocateAs f.custodianFactory f.settlement
+    (spec f.custodian f.bondLeg.receiver [receiveSide f.bondLeg]) []
+  Some receivingView <- queryInterfaceContractId f.buyer receiving
+  assertMsg "The buyer's receiving allocation locks nothing" (null receivingView.holdingCids && TextMap.null noChange)
+
+-- Holdings the allocation does not need go back unchanged.
+testUnusedInputsReturned : Script ()
+testUnusedInputsReturned = script do
+  f <- setup "TA-UNUSED"
+  eur <- toInterfaceContractId <$> submit (actAs [f.bank, f.buyer]) do
+    createCmd CashPosition with
+      bank = f.bank; owner = f.buyer; accountId = AccountId "ACC-BUYER-CASH"; currency = "EUR"
+      amount = 50.0; isLocked = False; lockReference = None; lockHolder = None; observers = []
+  (_, change) <- allocateAs f.bankFactory f.settlement
+    (spec f.bank f.cashLeg.sender [sendSide f.cashLeg]) [f.buyerCash, eur]
+  assertMsg "The EUR holding comes back as it was" (TextMap.lookup "EUR" change == Some [eur])
+  Some usdChange <- case TextMap.lookup "USD" change of
+    Some [cid] -> viewV2 f.buyer cid
+    _ -> pure None
+  assertMsg "The buyer keeps 5,000 USD" (usdChange.amount == 5000.0)
+
+-- ---------------------------------------------------------------------------
+-- Settling
+-- ---------------------------------------------------------------------------
+
+-- Bond for cash through two registries, in one transaction.
+testDvpThroughAllocations : Script ()
+testDvpThroughAllocations = script do
+  f <- setup "TA-DVP"
+  a <- allocateTrade f
+  (bondResult, cashResult) <- settleTrade f a
+
+  [sellerBond, buyerBond] <- pure bondResult.allocationSettleResults
+  assertMsg "The seller's bond allocation settles with nothing to receive"
+    (sellerBond.output == AllocationResult_Settled None && TextMap.null sellerBond.authorizerHoldingCids)
+  Some [boughtCid] <- pure (TextMap.lookup bond buyerBond.authorizerHoldingCids)
+  Some bought <- queryContractId f.buyer (fromInterfaceContractId @SecurityPosition boughtCid)
+  assertMsg "The buyer holds 1,000,000 of the bond, with its details"
+    (bought.quantity == 1000000.0 && bought.owner == f.buyer && bought.accountId == AccountId "ACC-BUYER-SEC"
+      && bought.custodian == f.custodian && bought.isin == bondIsin
+      && bought.instrumentName == "US Treasury 4.25% Nov 2026" && bought.couponRate == Some 0.0425
+      && not bought.isLocked)
+  [_, sellerCash] <- pure cashResult.allocationSettleResults
+  Some [paidCid] <- pure (TextMap.lookup "USD" sellerCash.authorizerHoldingCids)
+  Some paid <- queryContractId f.seller (fromInterfaceContractId @CashPosition paidCid)
+  assertMsg "The seller is paid 995,000 USD" (paid.amount == 995000.0 && paid.accountId == AccountId "ACC-SELLER-CASH")
+
+  sellerHoldings <- ownHoldings f.seller
+  assertMsg "The seller has its 4,000,000 change and the cash"
+    (sellerHoldings == [(bond, 4000000.0, False), ("USD", 995000.0, False)])
+  buyerHoldings <- ownHoldings f.buyer
+  assertMsg "The buyer has the bond and its 5,000 change"
+    (buyerHoldings == [(bond, 1000000.0, False), ("USD", 5000.0, False)])
+  allocationsLeft <- queryInterface @Allocation f.agent
+  assertMsg "Every allocation is consumed" (null allocationsLeft)
+
+-- What the registries refuse at settlement. When one batch fails, the whole
+-- transaction fails, so nothing moves at the other registry either.
+testSettlementChecks : Script ()
+testSettlementChecks = script do
+  f <- setup "TA-CHECKS"
+  a <- allocateTrade f
+  let bondBatch allocs = settleBatchCmd f.custodianFactory f.settlement [f.bondLeg] allocs [f.agent]
+      biggerLeg = f.bondLeg with amount = 2000000.0
+  (receivesAgain, _) <- allocateAs f.custodianFactory f.settlement
+    (spec f.custodian f.bondLeg.receiver [receiveSide f.bondLeg]) []
+
+  submitFailsWith "the allocations do not authorize exactly the transfer legs" [f.agent]
+    (bondBatch [a.sellerSends])
+  submitFailsWith "a transfer leg side is authorized twice" [f.agent]
+    (bondBatch [a.sellerSends, a.buyerReceives, receivesAgain])
+  submitFailsWith "an allocation was made at another registry" [f.agent]
+    (bondBatch [a.sellerSends, a.buyerReceives, a.buyerPays])
+  submitFailsWith "an allocation was made at another registry" [f.agent]
+    (settleBatchCmd f.bankFactory f.settlement [f.bondLeg] [a.sellerSends, a.buyerReceives] [f.agent])
+  submitFailsWith "the allocations do not authorize exactly the transfer legs" [f.agent]
+    (settleBatchCmd f.custodianFactory f.settlement [biggerLeg] [a.sellerSends, a.buyerReceives] [f.agent])
+  submitFailsWith "only the settlement's executors can settle it" [f.agent, f.seller]
+    (settleBatchCmd f.custodianFactory f.settlement [f.bondLeg] [a.sellerSends, a.buyerReceives] [f.agent, f.seller])
+  submitFailsWith "an allocation is for another settlement" [f.agent]
+    (settleBatchCmd f.custodianFactory (f.settlement with id = "OTHER") [f.bondLeg] [a.sellerSends, a.buyerReceives] [f.agent])
+
+  -- The cash batch lacks the seller's receiving allocation: the bond does not move
+  submitFailsWith "the allocations do not authorize exactly the transfer legs" [f.agent]
+    (bondBatch [a.sellerSends, a.buyerReceives]
+      *> settleBatchCmd f.bankFactory f.settlement [f.cashLeg] [a.buyerPays] [f.agent])
+  stillAllocated <- queryInterfaceContractId f.agent a.sellerSends
+  assertMsg "The bond allocation is still in place" (stillAllocated /= None)
+  _ <- settleTrade f a
+  pure ()
+
+-- An allocation authorizes net amounts: here the bank's batch moves 995,000
+-- USD to the seller and 15,000 back to the buyer as a rebate. The buyer locks
+-- only the 980,000 difference, and the seller, a net receiver, locks nothing.
+testNettedAllocation : Script ()
+testNettedAllocation = script do
+  f <- setup "TA-NET"
+  let rebate = TransferLeg with
+        transferLegId = "rebate"
+        sender = f.cashLeg.receiver
+        receiver = f.cashLeg.sender
+        amount = 15000.0
+        instrumentId = "USD"
+        meta = emptyMetadata
+  (buyerPays, _) <- allocateAs f.bankFactory f.settlement
+    (spec f.bank f.cashLeg.sender [sendSide f.cashLeg, receiveSide rebate]) [f.buyerCash]
+  Some buyerView <- queryInterfaceContractId f.buyer buyerPays
+  [lockedCid] <- pure buyerView.holdingCids
+  Some locked <- viewV2 f.buyer lockedCid
+  assertMsg "The buyer locks the net 980,000" (locked.amount == 980000.0)
+  (sellerIsPaid, _) <- allocateAs f.bankFactory f.settlement
+    (spec f.bank f.cashLeg.receiver [receiveSide f.cashLeg, sendSide rebate]) []
+  result <- submit f.agent (settleBatchCmd f.bankFactory f.settlement [f.cashLeg, rebate] [buyerPays, sellerIsPaid] [f.agent])
+  assertMsg "Two allocations settled" (length result.allocationSettleResults == 2)
+  sellerHoldings <- ownHoldings f.seller
+  assertMsg "The seller receives the net 980,000" ([amount | ("USD", amount, _) <- sellerHoldings] == [980000.0])
+  buyerHoldings <- ownHoldings f.buyer
+  assertMsg "The buyer keeps its 20,000 change" ([amount | ("USD", amount, _) <- buyerHoldings] == [20000.0])
+
+-- ---------------------------------------------------------------------------
+-- Cancelling, withdrawing, deadlines
+-- ---------------------------------------------------------------------------
+
+testCancelAndWithdraw : Script ()
+testCancelAndWithdraw = script do
+  f <- setup "TA-CANCEL"
+  a <- allocateTrade f
+  submitFailsWith "Only the executors can cancel the allocation" [f.seller]
+    (exerciseCmd a.sellerSends Allocation_Cancel with actors = [f.seller]; extraArgs = noExtraArgs)
+  cancelled <- submit f.agent do
+    exerciseCmd a.sellerSends Allocation_Cancel with actors = [f.agent]; extraArgs = noExtraArgs
+  assertMsg "Cancelled" (cancelled.output == AllocationResult_Cancelled)
+  Some [returnedBond] <- pure (TextMap.lookup bond cancelled.authorizerHoldingCids)
+  Some returned <- viewV2 f.seller returnedBond
+  assertMsg "The seller's 1,000,000 is unlocked" (returned.amount == 1000000.0 && returned.lock == None)
+  agentSees <- viewV2 f.agent returnedBond
+  assertMsg "The agent no longer sees it" (agentSees == None)
+
+  submitFailsWith "Only the account owner can withdraw the allocation" [f.agent]
+    (exerciseCmd a.buyerPays Allocation_Withdraw with actors = [f.agent]; extraArgs = noExtraArgs)
+  withdrawn <- submit f.buyer do
+    exerciseCmd a.buyerPays Allocation_Withdraw with actors = [f.buyer]; extraArgs = noExtraArgs
+  assertMsg "Withdrawn" (withdrawn.output == AllocationResult_Withdrawn)
+  buyerHoldings <- ownHoldings f.buyer
+  assertMsg "The buyer has all its cash back, unlocked" (buyerHoldings == [("USD", 5000.0, False), ("USD", 995000.0, False)])
+
+-- A committed allocation stays until its settlement deadline; after it, it can
+-- no longer be settled and the owner can withdraw it.
+testCommittedAllocation : Script ()
+testCommittedAllocation = script do
+  f <- setup "TA-COMMIT"
+  now <- getTime
+  let deadline = addRelTime now (days 1)
+      committed s = s with settlementDeadline = Some deadline; committed = True
+  (sellerSends, _) <- allocateAs f.custodianFactory f.settlement
+    (committed (spec f.custodian f.bondLeg.sender [sendSide f.bondLeg])) [f.sellerBond]
+  (buyerReceives, _) <- allocateAs f.custodianFactory f.settlement
+    (committed (spec f.custodian f.bondLeg.receiver [receiveSide f.bondLeg])) []
+  submitFailsWith "A committed allocation can be withdrawn only after its settlement deadline" [f.seller]
+    (exerciseCmd sellerSends Allocation_Withdraw with actors = [f.seller]; extraArgs = noExtraArgs)
+
+  passTime (days 2)
+  submitFailsWith "deadline 'settlementDeadline'" [f.agent]
+    (settleBatchCmd f.custodianFactory f.settlement [f.bondLeg] [sellerSends, buyerReceives] [f.agent])
+  withdrawn <- submit f.seller do
+    exerciseCmd sellerSends Allocation_Withdraw with actors = [f.seller]; extraArgs = noExtraArgs
+  assertMsg "Withdrawn after the deadline" (withdrawn.output == AllocationResult_Withdrawn)
+
+-- ---------------------------------------------------------------------------
+-- What the registry refuses at allocation
+-- ---------------------------------------------------------------------------
+
+testAllocateChecks : Script ()
+testAllocateChecks = script do
+  f <- setup "TA-ALLOC"
+  outsider <- allocateTestParty "Outsider" "TA-ALLOC"
+  now <- getTime
+  let sellerSpec = spec f.custodian f.bondLeg.sender [sendSide f.bondLeg]
+      allocateWith s inputs = allocateCmd f.custodianFactory f.settlement s inputs now
+      outsiderAccount = HoldingV2.Account with owner = Some outsider; provider = Some f.custodian; id = "ACC-OUTSIDER"
+
+      zeroSide = sendSide f.bondLeg with amount = 0.0
+      pastDeadline = Some (addRelTime now (minutes (-1)))
+
+  submitFailsWith "the instruments have a different admin" [f.seller]
+    (allocateWith (sellerSpec with admin = f.bank) [f.sellerBond])
+  submitFailsWith "Allocation: no transfer legs" [f.seller]
+    (allocateWith (sellerSpec with transferLegSides = []) [f.sellerBond])
+  submitFailsWith "a transfer leg side is listed twice" [f.seller]
+    (allocateWith (sellerSpec with transferLegSides = [sendSide f.bondLeg, sendSide f.bondLeg]) [f.sellerBond])
+  submitFailsWith "Transfer leg bond amount must be strictly positive" [f.seller]
+    (allocateWith (sellerSpec with transferLegSides = [zeroSide]) [f.sellerBond])
+  submitFailsWith "iterated settlement is not supported" [f.seller]
+    (allocateWith (sellerSpec with nextIterationFunding = Some TextMap.empty) [f.sellerBond])
+  submitFailsWith "a committed allocation needs a settlement deadline" [f.seller]
+    (allocateWith (sellerSpec with committed = True) [f.sellerBond])
+  submitFailsWith "deadline 'settlementDeadline'" [f.seller]
+    (allocateWith (sellerSpec with settlementDeadline = pastDeadline) [f.sellerBond])
+  submitFailsWith "the settlement names no executors" [f.seller]
+    (allocateCmd f.custodianFactory (f.settlement with executors = []) sellerSpec [f.sellerBond] now)
+  submitFailsWith "no holdings of US912828ZM50 to fund it" [f.seller]
+    (allocateWith sellerSpec [])
+  small <- toInterfaceContractId <$> setupSecurityPosition f.custodian f.seller (AccountId "ACC-SELLER-SEC") 10.0
+  submitFailsWith "holdings total 10.0, less than 1000000.0" [f.seller]
+    (allocateWith sellerSpec [small])
+  submitFailsWith "Input holding is not in the allocating account" [f.seller]
+    (allocateWith (sellerSpec with authorizer = f.bondLeg.sender with id = "ACC-OTHER") [f.sellerBond])
+
+  -- Someone who is not a client cannot allocate, even if the factory is disclosed to them
+  Some disclosure <- queryDisclosure f.custodian f.custodianFactory
+  err <- submitWithError (actAs outsider <> disclose disclosure)
+    (allocateWith (spec f.custodian outsiderAccount [sendSide f.bondLeg]) [])
+  assertMsg ("An outsider cannot allocate, got: " <> show err)
+    ("the account owner is not a client of the registry" `isInfixOf` show err)
+
+-- An allocation settles only with the others of its batch: settling it on its
+-- own is refused, even by the registry and the agent together.
+testSettleAlone : Script ()
+testSettleAlone = script do
+  f <- setup "TA-ALONE"
+  a <- allocateTrade f
+  submitFailsWith "AryaFi allocations settle only through the registry's SettlementFactory_SettleBatch" [f.custodian, f.agent]
+    (exerciseCmd a.sellerSends Allocation_Settle with
+      actors = [f.custodian, f.agent]; extraTransferLegSides = []; nextIterationFunding = None; extraArgs = noExtraArgs)
+  Some stillLocked <- queryInterfaceContractId f.agent a.sellerSends
+  assertMsg "The allocation and its funding are untouched" (length stillLocked.holdingCids == 1)
+
+-- ---------------------------------------------------------------------------
+-- Visibility and the factory
+-- ---------------------------------------------------------------------------
+
+-- Each party sees its own allocations; the agent sees all of them; nobody
+-- else sees any.
+testAllocationVisibility : Script ()
+testAllocationVisibility = script do
+  f <- setup "TA-VIEW"
+  outsider <- allocateTestParty "Outsider" "TA-VIEW"
+  _ <- allocateTrade f
+  let count p = length <$> queryInterface @Allocation p
+  agentCount <- count f.agent
+  sellerCount <- count f.seller
+  custodianCount <- count f.custodian
+  outsiderCount <- count outsider
+  assertMsg "The agent sees all four allocations" (agentCount == 4)
+  assertMsg "The seller sees its two" (sellerCount == 2)
+  assertMsg "The custodian sees the two it keeps" (custodianCount == 2)
+  assertMsg "An outsider sees none" (outsiderCount == 0)
+
+testAllocationFactory : Script ()
+testAllocationFactory = script do
+  f <- setup "TA-FACTORY"
+  dave <- allocateTestParty "Dave" "TA-FACTORY"
+  fetched <- submit f.seller do
+    exerciseCmd (toInterfaceContractId @AllocationFactory f.custodianFactory) AllocationFactory_PublicFetch with actors = [f.seller]
+  assertMsg "The allocation factory names the custodian" (fetched.admin == f.custodian)
+  fetchedSettlement <- submit f.agent do
+    exerciseCmd (toInterfaceContractId @SettlementFactory f.custodianFactory) SettlementFactory_PublicFetch with actors = [f.agent]
+  assertMsg "The settlement factory names the custodian" (fetchedSettlement.admin == f.custodian)
+  withDave <- submit f.custodian do exerciseCmd f.custodianFactory AddAllocationFactoryClient with client = dave
+  submitFailsWith "Party is already a client" [f.custodian]
+    (exerciseCmd withDave AddAllocationFactoryClient with client = dave)
+  withoutDave <- submit f.custodian do exerciseCmd withDave RemoveAllocationFactoryClient with client = dave
+  Some factory <- queryContractId f.custodian withoutDave
+  assertMsg "Dave is no longer a client" (dave `notElem` factory.clients)
+
+-- | Every test that runs on a real participant. testCommittedAllocation moves
+-- time with passTime, which only the test ledger supports.
+runTokenAllocationTests : Script ()
+runTokenAllocationTests = script do
+  testAllocationLocksFunding
+  testUnusedInputsReturned
+  testDvpThroughAllocations
+  testSettlementChecks
+  testNettedAllocation
+  testCancelAndWithdraw
+  testAllocateChecks
+  testSettleAlone
+  testAllocationVisibility
+  testAllocationFactory
