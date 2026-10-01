@@ -123,9 +123,10 @@
             <ul class="check-list">
               <li>Bond-for-cash settlement that moves both sides in one transaction</li>
               <li>Runs on Canton 3.5, the version the Canton Network TestNet runs</li>
-              <li>319 automated tests; every change is also tested on a five-institution Canton network</li>
+              <li>326 automated tests; every change is also tested on a five-institution Canton network</li>
               <li>ISO 20022 payment and securities messages mapped to ledger requests</li>
               <li>Cash and bond positions follow the Canton Network token standard: wallets can list and send them, and settlement apps can settle them</li>
+              <li>Delivery versus payment through the token standard, against AryaFi cash or another registry's token</li>
             </ul>
           </article>
           <article class="card status-card status-todo">
@@ -134,7 +135,7 @@
               <li>An independent security audit</li>
               <li>Institutions on different nodes agreeing a trade step by step (today every signer must be on the same node)</li>
               <li>Loans, repos and securities lending moving real assets (today they track the agreement only)</li>
-              <li>AryaFi's own delivery versus payment settling other tokens, such as Canton Coin, through the token standard</li>
+              <li>Settling against Canton Coin itself, which needs a Canton Network (tested so far against Splice's reference token)</li>
             </ul>
           </article>
         </div>
@@ -211,7 +212,7 @@
         <div class="grid grid-3">
           <article class="card"><h3>Cash</h3><p>Tokenized deposits at a bank: split, merge, transfer with the receiver's consent, and lock for settlement. Wallets and settlement apps can list, send and settle it through the token standard.</p><code class="tech">CashPosition</code></article>
           <article class="card"><h3>Securities</h3><p>Bonds and equities kept by a custodian, with the same locking and consent rules, and the same token-standard support.</p><code class="tech">SecurityPosition</code></article>
-          <article class="card"><h3>Delivery versus payment</h3><p>Swaps a locked security for locked cash in one transaction, after checking both against the signed terms.</p><code class="tech">DvpInstruction</code></article>
+          <article class="card"><h3>Delivery versus payment</h3><p>Swaps a locked security for locked cash in one transaction, after checking both against the signed terms. Through the token standard, the cash can be any registry's token.</p><code class="tech">DvpInstruction · TokenDvpInstruction</code></article>
         </div>
       </section>
 
@@ -276,7 +277,7 @@
         </div>
         <ul class="todo-list todo-list-plain">
           <li><strong>Agreeing trades across nodes.</strong> Propose-and-accept steps, so the seller, buyer and agent can each sign from their own node.</li>
-          <li><strong>Settling through the token standard.</strong> Wallets can already list and send AryaFi positions through the token standard, and settlement apps can settle them through its allocations. Next, AryaFi's delivery versus payment settles through allocations too, so it can settle other tokens such as Canton Coin.</li>
+          <li><strong>Settling against Canton Coin.</strong> AryaFi's delivery versus payment already settles through the token standard against other registries' tokens. Next, it settles a bond against Canton Coin on a Canton Network.</li>
           <li><strong>Financing on real assets.</strong> Loans, repos and securities lending that lock and move the actual cash and securities.</li>
           <li><strong>An independent security audit</strong> of the finished core.</li>
         </ul>
@@ -302,7 +303,7 @@ git clone https://github.com/Aryaverse/aryafi-core.git
 cd aryafi-core
 dpm build --all
 
-# Run the 319 tests
+# Run the 326 tests
 cd daml/test
 dpm test --all</code></pre>
           <button class="btn btn-small" type="button" data-copy="quickstart-code">Copy</button>
@@ -367,6 +368,7 @@ dpm test --all</code></pre>
             <option value="settlement">Settlement (delivery versus payment)</option>
             <option value="tokentransfer">Token-standard transfers (send and accept)</option>
             <option value="tokenallocation">Token-standard settlement (allocations)</option>
+            <option value="tokendvp">Token-standard delivery versus payment</option>
             <option value="collateral">Collateral (haircuts and valuation)</option>
             <option value="loan">Loans (credit facilities)</option>
             <option value="repo">Repos (repurchase agreements)</option>
