@@ -1,0 +1,407 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Delivery versus payment through the Canton Network Token Standard
+-- (`TokenDvpInstruction`): the agent requests allocations, the seller's and
+-- buyer's wallets make them at each registry, and the agent settles every
+-- registry's batch in one transaction. The payment is either AryaFi cash or a
+-- token AryaFi does not issue: Splice's reference V2 token (TestTokenV2),
+-- standing in for tokens such as Canton Coin.
+module AryaFi.Test.Scenarios.TokenDvpTest where
+
+import qualified DA.Map as Map
+import qualified DA.TextMap as TextMap
+import DA.List (sort)
+import DA.Optional (isSome, optionalToList)
+import DA.Text (isInfixOf)
+import DA.Time (addRelTime, days, minutes)
+import Daml.Script
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
+import Splice.Api.Token.MetadataV1 (AnyValue(..), ChoiceContext(..), ExtraArgs(..), emptyChoiceContext, emptyMetadata)
+import qualified Splice.Api.Token.MetadataV1 as Metadata
+import Splice.Api.Token.AllocationV2
+import Splice.Api.Token.AllocationInstructionV2
+import Splice.Api.Token.AllocationRequestV2
+import Splice.Api.Token.TransferInstructionV2 (TransferInstruction, TransferInstruction_Accept(..))
+import qualified Splice.Testing.Tokens.TestTokenV2 as Coin
+import AryaFi.Common.Identifiers
+import AryaFi.Common.Types (SettlementStatus(..))
+import AryaFi.Finance.TokenAllocation
+import AryaFi.Finance.TokenDvp
+import AryaFi.Test.Scenarios.DvpSettlementTest (allocateTestParty, bondIsin, setupCashPosition, setupSecurityPosition)
+import AryaFi.Test.Unit.TokenStandardTest (holdingsV2)
+
+-- ---------------------------------------------------------------------------
+-- Registries, as wallets and the agent reach them
+-- ---------------------------------------------------------------------------
+
+-- | What a wallet or the agent needs to use a registry: its factory (which is
+-- both the allocation and the settlement factory here), the choice context it
+-- asks for, and the contracts it discloses. A registry's off-ledger API
+-- provides these on a real network.
+data Registry = Registry
+  with
+    admin : Party
+    factory : Metadata.AnyContractId
+    extraArgs : ExtraArgs
+    disclosures : [Disclosure]
+    discloseFunding : ContractId HoldingV2.Holding -> Script [Disclosure]
+    -- ^ How the registry discloses an allocation's locked funding to the agent.
+
+noExtraArgs : ExtraArgs
+noExtraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+
+-- | An AryaFi bank or custodian, with an allocation factory for `clients`.
+aryafiRegistry : Party -> [Party] -> Script Registry
+aryafiRegistry admin clients = do
+  factory <- submit admin do createCmd PositionAllocationFactory with admin; clients
+  pure Registry with
+    admin
+    factory = coerceContractId factory
+    extraArgs = noExtraArgs
+    disclosures = []
+    -- The agent observes AryaFi allocations' funding, so nothing is disclosed
+    discloseFunding = \_ -> pure []
+
+-- | Splice's reference V2 token. Its rules contract is the factory; calls
+-- name it in the choice context, and it is disclosed to callers.
+coinRegistry : Party -> Script Registry
+coinRegistry admin = do
+  rules <- submit admin do createCmd Coin.TokenRules with admin
+  Some disclosure <- queryDisclosure admin rules
+  pure Registry with
+    admin
+    factory = coerceContractId rules
+    extraArgs = ExtraArgs with
+      context = ChoiceContext with
+        values = TextMap.fromList [("testTokenV2/tokenRules", AV_ContractId (coerceContractId rules))]
+      meta = emptyMetadata
+    disclosures = [disclosure]
+    discloseFunding = \cid -> optionalToList <$> queryDisclosure admin (coerceContractId @_ @Coin.Token cid)
+
+coinId : Text
+coinId = "TestCoin"
+
+-- | A self-custodial account at the reference token.
+coinAccount : Party -> HoldingV2.Account
+coinAccount owner = HoldingV2.Account with owner = Some owner; provider = None; id = ""
+
+-- | Mint reference tokens to `owner`: the admin offers them, the owner accepts.
+mintCoin : Registry -> Party -> Decimal -> Script ()
+mintCoin registry owner amount = do
+  now <- getTime
+  let account = coinAccount owner
+  offer <- submit registry.admin do
+    exerciseCmd (coerceContractId @_ @Coin.TokenRules registry.factory) Coin.TokenRules_OfferMint with
+      receiver = account
+      amount
+      instrumentId = HoldingV2.InstrumentId with admin = registry.admin; id = coinId
+      offeredAt = addRelTime now (minutes (-1))
+      receiverConfig = Coin.AccountConfig with
+        admin = registry.admin
+        account
+        ownerConfig = Coin.PartyConfig with canInitiate = True; mustApprove = True
+        providerConfig = Coin.PartyConfig with canInitiate = False; mustApprove = False
+  _ <- submit (actAs owner <> discloseMany registry.disclosures) do
+    exerciseCmd (toInterfaceContractId @TransferInstruction offer.offerCid) TransferInstruction_Accept with
+      actors = [owner]; extraArgs = registry.extraArgs
+  pure ()
+
+-- ---------------------------------------------------------------------------
+-- The trade
+-- ---------------------------------------------------------------------------
+
+data Fixture = Fixture
+  with
+    custodian : Registry
+    payments : Registry
+    -- ^ The registry of the payment leg: AryaFi's bank, or the reference token.
+    seller : Party
+    buyer : Party
+    agent : Party
+    dvpCid : ContractId TokenDvpInstruction
+    requests : [ContractId TokenDvpAllocationRequest]
+
+bond : Text
+bond = unISIN bondIsin
+
+-- | How the payment is made.
+data Payment = AryaFiCash | ReferenceToken
+  deriving (Eq, Show)
+
+-- | The seller sells 1,000,000 of the bond to the buyer for 995,000, paid in
+-- AryaFi USD or in the reference token; the agent records the trade and asks
+-- for allocations, which settle within a day.
+setup : Text -> Payment -> Script Fixture
+setup test payment = do
+  custodianParty <- allocateTestParty "Custodian" test
+  paymentAdmin <- allocateTestParty (if payment == AryaFiCash then "Bank" else "CoinRegistry") test
+  seller <- allocateTestParty "Seller" test
+  buyer <- allocateTestParty "Buyer" test
+  agent <- allocateTestParty "Agent" test
+  let clients = [seller, buyer, agent]
+  custodian <- aryafiRegistry custodianParty clients
+  _ <- setupSecurityPosition custodianParty seller (AccountId "ACC-SELLER-SEC") 5000000.0
+  (payments, buyerPays, sellerIsPaid, paymentInstrument) <- case payment of
+    AryaFiCash -> do
+      bank <- aryafiRegistry paymentAdmin clients
+      _ <- setupCashPosition paymentAdmin buyer (AccountId "ACC-BUYER-CASH") 1000000.0
+      let account owner id = HoldingV2.Account with owner = Some owner; provider = Some paymentAdmin; id
+      pure (bank, account buyer "ACC-BUYER-CASH", account seller "ACC-SELLER-CASH", "USD")
+    ReferenceToken -> do
+      coin <- coinRegistry paymentAdmin
+      mintCoin coin buyer 600000.0
+      mintCoin coin buyer 400000.0
+      pure (coin, coinAccount buyer, coinAccount seller, coinId)
+  now <- getTime
+  let account owner id = HoldingV2.Account with owner = Some owner; provider = Some custodianParty; id
+  dvpCid <- submit agent do
+    createCmd TokenDvpInstruction with
+      settlementAgent = agent
+      seller
+      buyer
+      tradeId = TradeId ("TDVP-" <> test)
+      delivery = DvpLeg with
+        admin = custodianParty
+        leg = TransferLeg with
+          transferLegId = "delivery"
+          sender = account seller "ACC-SELLER-SEC"
+          receiver = account buyer "ACC-BUYER-SEC"
+          amount = 1000000.0
+          instrumentId = bond
+          meta = emptyMetadata
+      payment = DvpLeg with
+        admin = paymentAdmin
+        leg = TransferLeg with
+          transferLegId = "payment"
+          sender = buyerPays
+          receiver = sellerIsPaid
+          amount = 995000.0
+          instrumentId = paymentInstrument
+          meta = emptyMetadata
+      requestedAt = addRelTime now (minutes (-1))
+      settleBefore = addRelTime now (days 1)
+      status = PendingSettlement
+      observers = []
+  requests <- submit agent do exerciseCmd dvpCid RequestTokenDvpAllocations
+  pure Fixture with ..
+
+registryFor : Fixture -> Party -> Registry
+registryFor f admin = if admin == f.custodian.admin then f.custodian else f.payments
+
+-- | What a wallet does with an allocation request: for each allocation the
+-- party is asked for, fund it from the party's unlocked holdings of what it
+-- sends, allocate at that registry, then accept the request.
+allocateAsRequested : Fixture -> Party -> Script [ContractId Allocation]
+allocateAsRequested f party = do
+  [(requestCid, Some request)] <- queryInterface @AllocationRequest party
+  now <- getTime
+  holdings <- queryInterface @HoldingV2.Holding party
+  allocations <- forA request.allocations \allocation -> do
+    let registry = registryFor f allocation.admin
+        sends = [side.instrumentId | side <- allocation.transferLegSides, side.side == SenderSide]
+        inputs = [ cid | (cid, Some h) <- holdings
+                 , h.account == allocation.authorizer, h.instrumentId.admin == allocation.admin
+                 , h.instrumentId.id `elem` sends, h.lock == None ]
+    result <- submit (actAs party <> discloseMany registry.disclosures) do
+      exerciseCmd (coerceContractId @_ @AllocationFactory registry.factory) AllocationFactory_Allocate with
+        settlement = request.settlement
+        allocation
+        requestedAt = addRelTime now (minutes (-1))
+        inputHoldingCids = inputs
+        extraArgs = registry.extraArgs
+        actors = [party]
+    case result.output of
+      AllocationInstructionResult_Completed cid -> pure cid
+      other -> abort ("Expected an allocation, got " <> show other)
+  _ <- submit party do
+    exerciseCmd requestCid AllocationRequest_Accept with actors = [party]; extraArgs = noExtraArgs
+  pure allocations
+
+-- | The agent's batches: for each registry, its factory, the allocations made
+-- there, and the context it asks for; and the contracts to disclose, including
+-- the funding the agent cannot see itself.
+batchesFor : Fixture -> Script ([RegistryBatch], [Disclosure])
+batchesFor f = do
+  allocations <- queryInterface @Allocation f.agent
+  let mine = [(cid, a) | (cid, Some a) <- allocations, a.settlement.executors == [f.agent]]
+  parts <- forA [f.custodian, f.payments] \registry -> do
+    let here = [(cid, a) | (cid, a) <- mine, a.allocation.admin == registry.admin]
+    funding <- concat <$> forA (concatMap (\(_, a) -> a.holdingCids) here) registry.discloseFunding
+    let batch = RegistryBatch with
+          factoryCid = coerceContractId registry.factory
+          allocationCids = map fst here
+          extraArgs = registry.extraArgs
+    pure (batch, registry.disclosures <> funding)
+  pure (map fst parts, concatMap snd parts)
+
+execute : Fixture -> Script TokenDvpResult
+execute f = do
+  (batches, disclosures) <- batchesFor f
+  submit (actAs f.agent <> discloseMany disclosures) do
+    exerciseCmd f.dvpCid ExecuteTokenDvp with batches; openRequests = []
+
+-- | Submit and check that it fails with an error mentioning `expected`.
+submitFailsWith : Text -> SubmitOptions -> Commands a -> Script ()
+submitFailsWith expected options cmds = do
+  result <- trySubmit options cmds
+  case result of
+    Left err -> assertMsg
+      ("Expected an error mentioning \"" <> expected <> "\", got: " <> show err)
+      (expected `isInfixOf` show err)
+    Right _ -> abort ("Expected the submission to fail with: " <> expected)
+
+-- | The token-standard holdings `party` owns, as (instrument, amount, locked).
+ownHoldings : Party -> Script [(Text, Decimal, Bool)]
+ownHoldings party = do
+  views <- holdingsV2 party
+  pure (sort [(v.instrumentId.id, v.amount, v.lock /= None) | v <- views, v.account.owner == Some party])
+
+-- ---------------------------------------------------------------------------
+-- Settling
+-- ---------------------------------------------------------------------------
+
+-- Bond for AryaFi cash: each party allocates from its own requests, and the
+-- agent alone settles both registries in one transaction.
+testTokenDvpWithAryaFiCash : Script ()
+testTokenDvpWithAryaFiCash = script do
+  f <- setup "TD-CASH" AryaFiCash
+  _ <- allocateAsRequested f f.seller
+  _ <- allocateAsRequested f f.buyer
+  result <- execute f
+
+  assertMsg "Both registries settled" (sort (map fst result.batchResults) == sort [f.custodian.admin, f.payments.admin])
+  Some dvp <- queryContractId f.agent result.instructionCid
+  assertMsg "The DvP is settled" (dvp.status == Settled)
+  sellerHoldings <- ownHoldings f.seller
+  assertMsg "The seller has its bond change and the cash"
+    (sellerHoldings == [(bond, 4000000.0, False), ("USD", 995000.0, False)])
+  buyerHoldings <- ownHoldings f.buyer
+  assertMsg "The buyer has the bond and its cash change"
+    (buyerHoldings == [(bond, 1000000.0, False), ("USD", 5000.0, False)])
+
+-- Bond against a token AryaFi does not issue: Splice's reference V2 token,
+-- settled at its own registry in the same transaction as the bond.
+testTokenDvpWithAnotherToken : Script ()
+testTokenDvpWithAnotherToken = script do
+  f <- setup "TD-COIN" ReferenceToken
+  _ <- allocateAsRequested f f.seller
+  _ <- allocateAsRequested f f.buyer
+  result <- execute f
+
+  assertMsg "Both registries settled" (length result.batchResults == 2)
+  sellerHoldings <- ownHoldings f.seller
+  assertMsg "The seller has its bond change and 995,000 of the reference token"
+    (sellerHoldings == [(coinId, 995000.0, False), (bond, 4000000.0, False)])
+  buyerHoldings <- ownHoldings f.buyer
+  assertMsg "The buyer has the bond and 5,000 of the reference token"
+    (buyerHoldings == [(coinId, 5000.0, False), (bond, 1000000.0, False)])
+
+-- If one party has not allocated, the registry with the missing allocation
+-- refuses, so nothing settles at either. The agent then cancels the DvP, which
+-- unlocks the seller's bond.
+testTokenDvpNeedsBothSides : Script ()
+testTokenDvpNeedsBothSides = script do
+  f <- setup "TD-ONESIDE" AryaFiCash
+  sellerAllocations <- allocateAsRequested f f.seller
+  (batches, disclosures) <- batchesFor f
+  submitFailsWith "the allocations do not authorize exactly the transfer legs" (actAs f.agent <> discloseMany disclosures)
+    (exerciseCmd f.dvpCid ExecuteTokenDvp with batches; openRequests = [])
+  sellerHoldings <- ownHoldings f.seller
+  assertMsg "The seller's bond is still locked" ((bond, 1000000.0, True) `elem` sellerHoldings)
+
+  [buyerRequest] <- map fst <$> queryInterface @AllocationRequest f.buyer
+  cancelled <- submit f.agent do
+    exerciseCmd f.dvpCid CancelTokenDvp with
+      reason = "Buyer did not allocate"
+      allocations = [(cid, noExtraArgs) | cid <- sellerAllocations]
+      openRequests = [fromInterfaceContractId buyerRequest]
+  Some dvp <- queryContractId f.agent cancelled
+  assertMsg "The DvP is cancelled" (dvp.status == Cancelled "Buyer did not allocate")
+  sellerAfter <- ownHoldings f.seller
+  assertMsg "The seller's bond is unlocked" (all (\(_, _, locked) -> not locked) sellerAfter)
+  buyerRequests <- queryInterface @AllocationRequest f.buyer
+  assertMsg "The buyer's request is gone" (null buyerRequests)
+
+-- After the deadline the agent cannot settle; the parties withdraw their allocations.
+testTokenDvpDeadline : Script ()
+testTokenDvpDeadline = script do
+  f <- setup "TD-LATE" AryaFiCash
+  sellerAllocations <- allocateAsRequested f f.seller
+  _ <- allocateAsRequested f f.buyer
+  passTime (days 2)
+  (batches, disclosures) <- batchesFor f
+  submitFailsWith "deadline 'settleBefore'" (actAs f.agent <> discloseMany disclosures)
+    (exerciseCmd f.dvpCid ExecuteTokenDvp with batches; openRequests = [])
+  _ <- forA sellerAllocations \cid -> submit f.seller do
+    exerciseCmd cid Allocation_Withdraw with actors = [f.seller]; extraArgs = noExtraArgs
+  sellerHoldings <- ownHoldings f.seller
+  assertMsg "The seller has its whole bond back, unlocked"
+    (sum [a | (i, a, False) <- sellerHoldings, i == bond] == 5000000.0)
+
+-- ---------------------------------------------------------------------------
+-- Requests and checks
+-- ---------------------------------------------------------------------------
+
+-- Each party's wallet sees one request, listing exactly its allocations.
+testAllocationRequests : Script ()
+testAllocationRequests = script do
+  f <- setup "TD-REQ" AryaFiCash
+  [(_, Some sellerRequest)] <- queryInterface @AllocationRequest f.seller
+  assertMsg "The seller is asked to send the bond at the custodian and receive the cash at the bank"
+    (sort [(a.admin, a.authorizer.id, [s.side | s <- a.transferLegSides]) | a <- sellerRequest.allocations]
+      == sort [(f.custodian.admin, "ACC-SELLER-SEC", [SenderSide]), (f.payments.admin, "ACC-SELLER-CASH", [ReceiverSide])])
+  assertMsg "The settlement names the agent and the trade"
+    (sellerRequest.settlement.executors == [f.agent] && sellerRequest.settlement.id == "TDVP-TD-REQ")
+  assertMsg "The allocations expire with the DvP"
+    (all (\a -> isSome a.settlementDeadline && not a.committed) sellerRequest.allocations)
+  assertMsg "The seller can accept or reject"
+    (sellerRequest.availableActions == Map.fromList [(ARA_Accept, [[f.seller]]), (ARA_Reject, [[f.seller]])])
+
+  [(buyerRequestCid, _)] <- queryInterface @AllocationRequest f.buyer
+  submitFailsWith "Only the party asked can accept the request" (actAs f.seller <> readAs f.buyer)
+    (exerciseCmd buyerRequestCid AllocationRequest_Accept with actors = [f.seller]; extraArgs = noExtraArgs)
+  _ <- submit f.buyer do
+    exerciseCmd buyerRequestCid AllocationRequest_Reject with actors = [f.buyer]; extraArgs = noExtraArgs
+  [(sellerRequestCid, _)] <- queryInterface @AllocationRequest f.seller
+  _ <- submit f.agent do
+    exerciseCmd sellerRequestCid AllocationRequest_Withdraw with actors = [f.agent]; extraArgs = noExtraArgs
+  left <- (<>) <$> queryInterface @AllocationRequest f.seller <*> queryInterface @AllocationRequest f.buyer
+  assertMsg "Both requests are gone" (null left)
+
+testTokenDvpChecks : Script ()
+testTokenDvpChecks = script do
+  f <- setup "TD-CHECKS" AryaFiCash
+  _ <- allocateAsRequested f f.seller
+  _ <- allocateAsRequested f f.buyer
+  (batches, disclosures) <- batchesFor f
+  let asAgent = actAs f.agent <> discloseMany disclosures
+  [custodianBatch, bankBatch] <- pure batches
+
+  submitFailsWith "give exactly one batch for each registry" asAgent
+    (exerciseCmd f.dvpCid ExecuteTokenDvp with batches = [custodianBatch]; openRequests = [])
+  submitFailsWith "give exactly one batch for each registry" asAgent
+    (exerciseCmd f.dvpCid ExecuteTokenDvp with batches = [custodianBatch, bankBatch, bankBatch]; openRequests = [])
+  submitMustFail (actAs f.seller <> readAs f.agent)
+    (exerciseCmd f.dvpCid ExecuteTokenDvp with batches; openRequests = [])
+
+  -- Legs must run from the seller to the buyer and back
+  Some dvp <- queryContractId f.agent f.dvpCid
+  submitMustFail f.agent do
+    createCmd dvp with tradeId = TradeId "TDVP-WRONG"; seller = f.buyer; buyer = f.seller
+  submitMustFail f.agent do
+    createCmd dvp with tradeId = TradeId "TDVP-SAME-LEG"; payment = dvp.payment with leg = dvp.delivery.leg
+
+  result <- execute f
+  submitFailsWith "DvP can only be executed from PendingSettlement status" asAgent
+    (exerciseCmd result.instructionCid ExecuteTokenDvp with batches; openRequests = [])
+
+-- | Every test that runs on a real participant. testTokenDvpDeadline moves
+-- time with passTime, which only the test ledger supports.
+runTokenDvpTests : Script ()
+runTokenDvpTests = script do
+  testTokenDvpWithAryaFiCash
+  testTokenDvpWithAnotherToken
+  testTokenDvpNeedsBothSides
+  testAllocationRequests
+  testTokenDvpChecks
