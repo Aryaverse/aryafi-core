@@ -101,7 +101,7 @@ Token-standard settlement is atomic in the same way when the settlement agent se
 | `Integration/` | 1 | Cross-module workflows on a single ledger |
 | `Network/` | 1 | Smoke test for shared networks such as TestNet: five run-scoped parties, one DvP |
 
-Not yet covered: property-based tests, multi-participant tests on a real Canton topology, and concurrency/contention tests.
+Not yet covered: property-based tests, concurrency/contention tests, and multi-participant tests of anything but the token-standard DvP (`Network/TokenDvpAcrossNodes.daml`, which runs with each institution on its own participant, locally and in CI).
 
 ---
 

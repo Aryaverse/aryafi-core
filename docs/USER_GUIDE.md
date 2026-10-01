@@ -104,7 +104,7 @@ dpm script \
   --ledger-host localhost \
   --ledger-port 10012
 ```
-This uploads the test DAR to the bank participant, allocates the scenario's parties there, and runs the DvP. Workflows whose parties live on different participants need propose/accept templates (see [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)).
+This uploads the test DAR to the bank participant, allocates the scenario's parties there, and runs the DvP. Workflows whose parties live on different participants need propose/accept templates (see [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)). The token-standard DvP does not: `AryaFi.Test.Network.TokenDvpAcrossNodes:runTokenDvpAcrossNodes` runs one with each institution on its own participant, given a participant config (see the CI workflow's topology job for the files).
 
 ---
 

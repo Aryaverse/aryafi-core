@@ -14,7 +14,7 @@ What v3.0.0 is **not** yet is what the requirements call for: *"software infrast
 | Requirement (TBRD) | v3.0.0 | Gap closed by |
 |:---|:---|:---|
 | Composable primitives (§5, §9) | DvP composes Cash + Security; nothing else does | Workstreams 1, 4 |
-| Synchronized DvP (§3, §26) | Done, Model 1, single-participant tested | Workstream 2 (cross-participant) |
+| Synchronized DvP (§3, §26) | Done, Model 1. `DvpInstruction` single-participant tested; the token-standard DvP runs with each institution on its own participant | Workstream 2 (cross-participant for the other workflows) |
 | Loan references compliance via controlled interfaces (§10) | No | Workstream 3 |
 | Repo substitution re-runs eligibility (§11) | No | Workstreams 3, 5 |
 | Generic, policy-driven transfer engine (§12) | Manual officer approval | Workstream 3 |
