@@ -1,0 +1,362 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Canton Network Token Standard allocations (CIP-0112 `AllocationV2`) of
+-- AryaFi cash and security positions, so that settlement apps, AryaFi's own
+-- DvP included, can settle trades in AryaFi positions through the standard,
+-- together with other tokens.
+--
+-- In the standard, a settlement (a DvP, for example) is a set of transfer
+-- legs. Every account involved creates an allocation at each registry whose
+-- instruments it sends or receives: its authorization of its sides of the
+-- legs. The settlement's executors then ask each registry to settle its batch
+-- of allocations, all in one transaction, so every leg settles or none does.
+--
+-- The registry is the bank for cash and the custodian for securities. It
+-- creates a `PositionAllocationFactory` for its clients, who include the
+-- settlement agents that execute settlements:
+--
+--   * Allocating (`AllocationFactory_Allocate`): the account owner names its
+--     legs and the holdings that fund them. For each instrument, the amount it
+--     sends net of what it receives is locked to the registry and shown to the
+--     executors. Change and unused holdings go back to the owner at once. An
+--     allocation that only receives needs no holdings: it is the receiver's
+--     consent to receive.
+--   * Settling (`SettlementFactory_SettleBatch`): the executors present the
+--     legs and the allocations. The registry checks that the allocations
+--     authorize exactly both sides of every leg, then settles each one: its
+--     locked funding is archived and its net receipts are created as new
+--     positions. Because every leg is authorized on both sides, what is
+--     archived equals what is created, instrument by instrument.
+--   * Until then, the executors can cancel an allocation and the owner can
+--     withdraw it (a committed allocation only after its settlement
+--     deadline). Either way the funding is unlocked for the owner.
+--
+-- An allocation settles only as part of its registry's batch, never on its own
+-- with `Allocation_Settle`: the batch is what checks that every leg's other
+-- side is authorized, so nothing is created or destroyed. Iterated settlement
+-- (`nextIterationFunding`) is not supported.
+module AryaFi.Finance.TokenAllocation where
+
+import qualified DA.Map as Map
+import qualified DA.Set as Set
+import qualified DA.TextMap as TextMap
+import DA.Action (when)
+import DA.Assert (assertDeadlineExceeded, assertWithinDeadline)
+import DA.Foldable (forA_, mapA_)
+import DA.List (dedupOn, dedupSort, unique)
+import DA.Optional (fromOptional, isNone, isSome)
+import DA.Time (isLedgerTimeGT)
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
+import Splice.Api.Token.MetadataV1 (emptyMetadata)
+import Splice.Api.Token.AllocationV2
+import Splice.Api.Token.AllocationInstructionV2
+import AryaFi.Common.Errors (require, requirePositive)
+import AryaFi.Finance.TokenRegistry
+
+-- | Lock context shown on an allocation's funding.
+allocationLockContext : SettlementInfo -> Text
+allocationLockContext settlement = "Allocation for settlement " <> settlement.id
+
+-- ---------------------------------------------------------------------------
+-- PositionAllocationFactory Template
+-- ---------------------------------------------------------------------------
+
+-- | A registry's factory for token-standard allocations of the positions it
+-- keeps, and for settling them. Its clients see it, so they can allocate and
+-- settle through it.
+template PositionAllocationFactory
+  with
+    admin : Party
+    -- ^ The registry: the bank for cash, the custodian for securities.
+    clients : [Party]
+    -- ^ Account owners who allocate, and settlement agents who settle,
+    --   through this factory.
+  where
+    signatory admin
+    observer clients
+
+    interface instance AllocationFactory for PositionAllocationFactory where
+      view = AllocationFactoryView with admin; meta = emptyMetadata
+      -- | Lock a client's funding for a settlement and record its authorization (see allocate).
+      allocationFactory_allocateImpl _ arg = allocate this arg
+      -- | Return the factory's view: its admin.
+      allocationFactory_publicFetchImpl _ _ = pure (AllocationFactoryView with admin; meta = emptyMetadata)
+      allocationFactory_allocateExtraObservers _ = []
+
+    interface instance SettlementFactory for PositionAllocationFactory where
+      view = SettlementFactoryView with admin; meta = emptyMetadata
+      -- | Settle the allocations for a settlement's legs at this registry (see settleBatch).
+      settlementFactory_settleBatchImpl _ arg = settleBatch admin arg
+      -- | Return the factory's view: its admin.
+      settlementFactory_publicFetchImpl _ _ = pure (SettlementFactoryView with admin; meta = emptyMetadata)
+      settlementFactory_settleBatchExtraObservers _ = []
+
+    -- | Let another account owner or settlement agent use this factory.
+    choice AddAllocationFactoryClient : ContractId PositionAllocationFactory
+      with
+        client : Party
+      controller admin
+      do
+        require (client `notElem` clients) "Party is already a client"
+        create this with clients = client :: clients
+
+    -- | Stop an account owner or settlement agent using this factory.
+    -- Allocations already made are not affected.
+    choice RemoveAllocationFactoryClient : ContractId PositionAllocationFactory
+      with
+        client : Party
+      controller admin
+      do
+        require (client `elem` clients) "Party is not a client"
+        create this with clients = filter (/= client) clients
+
+-- | For each instrument, what an allocation's sides receive minus what they send.
+netCredits : [TransferLegSide] -> TextMap.TextMap Decimal
+netCredits sides = TextMap.fromListWithR (+)
+  [ (side.instrumentId, if side.side == ReceiverSide then side.amount else negate side.amount)
+  | side <- sides ]
+
+-- | Create an allocation for the owner of `allocation.authorizer`: check it,
+-- lock the funding it needs, and return the change.
+allocate : PositionAllocationFactory -> AllocationFactory_Allocate -> Update AllocationInstructionResult
+allocate factory arg = do
+  let admin = factory.admin
+      settlement = arg.settlement
+      spec = arg.allocation
+      account = spec.authorizer
+  require (spec.admin == admin) "Allocation: the instruments have a different admin"
+  require (account.provider == Some admin) "Allocation: the account is kept by another provider"
+  authorizer <- accountOwner "Authorizer" account
+  require (authorizer `elem` arg.actors) "Allocation: only the account owner can allocate"
+  require (authorizer `elem` factory.clients) "Allocation: the account owner is not a client of the registry"
+  require (not (null settlement.executors)) "Allocation: the settlement names no executors"
+  require (not (null spec.transferLegSides)) "Allocation: no transfer legs"
+  require (unique [(side.transferLegId, side.side) | side <- spec.transferLegSides])
+    "Allocation: a transfer leg side is listed twice"
+  forA_ spec.transferLegSides \side -> do
+    requirePositive side.amount ("Transfer leg " <> side.transferLegId <> " amount")
+    require (side.otherside.provider == Some admin && isSome side.otherside.owner && side.otherside /= account)
+      ("Allocation: transfer leg " <> side.transferLegId <> " has no counterparty account at this registry")
+  require (isNone spec.nextIterationFunding) "Allocation: iterated settlement is not supported"
+  require (not spec.committed || isSome spec.settlementDeadline)
+    "Allocation: a committed allocation needs a settlement deadline"
+  forA_ spec.settlementDeadline (assertWithinDeadline "settlementDeadline")
+  assertDeadlineExceeded "requestedAt" arg.requestedAt
+
+  -- Lock, for each instrument, what the allocation sends net of what it receives
+  let funding = TextMap.filter (> 0.0) (fmap negate (netCredits spec.transferLegSides))
+  inputs <- allocationInputs admin account arg.inputHoldingCids
+  let byInstrument = TextMap.fromListWithR (flip (++))
+        [((positionView p).instrumentId.id, [p]) | p <- inputs]
+  forA_ (TextMap.toList funding) \(id, _) ->
+    require (TextMap.member id byInstrument) ("Allocation: no holdings of " <> id <> " to fund it")
+  funded <- forA (TextMap.toList byInstrument) \(id, positions) ->
+    case (TextMap.lookup id funding, positions) of
+      -- Holdings that the allocation does not need go back unchanged
+      (None, _) -> pure (id, None, map positionCid positions)
+      (Some amount, like :: _) -> do
+        let total = sum [(positionView p).amount | p <- positions]
+        require (total >= amount)
+          ("Allocation: the " <> id <> " holdings total " <> show total <> ", less than " <> show amount)
+        mapA_ archivePosition positions
+        locked <- createPosition like authorizer account.id amount
+          (Some (admin, allocationLockContext settlement)) settlement.executors
+        change <-
+          if total > amount
+          then (\c -> [c]) <$> createPosition like authorizer account.id (total - amount) None (positionObservers like)
+          else pure []
+        pure (id, Some locked, change)
+      (Some _, []) -> abort ("Allocation: no holdings of " <> id <> " to fund it")
+
+  allocationCid <- create PositionAllocation with
+    admin
+    authorizer
+    settlement
+    allocation = spec
+    lockedHoldings = TextMap.fromList [(id, cid) | (id, Some cid, _) <- funded]
+    requestedAt = arg.requestedAt
+  pure AllocationInstructionResult with
+    output = AllocationInstructionResult_Completed (toInterfaceContractId allocationCid)
+    authorizerChangeCids = TextMap.fromList [(id, change) | (id, _, change) <- funded, not (null change)]
+    meta = emptyMetadata
+
+-- | Fetch the holdings that fund an allocation: each must be an unlocked
+-- AryaFi position in the allocating account, of an instrument the registry
+-- administers.
+allocationInputs : Party -> HoldingV2.Account -> [ContractId HoldingV2.Holding] -> Update [Position]
+allocationInputs admin account cids = do
+  require (unique cids) "Input holdings must be distinct"
+  forA cids \cid -> do
+    position <- fetchPosition cid
+    let holding = positionView position
+    require (holding.account == account) "Input holding is not in the allocating account"
+    require (holding.instrumentId.admin == admin) "Input holding has a different admin"
+    require (holding.lock == None) "Input holding is locked"
+    pure position
+
+-- | Whether two lists name the same parties.
+sameParties : [Party] -> [Party] -> Bool
+sameParties a b = dedupSort a == dedupSort b
+
+-- | Both sides of a transfer leg, each with the account that must authorize it.
+legSides : TransferLeg -> [(HoldingV2.Account, TransferLegSide)]
+legSides leg =
+  [ (leg.sender, side SenderSide leg.receiver)
+  , (leg.receiver, side ReceiverSide leg.sender)
+  ]
+  where
+    side s otherside = TransferLegSide with
+      transferLegId = leg.transferLegId
+      side = s
+      otherside
+      amount = leg.amount
+      instrumentId = leg.instrumentId
+      meta = leg.meta
+
+-- | Settle a batch: check that the allocations authorize exactly both sides of
+-- every leg, then settle each allocation.
+settleBatch : Party -> SettlementFactory_SettleBatch -> Update SettlementFactory_SettleBatchResult
+settleBatch admin arg = do
+  let settlement = arg.settlement
+  require (sameParties arg.actors settlement.executors) "Settlement: only the settlement's executors can settle it"
+  require (not (null arg.transferLegs)) "Settlement: no transfer legs"
+  require (unique [leg.transferLegId | leg <- arg.transferLegs]) "Settlement: a transfer leg ID is used twice"
+  forA_ arg.transferLegs \leg -> requirePositive leg.amount ("Transfer leg " <> leg.transferLegId <> " amount")
+  allocations <- forA arg.allocations \finalized -> do
+    require (null finalized.extraTransferLegSides && isNone finalized.nextIterationFunding)
+      "Settlement: iterated settlement is not supported"
+    found <- fetchFromInterface @PositionAllocation finalized.allocationCid
+    case found of
+      None -> abort "Settlement: an allocation was not made at an AryaFi registry"
+      Some (cid, allocation) -> do
+        require (allocation.admin == admin) "Settlement: an allocation was made at another registry"
+        require (allocation.settlement == settlement) "Settlement: an allocation is for another settlement"
+        pure (cid, allocation)
+
+  let authorized = [(a.allocation.authorizer, side) | (_, a) <- allocations, side <- a.allocation.transferLegSides]
+      required = concatMap legSides arg.transferLegs
+  require (unique [(account, side.transferLegId, side.side) | (account, side) <- authorized])
+    "Settlement: a transfer leg side is authorized twice"
+  require (Set.fromList authorized == Set.fromList required)
+    "Settlement: the allocations do not authorize exactly the transfer legs"
+
+  -- Read the instrument details from the locked funding before settling anything
+  instruments <- dedupOn detailsInstrumentId . concat <$> forA allocations \(_, a) ->
+    forA (TextMap.toList a.lockedHoldings) \(_, cid) -> instrumentDetails <$> fetchPosition cid
+  allocationSettleResults <- forA allocations \(cid, _) -> exercise cid SettleInBatch with instruments
+  pure SettlementFactory_SettleBatchResult with allocationSettleResults; meta = emptyMetadata
+
+-- ---------------------------------------------------------------------------
+-- PositionAllocation Template
+-- ---------------------------------------------------------------------------
+
+-- | A client's token-standard allocation at a registry: its authorization to
+-- send and receive its sides of a settlement's legs, with the funding locked
+-- to the registry.
+template PositionAllocation
+  with
+    admin : Party
+    -- ^ The registry, which holds the locks.
+    authorizer : Party
+    -- ^ Owner of the allocating account.
+    settlement : SettlementInfo
+    allocation : AllocationSpecification
+    lockedHoldings : TextMap.TextMap (ContractId HoldingV2.Holding)
+    -- ^ For each instrument the allocation sends more of than it receives,
+    --   the authorizer's position of the difference, locked to the registry.
+    requestedAt : Time
+    -- ^ When the authorizer requested the allocation.
+  where
+    signatory admin, authorizer
+    observer settlement.executors
+
+    interface instance Allocation for PositionAllocation where
+      view = AllocationView with
+        originalAllocationCid = None
+        settlement
+        allocation
+        holdingCids = map snd (TextMap.toList lockedHoldings)
+        createdAt = requestedAt
+        numIterations = 0
+        expiresAt = None
+        -- Settlement goes through the registry's SettlementFactory_SettleBatch.
+        availableActions = Map.fromList
+          [ (AA_Cancel, [settlement.executors])
+          , (AA_Withdraw, [[authorizer]])
+          ]
+        meta = emptyMetadata
+
+      -- | Refused: an allocation settles only with the others of its batch,
+      -- through SettlementFactory_SettleBatch, which checks every leg's other side.
+      allocation_settleImpl _ _ =
+        abort "AryaFi allocations settle only through the registry's SettlementFactory_SettleBatch"
+
+      -- | Release the funding to the authorizer, when the settlement will not happen.
+      allocation_cancelImpl self arg = do
+        require (all (`elem` arg.actors) settlement.executors) "Only the executors can cancel the allocation"
+        archive (fromInterfaceContractId @PositionAllocation self)
+        returned <- releaseFunding this
+        pure (allocationResult AllocationResult_Cancelled returned)
+
+      -- | Take the allocation back; a committed one only after its settlement deadline.
+      allocation_withdrawImpl self arg = do
+        require (authorizer `elem` arg.actors) "Only the account owner can withdraw the allocation"
+        when allocation.committed do
+          passed <- case allocation.settlementDeadline of
+            Some deadline -> isLedgerTimeGT deadline
+            None -> pure False
+          require passed "A committed allocation can be withdrawn only after its settlement deadline"
+        archive (fromInterfaceContractId @PositionAllocation self)
+        returned <- releaseFunding this
+        pure (allocationResult AllocationResult_Withdrawn returned)
+
+      allocation_settleExtraObservers _ = []
+      allocation_cancelExtraObservers _ = []
+      allocation_withdrawExtraObservers _ = []
+
+    -- | Settle this allocation as part of the registry's SettlementFactory_SettleBatch,
+    -- which supplies the details of the instruments being settled.
+    choice SettleInBatch : AllocationResult
+      with
+        instruments : [InstrumentDetails]
+      controller admin :: settlement.executors
+      do
+        settleAllocation this instruments
+
+-- | Settle an allocation, before its settlement deadline: archive its locked
+-- funding and create the authorizer's net receipts, with the details in
+-- `instruments`.
+settleAllocation : PositionAllocation -> [InstrumentDetails] -> Update AllocationResult
+settleAllocation this instruments = do
+  forA_ this.allocation.settlementDeadline (assertWithinDeadline "settlementDeadline")
+  funded <- forA (TextMap.toList this.lockedHoldings) \(id, cid) -> do
+    position <- fetchPosition cid
+    archivePosition position
+    pure (id, (positionView position).amount)
+  let net = netCredits this.allocation.transferLegSides
+      ids = dedupSort (map fst funded ++ map fst (TextMap.toList net))
+      amountOf : TextMap.TextMap Decimal -> Text -> Decimal
+      amountOf m id = fromOptional 0.0 (TextMap.lookup id m)
+  received <- forA ids \id -> do
+    let amount = amountOf (TextMap.fromList funded) id + amountOf net id
+    require (amount >= 0.0) ("The allocation's funding of " <> id <> " is short")
+    if amount == 0.0 then pure [] else
+      case find (\details -> detailsInstrumentId details == id) instruments of
+        None -> abort ("No instrument details for " <> id <> ": settle with SettlementFactory_SettleBatch")
+        Some details -> do
+          cid <- createFromDetails this.admin details this.authorizer this.allocation.authorizer.id amount
+          pure [(id, [cid])]
+  pure (allocationResult (AllocationResult_Settled None) (TextMap.fromList (concat received)))
+
+-- | Unlock an allocation's funding for the authorizer.
+releaseFunding : PositionAllocation -> Update (TextMap.TextMap [ContractId HoldingV2.Holding])
+releaseFunding this = TextMap.fromList <$> forA (TextMap.toList this.lockedHoldings) \(id, cid) -> do
+  returned <- releaseLocked cid
+  pure (id, [returned])
+
+allocationResult : AllocationResult_Output -> TextMap.TextMap [ContractId HoldingV2.Holding] -> AllocationResult
+allocationResult output authorizerHoldingCids = AllocationResult with
+  output
+  authorizerHoldingCids
+  meta = emptyMetadata

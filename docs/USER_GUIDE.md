@@ -77,7 +77,7 @@ dpm version
 # Compile both packages: aryafi-core (production) and aryafi-core-test
 dpm build --all
 
-# Run the test suite (307 scripts; requires Java 17 or 21)
+# Run the test suite (319 scripts; requires Java 17 or 21)
 cd daml/test
 dpm test --all --show-coverage
 cd ../..
