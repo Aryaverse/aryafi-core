@@ -1,0 +1,387 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Moving AryaFi positions through the Canton Network Token Standard's V2
+-- transfer interfaces (CIP-0112 `TransferInstructionV2`), as a wallet would:
+-- instruct with `TransferFactory_Transfer`, then accept, reject, or withdraw
+-- the `TransferInstruction`.
+module AryaFi.Test.Unit.TokenTransferTest where
+
+import qualified DA.Map as Map
+import DA.Text (isInfixOf)
+import DA.Time (addRelTime, days, minutes)
+import Daml.Script
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
+import Splice.Api.Token.MetadataV1 (ExtraArgs(..), emptyChoiceContext, emptyMetadata)
+import Splice.Api.Token.TransferInstructionV2
+import AryaFi.Common.Identifiers
+import AryaFi.Finance.Cash
+import AryaFi.Finance.Security
+import AryaFi.Finance.TokenTransfer
+import AryaFi.Test.Scenarios.DvpSettlementTest (allocateTestParty, bondIsin, setupCashPosition, setupSecurityPosition)
+import AryaFi.Test.Unit.TokenStandardTest (holdingsV2, viewV2)
+
+-- ---------------------------------------------------------------------------
+-- Fixture and helpers
+-- ---------------------------------------------------------------------------
+
+-- | A registry (bank or custodian) with three clients and a transfer factory.
+data Fixture = Fixture
+  with
+    registry : Party
+    alice : Party
+    bob : Party
+    carol : Party
+    factoryCid : ContractId TransferFactory
+
+setup : Text -> Script Fixture
+setup test = do
+  registry <- allocateTestParty "Registry" test
+  alice <- allocateTestParty "Alice" test
+  bob <- allocateTestParty "Bob" test
+  carol <- allocateTestParty "Carol" test
+  factory <- submit registry do
+    createCmd PositionTransferFactory with admin = registry; clients = [alice, bob, carol]
+  pure Fixture with factoryCid = toInterfaceContractId factory; ..
+
+aliceAccount, aliceOtherAccount, bobAccount : Text
+aliceAccount = "ACC-ALICE"
+aliceOtherAccount = "ACC-ALICE-2"
+bobAccount = "ACC-BOB"
+
+account : Fixture -> Party -> Text -> HoldingV2.Account
+account f owner id = HoldingV2.Account with owner = Some owner; provider = Some f.registry; id
+
+instrument : Fixture -> Text -> HoldingV2.InstrumentId
+instrument f id = HoldingV2.InstrumentId with admin = f.registry; id
+
+-- | Alice's USD at the registry, as a token-standard holding.
+aliceCash : Fixture -> Decimal -> Script (ContractId HoldingV2.Holding)
+aliceCash f amount =
+  toInterfaceContractId <$> setupCashPosition f.registry f.alice (AccountId aliceAccount) amount
+
+-- | A transfer of `instrumentId` from Alice's account to Bob's, valid for a day.
+transferToBob : Fixture -> Text -> Decimal -> [ContractId HoldingV2.Holding] -> Script Transfer
+transferToBob f instrumentId amount inputHoldingCids = do
+  now <- getTime
+  pure Transfer with
+    sender = account f f.alice aliceAccount
+    receiver = account f f.bob bobAccount
+    amount
+    instrumentId = instrument f instrumentId
+    requestedAt = addRelTime now (minutes (-1))
+    executeBefore = addRelTime now (days 1)
+    inputHoldingCids
+    meta = emptyMetadata
+
+noExtraArgs : ExtraArgs
+noExtraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+
+instructAs : Fixture -> [Party] -> Transfer -> Commands TransferInstructionResult
+instructAs f actors transfer =
+  exerciseCmd f.factoryCid TransferFactory_Transfer with transfer; actors; extraArgs = noExtraArgs
+
+-- | Alice instructs a transfer that Bob still has to accept.
+instructPending : Fixture -> Transfer -> Script (ContractId TransferInstruction, [ContractId HoldingV2.Holding])
+instructPending f transfer = do
+  result <- submit f.alice (instructAs f [f.alice] transfer)
+  case result.output of
+    TransferInstructionResult_Pending instructionCid -> pure (instructionCid, result.senderChangeCids)
+    other -> abort ("Expected a pending transfer, got " <> show other)
+
+accept, reject, withdraw : Party -> ContractId TransferInstruction -> Commands TransferInstructionResult
+accept actor cid = exerciseCmd cid TransferInstruction_Accept with actors = [actor]; extraArgs = noExtraArgs
+reject actor cid = exerciseCmd cid TransferInstruction_Reject with actors = [actor]; extraArgs = noExtraArgs
+withdraw actor cid = exerciseCmd cid TransferInstruction_Withdraw with actors = [actor]; extraArgs = noExtraArgs
+
+-- | The one holding a completed transfer delivered.
+receivedHolding : TransferInstructionResult -> Script (ContractId HoldingV2.Holding)
+receivedHolding result = case result.output of
+  TransferInstructionResult_Completed [cid] -> pure cid
+  other -> abort ("Expected one received holding, got " <> show other)
+
+-- | The one holding a failed transfer returned to the sender.
+returnedHolding : TransferInstructionResult -> Script (ContractId HoldingV2.Holding)
+returnedHolding result = case (result.output, result.senderChangeCids) of
+  (TransferInstructionResult_Failed, [cid]) -> pure cid
+  other -> abort ("Expected a failed transfer returning one holding, got " <> show other)
+
+-- | Submit as `parties` and check that it fails with an error mentioning `expected`.
+submitFailsWith : Text -> [Party] -> Commands a -> Script ()
+submitFailsWith expected parties cmds = do
+  result <- trySubmit (actAs parties) cmds
+  case result of
+    Left err -> assertMsg
+      ("Expected an error mentioning \"" <> expected <> "\", got: " <> show err)
+      (expected `isInfixOf` show err)
+    Right _ -> abort ("Expected the submission to fail with: " <> expected)
+
+-- | The token-standard holdings `party` owns.
+ownHoldings : Party -> Script [HoldingV2.HoldingView]
+ownHoldings party = filter (\v -> v.account.owner == Some party) <$> holdingsV2 party
+
+amounts : [HoldingV2.HoldingView] -> [Decimal]
+amounts = map (\v -> v.amount)
+
+-- ---------------------------------------------------------------------------
+-- Two-step transfers
+-- ---------------------------------------------------------------------------
+
+-- Alice sends 700 of her 1,000 USD, held in two positions, to Bob; Bob accepts.
+testCashTransferAccepted : Script ()
+testCashTransferAccepted = script do
+  f <- setup "TT-ACCEPT"
+  h600 <- aliceCash f 600.0
+  h400 <- aliceCash f 400.0
+  transfer <- transferToBob f "USD" 700.0 [h600, h400]
+  (instructionCid, change) <- instructPending f transfer
+
+  -- The inputs are spent and the change is back with Alice, unlocked
+  spent <- queryInterfaceContractId f.alice h600
+  assertMsg "Input holdings are archived" (spent == None)
+  [changeCid] <- pure change
+  Some changeView <- viewV2 f.alice changeCid
+  assertMsg "Alice keeps 300 as change"
+    (changeView.amount == 300.0 && changeView.lock == None && changeView.account == transfer.sender)
+
+  -- Bob sees the instruction, and who can act on it
+  Some instruction <- queryInterfaceContractId f.bob instructionCid
+  assertMsg "Bob sees the transfer" (instruction.transfer == transfer)
+  assertMsg "Bob can accept" (Map.lookup TIA_Accept instruction.availableActions == Some [[f.bob]])
+  assertMsg "Alice can withdraw" (Map.lookup TIA_Withdraw instruction.availableActions == Some [[f.alice]])
+
+  -- Meanwhile the 700 stays in Alice's account, locked to the registry
+  [locked] <- filter (\v -> v.lock /= None) <$> ownHoldings f.alice
+  assertMsg "The amount is locked to the registry"
+    (locked.amount == 700.0 && fmap (\l -> l.holders) locked.lock == Some [f.registry])
+
+  result <- submit f.bob (accept f.bob instructionCid)
+  received <- receivedHolding result
+  Some receivedView <- viewV2 f.bob received
+  assertMsg "Bob holds 700 USD in his account, unlocked"
+    (receivedView.amount == 700.0 && receivedView.account == transfer.receiver
+      && receivedView.instrumentId == transfer.instrumentId && receivedView.lock == None)
+  Some cash <- queryContractId f.bob (fromInterfaceContractId @CashPosition received)
+  assertMsg "Bob's cash is signed by the bank and Bob" (cash.bank == f.registry && cash.owner == f.bob)
+
+  aliceAfter <- ownHoldings f.alice
+  assertMsg "Alice has only her change left" (amounts aliceAfter == [300.0])
+  gone <- queryInterfaceContractId f.bob instructionCid
+  assertMsg "The instruction is archived" (gone == None)
+
+-- A custodian's security moves with its instrument details.
+testSecurityTransferKeepsInstrument : Script ()
+testSecurityTransferKeepsInstrument = script do
+  f <- setup "TT-SEC"
+  bondCid <- setupSecurityPosition f.registry f.alice (AccountId aliceAccount) 250000.0
+  transfer <- transferToBob f (unISIN bondIsin) 100000.0 [toInterfaceContractId bondCid]
+  (instructionCid, change) <- instructPending f transfer
+  received <- submit f.bob (accept f.bob instructionCid) >>= receivedHolding
+
+  Some bond <- queryContractId f.bob (fromInterfaceContractId @SecurityPosition received)
+  assertMsg "Bob holds 100,000 of the bond" (bond.quantity == 100000.0 && bond.owner == f.bob)
+  assertMsg "Instrument details are kept"
+    (bond.isin == bondIsin && bond.instrumentName == "US Treasury 4.25% Nov 2026"
+      && bond.couponRate == Some 0.0425 && bond.custodian == f.registry)
+  [changeCid] <- pure change
+  Some kept <- queryContractId f.alice (fromInterfaceContractId @SecurityPosition changeCid)
+  assertMsg "Alice keeps 150,000" (kept.quantity == 150000.0 && not kept.isLocked)
+
+-- Bob rejects: Alice gets the amount back, unlocked, and Bob no longer sees it.
+testTransferRejected : Script ()
+testTransferRejected = script do
+  f <- setup "TT-REJECT"
+  h <- aliceCash f 700.0
+  (instructionCid, change) <- usdToBobPending f 700.0 [h]
+  assertMsg "Exact amount: no change" (null change)
+
+  result <- submit f.bob (reject f.bob instructionCid)
+  returned <- returnedHolding result
+  Some returnedView <- viewV2 f.alice returned
+  assertMsg "Alice has her 700 back, unlocked"
+    (returnedView.amount == 700.0 && returnedView.lock == None && returnedView.account.owner == Some f.alice)
+  bobView <- viewV2 f.bob returned
+  assertMsg "Bob no longer sees Alice's holding" (bobView == None)
+  bobHoldings <- holdingsV2 f.bob
+  assertMsg "Bob has no holdings" (null bobHoldings)
+
+-- Alice withdraws before Bob acts; Bob can then no longer accept.
+testTransferWithdrawn : Script ()
+testTransferWithdrawn = script do
+  f <- setup "TT-WITHDRAW"
+  h <- aliceCash f 700.0
+  (instructionCid, _) <- usdToBobPending f 700.0 [h]
+
+  result <- submit f.alice (withdraw f.alice instructionCid)
+  returned <- returnedHolding result
+  Some returnedView <- viewV2 f.alice returned
+  assertMsg "Alice has her 700 back, unlocked" (returnedView.amount == 700.0 && returnedView.lock == None)
+  submitMustFail f.bob (accept f.bob instructionCid)
+
+usdToBobPending : Fixture -> Decimal -> [ContractId HoldingV2.Holding] -> Script (ContractId TransferInstruction, [ContractId HoldingV2.Holding])
+usdToBobPending f amount inputs = transferToBob f "USD" amount inputs >>= instructPending f
+
+-- ---------------------------------------------------------------------------
+-- One-step transfers
+-- ---------------------------------------------------------------------------
+
+-- With the receiver among the actors, or between the sender's own accounts,
+-- the transfer completes at once.
+testOneStepTransfers : Script ()
+testOneStepTransfers = script do
+  f <- setup "TT-ONESTEP"
+  h <- aliceCash f 1000.0
+  transfer <- transferToBob f "USD" 250.0 [h]
+  result <- submit (actAs [f.alice, f.bob]) (instructAs f [f.alice, f.bob] transfer)
+  received <- receivedHolding result
+  Some receivedView <- viewV2 f.bob received
+  assertMsg "Bob received 250 at once" (receivedView.amount == 250.0 && receivedView.lock == None)
+  [changeCid] <- pure result.senderChangeCids
+
+  let toOwnAccount = transfer with
+        receiver = account f f.alice aliceOtherAccount
+        amount = 750.0
+        inputHoldingCids = [changeCid]
+  moved <- submit f.alice (instructAs f [f.alice] toOwnAccount) >>= receivedHolding
+  Some movedView <- viewV2 f.alice moved
+  assertMsg "Alice moved her 750 to her other account"
+    (movedView.amount == 750.0 && movedView.account.id == aliceOtherAccount)
+
+-- ---------------------------------------------------------------------------
+-- What the registry refuses
+-- ---------------------------------------------------------------------------
+
+testTransferChecks : Script ()
+testTransferChecks = script do
+  f <- setup "TT-CHECKS"
+  h <- aliceCash f 500.0
+  transfer <- transferToBob f "USD" 300.0 [h]
+  let instruct t = instructAs f [f.alice] t
+  outsider <- allocateTestParty "Outsider" "TT-CHECKS"
+  let bobsUsd = HoldingV2.InstrumentId with admin = f.bob; id = "USD"
+      bobElsewhere = HoldingV2.Account with owner = Some f.bob; provider = Some f.carol; id = bobAccount
+
+  submitFailsWith "the instrument has a different admin" [f.alice]
+    (instruct transfer with instrumentId = bobsUsd)
+  submitFailsWith "the receiver's account is kept by another provider" [f.alice]
+    (instruct transfer with receiver = bobElsewhere)
+  submitFailsWith "the sender and receiver accounts are the same" [f.alice]
+    (instruct transfer with receiver = transfer.sender)
+  submitFailsWith "the receiver is not a client of the registry" [f.alice]
+    (instruct transfer with receiver = account f outsider "ACC-OUTSIDER")
+  submitFailsWith "only the sender can instruct it" [f.bob]
+    (instructAs f [f.bob] transfer)
+  submitFailsWith "amount must be strictly positive" [f.alice]
+    (instruct transfer with amount = 0.0)
+  submitFailsWith "the input holdings total 500.0, less than 600.0" [f.alice]
+    (instruct transfer with amount = 600.0)
+  submitFailsWith "Name the holdings that fund the transfer" [f.alice]
+    (instruct transfer with inputHoldingCids = [])
+  submitFailsWith "Input holdings must be distinct" [f.alice]
+    (instruct transfer with inputHoldingCids = [h, h])
+
+  now <- getTime
+  submitFailsWith "deadline 'executeBefore'" [f.alice]
+    (instruct transfer with executeBefore = addRelTime now (minutes (-1)))
+  submitFailsWith "deadline 'requestedAt'" [f.alice]
+    (instruct transfer with requestedAt = addRelTime now (days 1))
+
+  -- Inputs must be unlocked USD in the sender's account
+  other <- toInterfaceContractId <$> setupCashPosition f.registry f.alice (AccountId aliceOtherAccount) 500.0
+  submitFailsWith "Input holding is not in the sender's account" [f.alice]
+    (instruct transfer with inputHoldingCids = [other])
+  eur <- submit (actAs [f.registry, f.alice]) do
+    createCmd CashPosition with
+      bank = f.registry; owner = f.alice; accountId = AccountId aliceAccount; currency = "EUR"
+      amount = 500.0; isLocked = False; lockReference = None; lockHolder = None; observers = []
+  submitFailsWith "Input holding is a different instrument" [f.alice]
+    (instruct transfer with inputHoldingCids = [toInterfaceContractId eur])
+  lockedCid <- submit (actAs [f.alice, f.registry]) do
+    exerciseCmd (fromInterfaceContractId @CashPosition h) LockCash with lockRef = "REPO-1"; holder = f.carol
+  submitFailsWith "Input holding is locked" [f.alice]
+    (instruct transfer with inputHoldingCids = [toInterfaceContractId lockedCid])
+
+-- Only the receiver accepts or rejects; only the sender withdraws.
+testInstructionActors : Script ()
+testInstructionActors = script do
+  f <- setup "TT-ACTORS"
+  h <- aliceCash f 700.0
+  (instructionCid, _) <- usdToBobPending f 700.0 [h]
+
+  submitFailsWith "Only the receiver can accept the transfer" [f.alice] (accept f.alice instructionCid)
+  submitFailsWith "Only the receiver can reject the transfer" [f.alice] (reject f.alice instructionCid)
+  submitFailsWith "Only the sender can withdraw the transfer" [f.bob] (withdraw f.bob instructionCid)
+  -- Carol, another client of the registry, cannot see the instruction at all
+  submitMustFail f.carol (accept f.carol instructionCid)
+  carolSees <- queryInterface @TransferInstruction f.carol
+  assertMsg "Carol sees no transfer instructions" (null carolSees)
+
+  _ <- submit f.bob (accept f.bob instructionCid)
+  pure ()
+
+-- After executeBefore, Bob can no longer accept, and Alice withdraws.
+testExpiredTransfer : Script ()
+testExpiredTransfer = script do
+  f <- setup "TT-EXPIRED"
+  h <- aliceCash f 700.0
+  (instructionCid, _) <- usdToBobPending f 700.0 [h]
+  passTime (days 2)
+  submitFailsWith "deadline 'executeBefore'" [f.bob] (accept f.bob instructionCid)
+  result <- submit f.alice (withdraw f.alice instructionCid)
+  _ <- returnedHolding result
+  pure ()
+
+-- The registry decides who can send and receive through its factory. A party
+-- it removes cannot use the factory, even if someone discloses it to them.
+testFactoryClients : Script ()
+testFactoryClients = script do
+  f <- setup "TT-CLIENTS"
+  dave <- allocateTestParty "Dave" "TT-CLIENTS"
+  let factoryCid = fromInterfaceContractId @PositionTransferFactory f.factoryCid
+  withDave <- submit f.registry do
+    exerciseCmd factoryCid AddTransferFactoryClient with client = dave
+  submitFailsWith "Party is already a client" [f.registry]
+    (exerciseCmd withDave AddTransferFactoryClient with client = dave)
+  withoutAlice <- submit f.registry do
+    exerciseCmd withDave RemoveTransferFactoryClient with client = f.alice
+  Some factory <- queryContractId f.registry withoutAlice
+  assertMsg "Dave is a client and Alice is not" (dave `elem` factory.clients && f.alice `notElem` factory.clients)
+
+  h <- aliceCash f 100.0
+  transfer <- transferToBob f "USD" 100.0 [h]
+  Some disclosure <- queryDisclosure f.registry withoutAlice
+  err <- submitWithError (actAs f.alice <> disclose disclosure) do
+    exerciseCmd (toInterfaceContractId @TransferFactory withoutAlice) TransferFactory_Transfer with
+      transfer; actors = [f.alice]; extraArgs = noExtraArgs
+  assertMsg ("A removed client cannot instruct a transfer, got: " <> show err)
+    ("the sender is not a client of the registry" `isInfixOf` show err)
+
+-- A wallet lists the factory and pending transfers through the interfaces.
+testWalletView : Script ()
+testWalletView = script do
+  f <- setup "TT-WALLET"
+  [(_, factory)] <- queryInterface @TransferFactory f.alice
+  assertMsg "Alice's wallet finds the registry's factory" (factory == Some (factoryView f.registry))
+  fetched <- submit f.alice do
+    exerciseCmd f.factoryCid TransferFactory_PublicFetch with actors = [f.alice]
+  assertMsg "PublicFetch names the registry as admin" (fetched.admin == f.registry)
+  h <- aliceCash f 700.0
+  (instructionCid, _) <- usdToBobPending f 700.0 [h]
+  [(cid, Some pending)] <- queryInterface @TransferInstruction f.bob
+  assertMsg "Bob's wallet lists the pending transfer"
+    (cid == instructionCid && pending.transfer.amount == 700.0 && pending.transfer.sender.owner == Some f.alice)
+
+-- | Every test that runs on a real participant, as CI does against the deploy/
+-- topology. testExpiredTransfer moves time with passTime, which only the test
+-- ledger supports.
+runTokenTransferTests : Script ()
+runTokenTransferTests = script do
+  testCashTransferAccepted
+  testSecurityTransferKeepsInstrument
+  testTransferRejected
+  testTransferWithdrawn
+  testOneStepTransfers
+  testTransferChecks
+  testInstructionActors
+  testFactoryClients
+  testWalletView

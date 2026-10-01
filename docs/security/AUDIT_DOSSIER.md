@@ -8,7 +8,8 @@ This dossier is the briefing package for an independent security review of **Ary
 - **Language / platform**: Daml SDK 3.5.12 (Daml-LF 2.2), deployed on Canton 3.5 (protocol version 35).
 - **Source tree in scope**:
   - `daml/src/AryaFi/Common/`: Domain types, day-count conventions, error helpers, identifiers, audit events, policy decisions.
-  - `daml/src/AryaFi/Finance/`: `CashPosition`, `SecurityPosition`, `AssetHolding`, `Account`, `InstitutionalParty`, `CollateralPosition`, `FinancialObligation`, `PaymentInstruction`, `DvpInstruction`.
+  - `daml/src/AryaFi/Finance/`: `CashPosition`, `SecurityPosition`, `AssetHolding`, `Account`, `InstitutionalParty`, `CollateralPosition`, `FinancialObligation`, `PaymentInstruction`, `DvpInstruction`, and the Canton Network Token Standard implementation: the `Holding` views (`TokenStandard`), `PositionTransferFactory` and `PositionTransferInstruction` (`TokenTransfer`), and their shared helpers (`TokenRegistry`).
+  - The token-standard interface packages in `daml/deps/splice` are vendored from Splice 0.8.3 and are out of scope.
   - `daml/src/AryaFi/Contracts/`: `InstitutionalLoan`, `RepoAgreement`, `ReverseRepoPosition`, `SecuritiesLendingAgreement`, `MarginCall`, `AssetPledge`, `ConditionalEscrow`, `AssetTransferRequest`, `FundSubscription`, `AssetRedemption`.
   - `daml/src/AryaFi/Compliance/`: `KycAttestation`, `SanctionsAttestation`, `JurisdictionProfile`, `EligibilityPolicy`, `TransferRestrictionRule`, `OwnershipRestriction`, `RegulatoryReportRecord`.
 - **Out of scope**: the test package under `daml/test/AryaFi/Test/`, the website, and the deployment configuration.
@@ -21,15 +22,16 @@ This dossier is the briefing package for an independent security review of **Ary
 
 Each invariant below is argued from the code and exercised by a named test. They are arguments for reviewers to verify, not formal proofs.
 
-### Invariant 1: Value Conservation in Splits and Merges
-*Claim*: `SplitCash` and `MergeCash` (and `SplitSecurity`) neither create nor destroy value.
+### Invariant 1: Value Conservation in Splits, Merges, and Transfers
+*Claim*: `SplitCash` and `MergeCash` (and `SplitSecurity`), and token-standard transfers, neither create nor destroy value.
 
 *Argument*:
 - `SplitCash` requires `0 < s < A`, consumes the position of amount `A`, and creates positions of `s` and `A - s`.
 - `MergeCash` requires the same bank, owner, account, and currency, and both positions unlocked; it archives the other position (`A2`) and recreates this one (`A1`) with `A1 + A2`.
+- A token-standard transfer (`TransferFactory_Transfer`) archives every input holding and creates the change, `total - amount`, and the transferred `amount`; it fails if the inputs total less than the amount. Accepting, rejecting, or withdrawing moves the locked amount whole.
 - Daml `Decimal` is fixed-point with 10 decimal places, so `s + (A - s) = A` holds exactly; there is no floating-point rounding.
 
-*Tests*: `Unit/AssetCashTest.daml` (split, merge, boundary cases), `Scenarios/TreasuryCashScenario.daml` (split, sweep, merge).
+*Tests*: `Unit/AssetCashTest.daml` (split, merge, boundary cases), `Scenarios/TreasuryCashScenario.daml` (split, sweep, merge), `Unit/TokenTransferTest.daml` (change, exact amounts, short inputs).
 
 ### Invariant 2: Positive Position Quantities
 *Claim*: No `CashPosition`, `SecurityPosition`, or `AssetHolding` exists with a zero or negative amount or quantity.
@@ -46,10 +48,11 @@ Each invariant below is argued from the code and exercised by a named test. They
 - `SplitCash`, `MergeCash`, `TransferCash` (and the security/asset equivalents) require `not isLocked`.
 - `UnlockCash` / `UnlockSecurity` / `UnlockAsset` are controlled by the lock holder alone; `SettleLockedCash` / `SettleLockedSecurity` are controlled by the lock holder and the receiver.
 - Owner and bank/custodian consent once, when creating the lock; afterwards they cannot withdraw the position from the settlement it was locked for.
+- A pending token-standard transfer locks the amount to the registry (the bank or custodian). It is delivered to the receiver on acceptance, before `executeBefore`, or unlocked for the sender on rejection or withdrawal.
 
 *Scope limit*: this invariant covers positions. It does **not** prevent double-pledging: `AssetPledge`, `CollateralPosition`, and `MarginCall` reference assets by text, so the ledger does not link them to a locked position. (An earlier version of this dossier claimed otherwise; that claim was incorrect.)
 
-*Tests*: `Scenarios/DvpSettlementTest.daml` (`testLockedLegsCannotBeWithdrawn`), `Authorization/MultiSignatoryTest.daml`, `Negative/UnauthorizedAccessTest.daml`.
+*Tests*: `Scenarios/DvpSettlementTest.daml` (`testLockedLegsCannotBeWithdrawn`), `Authorization/MultiSignatoryTest.daml`, `Negative/UnauthorizedAccessTest.daml`, `Unit/TokenTransferTest.daml` (`testTransferChecks`, `testExpiredTransfer`).
 
 ### Invariant 4: DvP Atomicity
 *Claim*: Either both legs of a DvP settle or neither does.
@@ -68,25 +71,25 @@ Each invariant below is argued from the code and exercised by a named test. They
 ### Invariant 6: Consent for Ownership and Disclosure
 *Claim*: No position is created for a party without its authority, and bilateral agreements are only disclosed with both counterparties' consent.
 
-*Argument*: transfers are controlled by owner, bank/custodian, and the receiving owner; `Add*Observer` choices on loans, repos, securities loans, margin calls, pledges, and collateral positions are controlled by both principals; observers are cleared on transfer.
+*Argument*: transfers are controlled by owner, bank/custodian, and the receiving owner; a token-standard transfer reaches the receiver only when the receiver accepts it or instructs it with the sender, and only between clients the registry listed on its factory; `Add*Observer` choices on loans, repos, securities loans, margin calls, pledges, and collateral positions are controlled by both principals; observers are cleared on transfer.
 
-*Tests*: `Authorization/MultiSignatoryTest.daml`, `Privacy/ObserverPrivacyTest.daml`, `Scenarios/EscrowScenario.daml` (`testPledgeAddObserver`).
+*Tests*: `Authorization/MultiSignatoryTest.daml`, `Privacy/ObserverPrivacyTest.daml`, `Scenarios/EscrowScenario.daml` (`testPledgeAddObserver`), `Unit/TokenTransferTest.daml` (`testInstructionActors`, `testFactoryClients`, `testTransferRejected`).
 
 ---
 
 ## 3. Automated Test Coverage
 
-`dpm test --all --show-coverage` (in `daml/test`) on v3.0.0:
+`dpm test --all --show-coverage` (in `daml/test`) on 3.2.0 (in development):
 
 | Measure | Result |
 |:---|:---|
-| Test scripts | 296, all passing |
-| Templates created | 26 of 27 (96.3%); `JurisdictionProfile` is never created |
-| Choices exercised | 138 of 206 (67.0%), counting each template's implicit `Archive` |
+| Test scripts | 307, all passing |
+| Templates created | 28 of 29 (96.6%); `JurisdictionProfile` is never created |
+| Choices exercised | 142 of 210 (67.6%), counting each template's implicit `Archive`; the report does not count the five token-standard interface choices, which the tests exercise |
 
 | Suite | Files | Focus |
 |:---|:---|:---|
-| `Unit/` | 12 | Types, day counts, primitives, contracts, compliance policies, token-standard holding views |
+| `Unit/` | 13 | Types, day counts, primitives, contracts, compliance policies, token-standard holdings and transfers |
 | `Scenarios/` | 9 | End-to-end DvP, repo, loan, securities lending, treasury, escrow, private credit, transfer |
 | `Negative/` | 3 | Unauthorized submitters, compliance violations, invalid state transitions |
 | `Authorization/` | 1 | Multi-signatory consent |
@@ -119,7 +122,7 @@ cd daml/test
 dpm test --all --show-coverage
 
 # 3. Inspect the production DAR
-dpm inspect-dar ../../.daml/dist/aryafi-core-3.1.0.dar
+dpm inspect-dar ../../.daml/dist/aryafi-core-3.2.0.dar
 
 # 4. Run specific security and privacy suites (--files selects a test module;
 #    --test-pattern would match script names, not file names)
