@@ -3,7 +3,7 @@
 [![Daml](https://img.shields.io/badge/Daml_SDK-3.5.12-blue.svg)](https://docs.digitalasset.com)
 [![Canton](https://img.shields.io/badge/Canton-3.5_(protocol_35)-green.svg)](deploy/canton/canton.conf)
 [![Release](https://img.shields.io/badge/Release-v3.2.0-purple.svg)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/dpm_test-326_passing-brightgreen.svg)](daml/test/AryaFi/Test)
+[![Tests](https://img.shields.io/badge/dpm_test-334_passing-brightgreen.svg)](daml/test/AryaFi/Test)
 [![Status](https://img.shields.io/badge/Status-Beta_/_Experimental-orange.svg)](docs/KNOWN_LIMITATIONS.md)
 [![Website](https://img.shields.io/badge/Vercel-Website-black.svg?logo=vercel)](https://aryafi-core.vercel.app)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
@@ -85,7 +85,7 @@ aryafi-core/
 │   │       └── Compliance/        # KYC, Sanctions, Eligibility, TransferRestrictions
 │   └── test/                      # Test package (aryafi-core-test), depends on the production DAR
 │       ├── daml.yaml
-│       └── AryaFi/Test/           # Daml Script test suite (326 scripts, run by `dpm test`)
+│       └── AryaFi/Test/           # Daml Script test suite (334 scripts, run by `dpm test`)
 │           ├── Unit/              # 11 unit suites across primitives, contracts & compliance
 │           ├── Scenarios/         # 9 end-to-end multi-party lifecycle scenarios
 │           ├── Negative/          # Unauthorized access, violation & invalid transition tests
@@ -133,6 +133,7 @@ aryafi-core/
 - **`Payment`**: Tri-party payment separation with SWIFT UETR and Fedwire IMAD network reference tracking.
 
 ### 2. Financial Contracts (`AryaFi.Contracts`)
+- **`Proposal`**: Multi-party proposals. Parties on different nodes agree any AryaFi contract with several signatories, or lock positions and cancel or retry a DvP together, one signature at a time; the last signature carries the proposal out.
 - **`Loan`**: Credit facilities with interest computed from rate, day count, and ledger time; repayments are confirmed by the lender.
 - **`Repo` & `ReverseRepo`**: Repurchase agreements, DvP settlement legs, mark-to-market valuation, and closeout.
 - **`SecuritiesLending`**: Stock loans with jointly agreed fees, recalls that persist until satisfied, and pro-rata-capped collateral release.
@@ -161,7 +162,7 @@ aryafi-core/
 # Build both packages: aryafi-core (production) and aryafi-core-test
 dpm build --all
 
-# Run the test suite (326 scripts); --all includes the production templates in the coverage report
+# Run the test suite (334 scripts); --all includes the production templates in the coverage report
 cd daml/test
 dpm test --all --show-coverage
 ```

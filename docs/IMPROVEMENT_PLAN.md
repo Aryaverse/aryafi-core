@@ -7,14 +7,14 @@
 
 ## 1. Where We Are
 
-v2.0.0 made the library honest and working, and v3.0.0 moved it to Daml 3 / Canton 3.5, the platform the Canton Network runs. It builds with `-Wall -Werror`, 326 test scripts pass, and atomic DvP moves real positions on a real five-participant Canton 3.5 topology. Authorization defects are fixed: receiver-authorized transfers, locks held by a named lock holder, and no party able to reduce its own obligation. The docs and website now describe the code as it is.
+v2.0.0 made the library honest and working, and v3.0.0 moved it to Daml 3 / Canton 3.5, the platform the Canton Network runs. It builds with `-Wall -Werror`, 334 test scripts pass, and atomic DvP moves real positions on a real five-participant Canton 3.5 topology. Authorization defects are fixed: receiver-authorized transfers, locks held by a named lock holder, and no party able to reduce its own obligation. The docs and website now describe the code as it is.
 
 What v3.0.0 is **not** yet is what the requirements call for: *"software infrastructure — not a collection of sample contracts."* Today, only DvP composes primitives. Every other workflow (loan, repo, securities lending, margin, pledge, escrow, subscription, redemption, transfer) is a standalone status record that references assets by text. Compliance policies are correct but cannot be called from those workflows. Every multi-party contract depends on co-submission, which does not work across separate participants.
 
 | Requirement (TBRD) | v3.0.0 | Gap closed by |
 |:---|:---|:---|
 | Composable primitives (§5, §9) | DvP composes Cash + Security; nothing else does | Workstreams 1, 4 |
-| Synchronized DvP (§3, §26) | Done, Model 1. `DvpInstruction` single-participant tested; the token-standard DvP runs with each institution on its own participant | Workstream 2 (cross-participant for the other workflows) |
+| Synchronized DvP (§3, §26) | Done, Model 1. Both `DvpInstruction` and the token-standard DvP run with each institution on its own participant | Workstream 2 (joint choices of the financing contracts) |
 | Loan references compliance via controlled interfaces (§10) | No | Workstream 3 |
 | Repo substitution re-runs eligibility (§11) | No | Workstreams 3, 5 |
 | Generic, policy-driven transfer engine (§12) | Manual officer approval | Workstream 3 |
@@ -51,6 +51,7 @@ The options as they were weighed:
 
 **2. Propose/accept for every multi-signatory workflow.** Add a proposal template (or a delegation role contract) for each agreement that today needs multi-party submission: DvP instructions, loans, repos, securities loans, margin calls, pledges, payment instructions, transfers. This is what makes the library usable across separate participants; it is the single largest blocker to real deployment.
 *Done when:* the reference scenarios run with each institution's party on its own participant in `deploy/` (see Workstream 7).
+*Progress (3.3.0):* one generic `MultiPartyProposal` instead of a proposal template per agreement. It collects the signatures for any AryaFi contract with several signatories, and for the joint choices on positions and DvP instructions, one party at a time; the last signature carries it out. The reference DvP now runs with custodian, bank, seller, buyer, and agent each on their own participant (`runDvpAcrossNodes`, in CI). Next: the joint choices of the financing contracts (repo substitution and rolls, securities-lending fees and revaluation, collateral substitution and release, margin disputes, pledge substitution, escrow release and refund, obligation amendment and cancellation, and the observer choices).
 
 **3. Compliance as composable policy.** Turn the compliance modules into an interface, e.g. `evaluate : Context -> PolicyDecision`, that business workflows call inside their own transactions. Share policy and attestation contracts with the workflows that need them via explicit contract disclosure. Then:
 - `AssetTransferRequest` completion and `ExecuteDvpSettlement` evaluate KYC, sanctions, transfer restrictions, and ownership limits for both parties atomically, instead of relying on a manual approval.

@@ -9,6 +9,7 @@ This dossier is the briefing package for an independent security review of **Ary
 - **Source tree in scope**:
   - `daml/src/AryaFi/Common/`: Domain types, day-count conventions, error helpers, identifiers, audit events, policy decisions.
   - `daml/src/AryaFi/Finance/`: `CashPosition`, `SecurityPosition`, `AssetHolding`, `Account`, `InstitutionalParty`, `CollateralPosition`, `FinancialObligation`, `PaymentInstruction`, `DvpInstruction`, and the Canton Network Token Standard implementation: the `Holding` views (`TokenStandard`), `PositionTransferFactory` and `PositionTransferInstruction` (`TokenTransfer`), `PositionAllocationFactory` and `PositionAllocation` (`TokenAllocation`), `TokenDvpInstruction` and `TokenDvpAllocationRequest` (`TokenDvp`), and their shared helpers (`TokenRegistry`).
+  - `daml/src/AryaFi/Contracts/Proposal.daml`: `MultiPartyProposal`, which collects the signatures for a contract or a joint choice one party at a time.
   - The token-standard interface packages in `daml/deps/splice` are vendored from Splice 0.8.3 and are out of scope, as is Splice's reference token (`splice-test-token-v2`), which only the tests use.
   - `daml/src/AryaFi/Contracts/`: `InstitutionalLoan`, `RepoAgreement`, `ReverseRepoPosition`, `SecuritiesLendingAgreement`, `MarginCall`, `AssetPledge`, `ConditionalEscrow`, `AssetTransferRequest`, `FundSubscription`, `AssetRedemption`.
   - `daml/src/AryaFi/Compliance/`: `KycAttestation`, `SanctionsAttestation`, `JurisdictionProfile`, `EligibilityPolicy`, `TransferRestrictionRule`, `OwnershipRestriction`, `RegulatoryReportRecord`.
@@ -75,9 +76,9 @@ Token-standard settlement is atomic in the same way when the settlement agent se
 ### Invariant 6: Consent for Ownership and Disclosure
 *Claim*: No position is created for a party without its authority, and bilateral agreements are only disclosed with both counterparties' consent.
 
-*Argument*: transfers are controlled by owner, bank/custodian, and the receiving owner; a token-standard transfer reaches the receiver only when the receiver accepts it or instructs it with the sender, and only between clients the registry listed on its factory; token-standard settlement creates a position only for an account whose owner allocated to receive it, so a `TokenDvpInstruction`, signed by the agent alone, moves nothing the seller and buyer did not allocate; `Add*Observer` choices on loans, repos, securities loans, margin calls, pledges, and collateral positions are controlled by both principals; observers are cleared on transfer.
+*Argument*: transfers are controlled by owner, bank/custodian, and the receiving owner; a token-standard transfer reaches the receiver only when the receiver accepts it or instructs it with the sender, and only between clients the registry listed on its factory; token-standard settlement creates a position only for an account whose owner allocated to receive it, so a `TokenDvpInstruction`, signed by the agent alone, moves nothing the seller and buyer did not allocate; a `MultiPartyProposal` creates a contract only once all its signatories have signed it, and exercises a joint choice only once exactly its controllers have; `Add*Observer` choices on loans, repos, securities loans, margin calls, pledges, and collateral positions are controlled by both principals; observers are cleared on transfer.
 
-*Tests*: `Authorization/MultiSignatoryTest.daml`, `Privacy/ObserverPrivacyTest.daml`, `Scenarios/EscrowScenario.daml` (`testPledgeAddObserver`), `Unit/TokenTransferTest.daml` (`testInstructionActors`, `testFactoryClients`, `testTransferRejected`), `Unit/TokenAllocationTest.daml` (`testSettlementChecks`, `testAllocateChecks`, `testAllocationVisibility`).
+*Tests*: `Authorization/MultiSignatoryTest.daml`, `Privacy/ObserverPrivacyTest.daml`, `Scenarios/EscrowScenario.daml` (`testPledgeAddObserver`), `Unit/TokenTransferTest.daml` (`testInstructionActors`, `testFactoryClients`, `testTransferRejected`), `Unit/TokenAllocationTest.daml` (`testSettlementChecks`, `testAllocateChecks`, `testAllocationVisibility`), `Unit/ProposalTest.daml` (`testProposalChecks`, `testJointActionNeedsItsControllers`).
 
 ---
 
@@ -87,21 +88,21 @@ Token-standard settlement is atomic in the same way when the settlement agent se
 
 | Measure | Result |
 |:---|:---|
-| Test scripts | 326, all passing |
-| Templates created | 32 of 33 in `aryafi-core` (97.0%); `JurisdictionProfile` is never created |
-| Choices exercised | 150 of 220 in `aryafi-core` (68.2%), counting each template's implicit `Archive`; the report does not count the token-standard interface choices, which the tests exercise |
+| Test scripts | 334, all passing |
+| Templates created | 34 of 34 in `aryafi-core` (100%) |
+| Choices exercised | 153 of 224 in `aryafi-core` (68.3%), counting each template's implicit `Archive`; the report does not count the token-standard interface choices, which the tests exercise |
 
 | Suite | Files | Focus |
 |:---|:---|:---|
-| `Unit/` | 14 | Types, day counts, primitives, contracts, compliance policies, token-standard holdings, transfers, and settlement |
+| `Unit/` | 15 | Types, day counts, primitives, contracts, compliance policies, token-standard holdings, transfers, and settlement, multi-party proposals |
 | `Scenarios/` | 10 | End-to-end DvP (including through the token standard), repo, loan, securities lending, treasury, escrow, private credit, transfer |
 | `Negative/` | 3 | Unauthorized submitters, compliance violations, invalid state transitions |
 | `Authorization/` | 1 | Multi-signatory consent |
 | `Privacy/` | 1 | Observer visibility from each party's viewpoint |
 | `Integration/` | 1 | Cross-module workflows on a single ledger |
-| `Network/` | 1 | Smoke test for shared networks such as TestNet: five run-scoped parties, one DvP |
+| `Network/` | 4 | Smoke test for shared networks such as TestNet (five run-scoped parties, one DvP), and both DvPs with each institution on its own participant |
 
-Not yet covered: property-based tests, concurrency/contention tests, and multi-participant tests of anything but the token-standard DvP (`Network/TokenDvpAcrossNodes.daml`, which runs with each institution on its own participant, locally and in CI).
+Not yet covered: property-based tests, concurrency/contention tests, and multi-participant tests of anything but the two DvPs (`Network/DvpAcrossNodes.daml` and `Network/TokenDvpAcrossNodes.daml`, which run with each institution on its own participant, locally and in CI).
 
 ---
 
@@ -110,7 +111,7 @@ Not yet covered: property-based tests, concurrency/contention tests, and multi-p
 1. **Key security**: Participant node keys are managed outside the contract layer (HSM/KMS); see [OPERATIONS_GUIDE.md](../deployment/OPERATIONS_GUIDE.md).
 2. **Market data**: Collateral and repo revaluations take prices as choice arguments from the custodian or both counterparties. There is no on-ledger price oracle; off-ledger price sources must be controlled by the operator.
 3. **Time**: Time-dependent choices (loan accrual and maturity, recall and margin deadlines, KYC and sanctions expiry) use Daml ledger time, which Canton bounds by the synchronizer's ledger-time/record-time tolerance.
-4. **Multi-party submission**: The tests create multi-signatory contracts by submitting as several parties at once (`submit (actAs [...])`). On separate participants this needs propose/accept workflows (not yet provided).
+4. **Multi-party submission**: Most tests create multi-signatory contracts by submitting as several parties at once (`submit (actAs [...])`). On separate participants, `MultiPartyProposal` collects the signatures one party at a time instead; `Network/DvpAcrossNodes.daml` agrees and settles the reference DvP that way. The joint choices of the financing contracts still need one submission.
 
 ---
 

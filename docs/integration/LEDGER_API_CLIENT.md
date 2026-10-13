@@ -97,7 +97,7 @@ Many AryaFi contracts (such as `PaymentInstruction`, `AssetTransferRequest`, and
        │    Transaction committed                               │
 ```
 
-A single submission cannot act for parties hosted on different participants. Until AryaFi provides propose/accept workflows (see [KNOWN_LIMITATIONS.md §4](../KNOWN_LIMITATIONS.md#4-multi-party-workflows-and-compliance)), all signatories of such a contract must be hosted on the submitting participant. Token-standard transfers and `TokenDvpInstruction` do not have this limit (§6.3): each party submits from its own participant.
+A single submission cannot act for parties hosted on different participants. Until AryaFi provides propose/accept workflows (see [KNOWN_LIMITATIONS.md §4](../KNOWN_LIMITATIONS.md#4-multi-party-workflows-and-compliance)), all signatories of such a contract must be hosted on the submitting participant. Across participants, create a `MultiPartyProposal` (`#aryafi-core:AryaFi.Contracts.Proposal:MultiPartyProposal`) instead: the proposer creates it with the contract's terms, each other signatory exercises `AcceptProposal` from its own participant, and the last acceptance creates the contract. Token-standard transfers and `TokenDvpInstruction` do not have this limit either (§6.3): each party submits from its own participant.
 
 ---
 
