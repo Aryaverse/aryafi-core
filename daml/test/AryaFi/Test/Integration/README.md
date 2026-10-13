@@ -16,14 +16,14 @@ cd deploy/docker && docker compose up -d --build && cd ../..
 # 3. Run a scenario against the bank participant's Ledger API; --upload-dar
 #    uploads the test DAR to that participant first
 dpm script \
-  --dar daml/test/.daml/dist/aryafi-core-test-3.2.0.dar \
+  --dar daml/test/.daml/dist/aryafi-core-test-3.3.0.dar \
   --upload-dar=yes \
   --script-name AryaFi.Test.Scenarios.TreasuryDvpScenario:runTreasuryDvpScenario \
   --ledger-host localhost \
   --ledger-port 10012
 
 dpm script \
-  --dar daml/test/.daml/dist/aryafi-core-test-3.2.0.dar \
+  --dar daml/test/.daml/dist/aryafi-core-test-3.3.0.dar \
   --upload-dar=yes \
   --script-name AryaFi.Test.Scenarios.DvpSettlementTest:runDvpSettlementTests \
   --ledger-host localhost \

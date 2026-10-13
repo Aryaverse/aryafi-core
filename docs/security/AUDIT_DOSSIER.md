@@ -126,7 +126,7 @@ cd daml/test
 dpm test --all --show-coverage
 
 # 3. Inspect the production DAR
-dpm inspect-dar ../../.daml/dist/aryafi-core-3.2.0.dar
+dpm inspect-dar ../../.daml/dist/aryafi-core-3.3.0.dar
 
 # 4. Run specific security and privacy suites (--files selects a test module;
 #    --test-pattern would match script names, not file names)
