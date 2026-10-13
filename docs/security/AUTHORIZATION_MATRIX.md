@@ -261,7 +261,7 @@ These principles hold for the current code and are covered by the negative and a
 
 ## 4. Known Gaps (see `docs/KNOWN_LIMITATIONS.md`)
 
-- Across separate Canton participants, multi-signatory contracts and the joint choices on positions and DvP instructions are agreed through `MultiPartyProposal`, and token-standard transfers and `TokenDvpInstruction` need no shared submission. The joint choices of the financing contracts still need all their controllers in one submission.
+- Across separate Canton participants, multi-signatory contracts and joint choices need a `MultiPartyProposal`; without one they need all their parties in one submission. Token-standard transfers and `TokenDvpInstruction` need neither.
 - Policy evaluation choices (`IsKycValid`, `IsSanctionsClear`, `EvaluateEligibility`, `EvaluateTransfer`, `CheckOwnershipLimit`) are controlled by the policy owner only, so business workflows cannot call them inside their own transactions.
 - Loans, repos, pledges, collateral, and margin calls reference assets and payments by text reference rather than contract ID, so the ledger does not prevent one asset being referenced by several agreements.
 

@@ -140,16 +140,18 @@ jobs:
             AryaFi.Test.Unit.TokenTransferTest:runTokenTransferTests \
             AryaFi.Test.Unit.TokenAllocationTest:runTokenAllocationTests \
             AryaFi.Test.Scenarios.TokenDvpTest:runTokenDvpTests \
-            AryaFi.Test.Unit.ProposalTest:runProposalTests; do
+            AryaFi.Test.Unit.ProposalTest:runProposalTests \
+            AryaFi.Test.Unit.FinancingProposalTest:runFinancingProposalTests; do
             echo "::group::$script"
             dpm script --dar "$DAR" --upload-dar=yes --script-name "$script" --ledger-host localhost --ledger-port 10012
             echo "::endgroup::"
           done
 
-      # Both DvPs with custodian, bank, seller, buyer, and agent each on their own
-      # participant, so no submission acts for parties on two nodes: the
-      # reference DvP agreed through multi-party proposals, and the token-standard DvP.
-      - name: Run the DvPs with each institution on its own node
+      # Custodian, bank, seller, buyer, and agent each on their own participant,
+      # so no submission acts for parties on two nodes: the reference DvP agreed
+      # through multi-party proposals, the token-standard DvP, and a repo and an
+      # escrow agreed and changed through proposals.
+      - name: Run the DvPs and financing with each institution on its own node
         run: |
           DAR=$(ls daml/test/.daml/dist/aryafi-core-test-*.dar)
           cat > participants.json <<'JSON'
@@ -164,7 +166,8 @@ jobs:
           JSON
           for script in \
             AryaFi.Test.Network.DvpAcrossNodes:runDvpAcrossNodes \
-            AryaFi.Test.Network.TokenDvpAcrossNodes:runTokenDvpAcrossNodes; do
+            AryaFi.Test.Network.TokenDvpAcrossNodes:runTokenDvpAcrossNodes \
+            AryaFi.Test.Network.FinancingAcrossNodes:runFinancingAcrossNodes; do
             echo "::group::$script"
             echo '{"runId": "ci-${{ github.run_id }}-'"${script##*:}"'", "custodianNode": "custodian_node", "bankNode": "bank_node", "sellerNode": "dealer_a_node", "buyerNode": "dealer_b_node", "agentNode": "regulator_node"}' > nodes.json
             dpm script --dar "$DAR" --script-name "$script" --participant-config participants.json --input-file nodes.json

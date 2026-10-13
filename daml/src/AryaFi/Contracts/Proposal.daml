@@ -20,31 +20,34 @@
 -- them. Until it is carried out, any party yet to sign can reject it and any
 -- party that has signed can withdraw it.
 --
--- Every AryaFi contract with several signatories can be proposed. The joint
--- choices that can be proposed are those on positions and DvP instructions;
--- the joint choices of the financing contracts still need multi-party
--- submission. Positions move between nodes through the token standard
--- (AryaFi.Finance.TokenTransfer), not through proposals.
+-- Every AryaFi contract with several signatories can be proposed, and every
+-- choice that several parties control. Cash and securities move between nodes
+-- through the token standard (AryaFi.Finance.TokenTransfer) instead of
+-- proposals. An `AssetHolding`, which has no token-standard transfer, can be
+-- transferred through a proposal; the new owner cannot see the holding until
+-- it receives it, so it must not be the last to sign.
 module AryaFi.Contracts.Proposal where
 
 import DA.List (dedupSort, unique)
 import Splice.Api.Token.MetadataV1 (AnyContractId)
 import AryaFi.Common.Errors (require, requireNonEmpty)
 import AryaFi.Compliance.Jurisdiction (JurisdictionProfile)
-import AryaFi.Contracts.Escrow (ConditionalEscrow)
-import AryaFi.Contracts.Loan (InstitutionalLoan)
-import AryaFi.Contracts.Margin (MarginCall)
-import AryaFi.Contracts.Pledge (AssetPledge)
+import AryaFi.Contracts.Escrow (ConditionalEscrow, ReleaseEscrow(..), RefundEscrow(..))
+import AryaFi.Contracts.Loan (InstitutionalLoan, AddLoanObserver(..))
+import AryaFi.Contracts.Margin (MarginCall, ResolveMarginDispute(..), AddMarginObserver(..))
+import AryaFi.Contracts.Pledge (AssetPledge, SubstitutePledge(..), AddPledgeObserver(..))
 import AryaFi.Contracts.Redemption (AssetRedemption)
-import AryaFi.Contracts.Repo (RepoAgreement)
-import AryaFi.Contracts.SecuritiesLending (SecuritiesLendingAgreement)
+import AryaFi.Contracts.Repo (RepoAgreement, RollRepo(..), AddRepoObserver(..))
+import qualified AryaFi.Contracts.Repo as Repo
+import AryaFi.Contracts.SecuritiesLending (SecuritiesLendingAgreement, AccrueLendingFee(..), RevalueCollateral(..), AddSecLendingObserver(..))
 import AryaFi.Contracts.Subscription (FundSubscription)
 import AryaFi.Contracts.Transfer (AssetTransferRequest)
 import AryaFi.Finance.Account (Account)
-import AryaFi.Finance.Asset (AssetHolding, LockAsset(..))
+import AryaFi.Finance.Asset (AssetHolding, LockAsset(..), TransferAsset(..))
 import AryaFi.Finance.Cash (CashPosition, LockCash(..))
-import AryaFi.Finance.Collateral (CollateralPosition)
-import AryaFi.Finance.Obligation (FinancialObligation)
+import AryaFi.Finance.Collateral (CollateralPosition, ReleaseCollateral(..), ResolveDispute(..), AddCollateralObserver(..))
+import qualified AryaFi.Finance.Collateral as Collateral
+import AryaFi.Finance.Obligation (FinancialObligation, CancelObligation(..), AmendObligation(..))
 import AryaFi.Finance.Party (InstitutionalParty)
 import AryaFi.Finance.Payment (PaymentInstruction)
 import AryaFi.Finance.Security (SecurityPosition, LockSecurity(..))
@@ -89,6 +92,64 @@ data JointAction
       cancelDvp : CancelDvpSettlement
   | RetryDvpAction with
       dvpToRetry : ContractId DvpInstruction
+  | TransferAssetAction with
+      assetToTransfer : ContractId AssetHolding
+      transferAsset : TransferAsset
+  -- Financing contracts
+  | AddLoanObserverAction with
+      loan : ContractId InstitutionalLoan
+      addLoanObserver : AddLoanObserver
+  | SubstituteRepoCollateralAction with
+      repoForSubstitution : ContractId RepoAgreement
+      substituteRepoCollateral : Repo.SubstituteCollateral
+  | RollRepoAction with
+      repoToRoll : ContractId RepoAgreement
+      rollRepo : RollRepo
+  | AddRepoObserverAction with
+      repo : ContractId RepoAgreement
+      addRepoObserver : AddRepoObserver
+  | AccrueLendingFeeAction with
+      lendingForFee : ContractId SecuritiesLendingAgreement
+      accrueLendingFee : AccrueLendingFee
+  | RevalueLendingCollateralAction with
+      lendingToRevalue : ContractId SecuritiesLendingAgreement
+      revalueCollateral : RevalueCollateral
+  | AddSecLendingObserverAction with
+      lending : ContractId SecuritiesLendingAgreement
+      addSecLendingObserver : AddSecLendingObserver
+  | SubstituteCollateralAction with
+      collateralForSubstitution : ContractId CollateralPosition
+      substituteCollateral : Collateral.SubstituteCollateral
+  | ReleaseCollateralAction with
+      collateralToRelease : ContractId CollateralPosition
+  | ResolveCollateralDisputeAction with
+      collateralInDispute : ContractId CollateralPosition
+      resolveDispute : ResolveDispute
+  | AddCollateralObserverAction with
+      collateral : ContractId CollateralPosition
+      addCollateralObserver : AddCollateralObserver
+  | ResolveMarginDisputeAction with
+      marginCallInDispute : ContractId MarginCall
+      resolveMarginDispute : ResolveMarginDispute
+  | AddMarginObserverAction with
+      marginCall : ContractId MarginCall
+      addMarginObserver : AddMarginObserver
+  | SubstitutePledgeAction with
+      pledgeForSubstitution : ContractId AssetPledge
+      substitutePledge : SubstitutePledge
+  | AddPledgeObserverAction with
+      pledge : ContractId AssetPledge
+      addPledgeObserver : AddPledgeObserver
+  | ReleaseEscrowAction with
+      escrowToRelease : ContractId ConditionalEscrow
+  | RefundEscrowAction with
+      escrowToRefund : ContractId ConditionalEscrow
+  | CancelObligationAction with
+      obligationToCancel : ContractId FinancialObligation
+      cancelObligation : CancelObligation
+  | AmendObligationAction with
+      obligationToAmend : ContractId FinancialObligation
+      amendObligation : AmendObligation
   deriving (Eq, Show)
 
 -- | What a proposal does once everyone has signed.
@@ -242,6 +303,86 @@ exerciseJointly action signers = case action of
     dvp <- fetch cid
     requireControllers signers [dvp.settlementAgent, dvp.seller, dvp.buyer]
     coerceContractId <$> exercise cid RetrySettlement
+  TransferAssetAction cid args -> do
+    asset <- fetch cid
+    requireControllers signers [asset.owner, asset.custodian, args.newOwner]
+    coerceContractId <$> exercise cid args
+  AddLoanObserverAction cid args -> do
+    loan <- fetch cid
+    requireControllers signers [loan.lender, loan.borrower]
+    coerceContractId <$> exercise cid args
+  SubstituteRepoCollateralAction cid args -> do
+    repo <- fetch cid
+    requireControllers signers [repo.seller, repo.buyer]
+    coerceContractId <$> exercise cid args
+  RollRepoAction cid args -> do
+    repo <- fetch cid
+    requireControllers signers [repo.seller, repo.buyer]
+    coerceContractId <$> exercise cid args
+  AddRepoObserverAction cid args -> do
+    repo <- fetch cid
+    requireControllers signers [repo.seller, repo.buyer]
+    coerceContractId <$> exercise cid args
+  AccrueLendingFeeAction cid args -> do
+    lending <- fetch cid
+    requireControllers signers [lending.lender, lending.borrower]
+    coerceContractId <$> exercise cid args
+  RevalueLendingCollateralAction cid args -> do
+    lending <- fetch cid
+    requireControllers signers [lending.lender, lending.borrower]
+    coerceContractId <$> exercise cid args
+  AddSecLendingObserverAction cid args -> do
+    lending <- fetch cid
+    requireControllers signers [lending.lender, lending.borrower]
+    coerceContractId <$> exercise cid args
+  SubstituteCollateralAction cid args -> do
+    collateral <- fetch cid
+    requireControllers signers [collateral.collateralProvider, collateral.collateralReceiver]
+    coerceContractId <$> exercise cid args
+  ReleaseCollateralAction cid -> do
+    collateral <- fetch cid
+    requireControllers signers [collateral.collateralProvider, collateral.collateralReceiver]
+    coerceContractId <$> exercise cid ReleaseCollateral
+  ResolveCollateralDisputeAction cid args -> do
+    collateral <- fetch cid
+    requireControllers signers [collateral.collateralProvider, collateral.collateralReceiver]
+    coerceContractId <$> exercise cid args
+  AddCollateralObserverAction cid args -> do
+    collateral <- fetch cid
+    requireControllers signers [collateral.collateralProvider, collateral.collateralReceiver]
+    coerceContractId <$> exercise cid args
+  ResolveMarginDisputeAction cid args -> do
+    call <- fetch cid
+    requireControllers signers [call.caller, call.payer]
+    coerceContractId <$> exercise cid args
+  AddMarginObserverAction cid args -> do
+    call <- fetch cid
+    requireControllers signers [call.caller, call.payer]
+    coerceContractId <$> exercise cid args
+  SubstitutePledgeAction cid args -> do
+    pledge <- fetch cid
+    requireControllers signers [pledge.pledgor, pledge.pledgee, pledge.custodian]
+    coerceContractId <$> exercise cid args
+  AddPledgeObserverAction cid args -> do
+    pledge <- fetch cid
+    requireControllers signers [pledge.pledgor, pledge.pledgee]
+    coerceContractId <$> exercise cid args
+  ReleaseEscrowAction cid -> do
+    escrow <- fetch cid
+    requireControllers signers [escrow.escrowAgent, escrow.beneficiary]
+    coerceContractId <$> exercise cid ReleaseEscrow
+  RefundEscrowAction cid -> do
+    escrow <- fetch cid
+    requireControllers signers [escrow.escrowAgent, escrow.depositor]
+    coerceContractId <$> exercise cid RefundEscrow
+  CancelObligationAction cid args -> do
+    obligation <- fetch cid
+    requireControllers signers [obligation.obligor, obligation.obligee]
+    coerceContractId <$> exercise cid args
+  AmendObligationAction cid args -> do
+    obligation <- fetch cid
+    requireControllers signers [obligation.obligor, obligation.obligee]
+    coerceContractId <$> exercise cid args
 
 requireControllers : [Party] -> [Party] -> Update ()
 requireControllers signers controllers =
