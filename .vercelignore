@@ -51,6 +51,7 @@
 /daml/src/AryaFi/Contracts/*
 !/daml/src/AryaFi/Contracts/Loan.daml
 !/daml/src/AryaFi/Contracts/Repo.daml
+!/daml/src/AryaFi/Contracts/Proposal.daml
 !/daml/src/AryaFi/Compliance
 /daml/src/AryaFi/Compliance/*
 !/daml/src/AryaFi/Compliance/TransferRestrictions.daml

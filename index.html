@@ -123,17 +123,18 @@
             <ul class="check-list">
               <li>Bond-for-cash settlement that moves both sides in one transaction</li>
               <li>Runs on Canton 3.5, the version the Canton Network TestNet runs</li>
-              <li>326 automated tests; every change is also tested on a five-institution Canton network</li>
+              <li>334 automated tests; every change is also tested on a five-institution Canton network</li>
               <li>ISO 20022 payment and securities messages mapped to ledger requests</li>
               <li>Cash and bond positions follow the Canton Network token standard: wallets can list and send them, and settlement apps can settle them</li>
               <li>Delivery versus payment through the token standard, against AryaFi cash or another registry's token</li>
+              <li>Institutions on different nodes agree contracts one signature at a time, and both kinds of delivery versus payment settle with each institution on its own node</li>
             </ul>
           </article>
           <article class="card status-card status-todo">
             <h3>Not yet</h3>
             <ul class="todo-list">
               <li>An independent security audit</li>
-              <li>Institutions on different nodes agreeing loans, repos and the original DvP step by step (the token-standard DvP already works across nodes)</li>
+              <li>Institutions on different nodes changing loans, repos and other financing contracts together (they can already agree them across nodes)</li>
               <li>Loans, repos and securities lending moving real assets (today they track the agreement only)</li>
               <li>Settling against Canton Coin itself, which needs a Canton Network (tested so far against Splice's reference token)</li>
             </ul>
@@ -276,7 +277,7 @@
           <span class="badge">Planned</span>
         </div>
         <ul class="todo-list todo-list-plain">
-          <li><strong>Agreeing trades across nodes.</strong> Propose-and-accept steps, so the seller, buyer and agent can each sign from their own node.</li>
+          <li><strong>Financing across nodes.</strong> Trades and contracts are already agreed one signature per node. Next, the joint steps of repos, securities loans, collateral and margin calls work the same way.</li>
           <li><strong>Settling against Canton Coin.</strong> AryaFi's delivery versus payment already settles through the token standard against other registries' tokens. Next, it settles a bond against Canton Coin on a Canton Network.</li>
           <li><strong>Financing on real assets.</strong> Loans, repos and securities lending that lock and move the actual cash and securities.</li>
           <li><strong>An independent security audit</strong> of the finished core.</li>
@@ -303,7 +304,7 @@ git clone https://github.com/Aryaverse/aryafi-core.git
 cd aryafi-core
 dpm build --all
 
-# Run the 326 tests
+# Run the 334 tests
 cd daml/test
 dpm test --all</code></pre>
           <button class="btn btn-small" type="button" data-copy="quickstart-code">Copy</button>
@@ -369,6 +370,7 @@ dpm test --all</code></pre>
             <option value="tokentransfer">Token-standard transfers (send and accept)</option>
             <option value="tokenallocation">Token-standard settlement (allocations)</option>
             <option value="tokendvp">Token-standard delivery versus payment</option>
+            <option value="proposal">Multi-party proposals (agreeing across nodes)</option>
             <option value="collateral">Collateral (haircuts and valuation)</option>
             <option value="loan">Loans (credit facilities)</option>
             <option value="repo">Repos (repurchase agreements)</option>
