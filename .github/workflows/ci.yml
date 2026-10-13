@@ -51,6 +51,22 @@ jobs:
       - name: Inspect Production Package Metadata
         run: dpm inspect-dar .daml/dist/aryafi-core-*.dar
 
+      # A participant accepts a new aryafi-core package only as an upgrade of the
+      # versions it already has, so every build must upgrade the latest release.
+      - name: Check the build is an upgrade of the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p previous-release
+          if gh release download --repo "$GITHUB_REPOSITORY" --pattern 'aryafi-core-*.dar' --dir previous-release; then
+            PREVIOUS=$(ls previous-release/aryafi-core-*.dar)
+            CURRENT=$(ls .daml/dist/aryafi-core-*.dar)
+            echo "Checking $CURRENT against $PREVIOUS"
+            dpm upgrade-check --both "$PREVIOUS" "$CURRENT"
+          else
+            echo "No release to check against"
+          fi
+
       # --all includes the production package's templates in the coverage report.
       - name: Execute Full Test Suite
         working-directory: daml/test
