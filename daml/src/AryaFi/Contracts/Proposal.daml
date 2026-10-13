@@ -1,0 +1,248 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Multi-party proposals: how parties on different participant nodes agree a
+-- contract, or a choice, that needs all of them.
+--
+-- A contract with several signatories needs all of their authority to be
+-- created, and a choice with several controllers needs all of theirs to be
+-- exercised. One command submission carries only the authority of the parties
+-- hosted on the participant that submits it. A `MultiPartyProposal` collects
+-- the authority one party at a time instead:
+--
+--   1. One of the parties proposes. It creates the proposal and signs it.
+--   2. Each of the others accepts from its own node, adding its signature.
+--   3. The last acceptance carries the proposal out with everyone's
+--      authority: it creates the contract, or exercises the choice.
+--
+-- The parties that must sign are exactly the contract's signatories or the
+-- choice's controllers, so a proposal cannot be carried out with fewer of
+-- them. Until it is carried out, any party yet to sign can reject it and any
+-- party that has signed can withdraw it.
+--
+-- Every AryaFi contract with several signatories can be proposed. The joint
+-- choices that can be proposed are those on positions and DvP instructions;
+-- the joint choices of the financing contracts still need multi-party
+-- submission. Positions move between nodes through the token standard
+-- (AryaFi.Finance.TokenTransfer), not through proposals.
+module AryaFi.Contracts.Proposal where
+
+import DA.List (dedupSort, unique)
+import Splice.Api.Token.MetadataV1 (AnyContractId)
+import AryaFi.Common.Errors (require, requireNonEmpty)
+import AryaFi.Compliance.Jurisdiction (JurisdictionProfile)
+import AryaFi.Contracts.Escrow (ConditionalEscrow)
+import AryaFi.Contracts.Loan (InstitutionalLoan)
+import AryaFi.Contracts.Margin (MarginCall)
+import AryaFi.Contracts.Pledge (AssetPledge)
+import AryaFi.Contracts.Redemption (AssetRedemption)
+import AryaFi.Contracts.Repo (RepoAgreement)
+import AryaFi.Contracts.SecuritiesLending (SecuritiesLendingAgreement)
+import AryaFi.Contracts.Subscription (FundSubscription)
+import AryaFi.Contracts.Transfer (AssetTransferRequest)
+import AryaFi.Finance.Account (Account)
+import AryaFi.Finance.Asset (AssetHolding, LockAsset(..))
+import AryaFi.Finance.Cash (CashPosition, LockCash(..))
+import AryaFi.Finance.Collateral (CollateralPosition)
+import AryaFi.Finance.Obligation (FinancialObligation)
+import AryaFi.Finance.Party (InstitutionalParty)
+import AryaFi.Finance.Payment (PaymentInstruction)
+import AryaFi.Finance.Security (SecurityPosition, LockSecurity(..))
+import AryaFi.Finance.Settlement (DvpInstruction, CancelDvpSettlement(..), RetrySettlement(..))
+
+-- | A contract that several parties sign.
+data Agreement
+  = CashPositionTerms CashPosition
+  | SecurityPositionTerms SecurityPosition
+  | AssetHoldingTerms AssetHolding
+  | AccountTerms Account
+  | InstitutionalPartyTerms InstitutionalParty
+  | ObligationTerms FinancialObligation
+  | PaymentTerms PaymentInstruction
+  | CollateralTerms CollateralPosition
+  | DvpTerms DvpInstruction
+  | LoanTerms InstitutionalLoan
+  | RepoTerms RepoAgreement
+  | SecuritiesLoanTerms SecuritiesLendingAgreement
+  | MarginCallTerms MarginCall
+  | PledgeTerms AssetPledge
+  | EscrowTerms ConditionalEscrow
+  | TransferRequestTerms AssetTransferRequest
+  | SubscriptionTerms FundSubscription
+  | RedemptionTerms AssetRedemption
+  | JurisdictionTerms JurisdictionProfile
+  deriving (Eq, Show)
+
+-- | A choice on an existing contract that several parties control.
+data JointAction
+  = LockCashAction with
+      cashCid : ContractId CashPosition
+      lockCash : LockCash
+  | LockSecurityAction with
+      securityCid : ContractId SecurityPosition
+      lockSecurity : LockSecurity
+  | LockAssetAction with
+      assetCid : ContractId AssetHolding
+      lockAsset : LockAsset
+  | CancelDvpAction with
+      dvpToCancel : ContractId DvpInstruction
+      cancelDvp : CancelDvpSettlement
+  | RetryDvpAction with
+      dvpToRetry : ContractId DvpInstruction
+  deriving (Eq, Show)
+
+-- | What a proposal does once everyone has signed.
+data Proposed
+  = CreateAgreement Agreement
+  | ExerciseJointly JointAction
+  deriving (Eq, Show)
+
+-- | The result of an acceptance: the proposal still waiting for others, or the
+-- contract it created or changed, as a contract ID to coerce to the template's.
+data ProposalResult
+  = AwaitingSignatures (ContractId MultiPartyProposal)
+  | CarriedOut AnyContractId
+  deriving (Eq, Show)
+
+-- ---------------------------------------------------------------------------
+-- MultiPartyProposal Template
+-- ---------------------------------------------------------------------------
+
+-- | A contract or choice proposed to the parties that must sign it, signed by
+-- those that have accepted so far.
+template MultiPartyProposal
+  with
+    proposed : Proposed
+    signers : [Party]
+    -- ^ Everyone who must sign: the contract's signatories, or the choice's controllers.
+    signed : [Party]
+    -- ^ Who has signed so far, the proposer first.
+    reference : Text
+    -- ^ A reference the parties recognise, such as a trade or deal ID.
+  where
+    signatory signed
+    observer signers
+
+    ensure
+      not (null signed) && unique signed && unique signers
+      && all (`elem` signers) signed && length signed < length signers
+      && validSigners proposed signers
+
+    -- | Sign the proposal. The last signature carries it out with everyone's authority.
+    choice AcceptProposal : ProposalResult
+      with
+        signer : Party
+      controller signer
+      do
+        require (signer `elem` signers) "Only a party asked to sign can accept the proposal"
+        require (signer `notElem` signed) "The party has already signed the proposal"
+        let nowSigned = signer :: signed
+        if all (`elem` nowSigned) signers
+        then CarriedOut <$> carryOut proposed signers
+        else AwaitingSignatures <$> create this with signed = nowSigned
+
+    -- | Refuse the proposal, as a party yet to sign it.
+    choice RejectProposal : ()
+      with
+        party : Party
+        reason : Text
+      controller party
+      do
+        require (party `elem` signers && party `notElem` signed)
+          "Only a party yet to sign can reject the proposal"
+        requireNonEmpty reason "reason"
+
+    -- | Take the proposal back, as a party that has signed it.
+    choice WithdrawProposal : ()
+      with
+        party : Party
+        reason : Text
+      controller party
+      do
+        require (party `elem` signed) "Only a party that has signed can withdraw the proposal"
+        requireNonEmpty reason "reason"
+
+-- | Whether `signers` are exactly who must sign: for a contract, its
+-- signatories. A joint choice's controllers depend on the contract it is
+-- exercised on, so they are checked when the proposal is carried out.
+validSigners : Proposed -> [Party] -> Bool
+validSigners (CreateAgreement terms) signers = dedupSort signers == dedupSort (agreementSignatories terms)
+validSigners (ExerciseJointly _) _ = True
+
+-- | Carry out a fully signed proposal.
+carryOut : Proposed -> [Party] -> Update AnyContractId
+carryOut (CreateAgreement terms) _ = createAgreement terms
+carryOut (ExerciseJointly action) signers = exerciseJointly action signers
+
+-- | The parties that sign an agreement.
+agreementSignatories : Agreement -> [Party]
+agreementSignatories terms = case terms of
+  CashPositionTerms c -> signatory c
+  SecurityPositionTerms c -> signatory c
+  AssetHoldingTerms c -> signatory c
+  AccountTerms c -> signatory c
+  InstitutionalPartyTerms c -> signatory c
+  ObligationTerms c -> signatory c
+  PaymentTerms c -> signatory c
+  CollateralTerms c -> signatory c
+  DvpTerms c -> signatory c
+  LoanTerms c -> signatory c
+  RepoTerms c -> signatory c
+  SecuritiesLoanTerms c -> signatory c
+  MarginCallTerms c -> signatory c
+  PledgeTerms c -> signatory c
+  EscrowTerms c -> signatory c
+  TransferRequestTerms c -> signatory c
+  SubscriptionTerms c -> signatory c
+  RedemptionTerms c -> signatory c
+  JurisdictionTerms c -> signatory c
+
+createAgreement : Agreement -> Update AnyContractId
+createAgreement terms = case terms of
+  CashPositionTerms c -> coerceContractId <$> create c
+  SecurityPositionTerms c -> coerceContractId <$> create c
+  AssetHoldingTerms c -> coerceContractId <$> create c
+  AccountTerms c -> coerceContractId <$> create c
+  InstitutionalPartyTerms c -> coerceContractId <$> create c
+  ObligationTerms c -> coerceContractId <$> create c
+  PaymentTerms c -> coerceContractId <$> create c
+  CollateralTerms c -> coerceContractId <$> create c
+  DvpTerms c -> coerceContractId <$> create c
+  LoanTerms c -> coerceContractId <$> create c
+  RepoTerms c -> coerceContractId <$> create c
+  SecuritiesLoanTerms c -> coerceContractId <$> create c
+  MarginCallTerms c -> coerceContractId <$> create c
+  PledgeTerms c -> coerceContractId <$> create c
+  EscrowTerms c -> coerceContractId <$> create c
+  TransferRequestTerms c -> coerceContractId <$> create c
+  SubscriptionTerms c -> coerceContractId <$> create c
+  RedemptionTerms c -> coerceContractId <$> create c
+  JurisdictionTerms c -> coerceContractId <$> create c
+
+-- | Exercise a joint choice, after checking that the signers are exactly its controllers.
+exerciseJointly : JointAction -> [Party] -> Update AnyContractId
+exerciseJointly action signers = case action of
+  LockCashAction cid args -> do
+    cash <- fetch cid
+    requireControllers signers [cash.owner, cash.bank]
+    coerceContractId <$> exercise cid args
+  LockSecurityAction cid args -> do
+    security <- fetch cid
+    requireControllers signers [security.owner, security.custodian]
+    coerceContractId <$> exercise cid args
+  LockAssetAction cid args -> do
+    asset <- fetch cid
+    requireControllers signers [asset.owner, asset.custodian]
+    coerceContractId <$> exercise cid args
+  CancelDvpAction cid args -> do
+    dvp <- fetch cid
+    requireControllers signers [dvp.seller, dvp.buyer]
+    coerceContractId <$> exercise cid args
+  RetryDvpAction cid -> do
+    dvp <- fetch cid
+    requireControllers signers [dvp.settlementAgent, dvp.seller, dvp.buyer]
+    coerceContractId <$> exercise cid RetrySettlement
+
+requireControllers : [Party] -> [Party] -> Update ()
+requireControllers signers controllers =
+  require (dedupSort signers == dedupSort controllers) "The proposal's signers are not exactly the choice's controllers"

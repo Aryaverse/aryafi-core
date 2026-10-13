@@ -1,0 +1,94 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The reference DvP (`DvpInstruction`) with every institution on its own
+-- participant node. Each contract and choice that needs several parties is
+-- agreed through a `MultiPartyProposal`, one signature per node: the custodian
+-- and the bank issue the positions, each owner has its leg locked to the
+-- agent, and seller and buyer sign the agent's instruction. The agent then
+-- settles from its node.
+--
+-- Run it like runTokenDvpAcrossNodes, with a participant config that names
+-- the nodes:
+--
+--   dpm script --dar daml/test/.daml/dist/aryafi-core-test-3.3.0.dar \
+--     --script-name AryaFi.Test.Network.DvpAcrossNodes:runDvpAcrossNodes \
+--     --participant-config participants.json --input-file nodes.json
+module AryaFi.Test.Network.DvpAcrossNodes where
+
+import Daml.Script
+import qualified Splice.Api.Token.MetadataV1 as Metadata
+import AryaFi.Common.Types (SettlementStatus(..))
+import AryaFi.Contracts.Proposal
+import AryaFi.Finance.Cash
+import AryaFi.Finance.Security
+import AryaFi.Finance.Settlement
+import AryaFi.Test.Network.Nodes
+import AryaFi.Test.Scenarios.DvpSettlementTest (bondQuantity, buyerCashAcc, cashConsideration, sellerSecAcc)
+import AryaFi.Test.Unit.ProposalTest (bondTerms, cashTerms, dvpTerms)
+
+-- | Propose from `proposer`'s node something `signers` must all sign.
+proposeOnNode : Party -> [Party] -> Proposed -> Script (ContractId MultiPartyProposal)
+proposeOnNode proposer signers proposed = submit proposer do
+  createCmd MultiPartyProposal with proposed; signers; signed = [proposer]; reference = "DVP-ACROSS-NODES"
+
+-- | Wait until the proposal reaches `party`'s node, then sign it there.
+signOnNode : Party -> ContractId MultiPartyProposal -> Script ProposalResult
+signOnNode party cid = do
+  _ <- eventually ("the proposal on the node of " <> show party) (queryContractId party cid)
+  submit party do exerciseCmd cid AcceptProposal with signer = party
+
+-- | Sign, as one of several signers still to come.
+signAndPass : Party -> ContractId MultiPartyProposal -> Script (ContractId MultiPartyProposal)
+signAndPass party cid = signOnNode party cid >>= \result -> case result of
+  AwaitingSignatures next -> pure next
+  CarriedOut _ -> abort "Expected the proposal to wait for more signatures"
+
+-- | Sign last, which carries the proposal out.
+signLast : Party -> ContractId MultiPartyProposal -> Script Metadata.AnyContractId
+signLast party cid = signOnNode party cid >>= \result -> case result of
+  CarriedOut contract -> pure contract
+  AwaitingSignatures _ -> abort "Expected the last signature to carry the proposal out"
+
+runDvpAcrossNodes : NodesInput -> Script ()
+runDvpAcrossNodes input = do
+  Institutions{..} <- allocateInstitutions input
+  let lockRef = "DVP-NODES-" <> input.runId
+
+  -- The custodian and the bank issue the positions; each owner signs on its node
+  bondCid <- proposeOnNode custodian [custodian, seller]
+      (CreateAgreement (SecurityPositionTerms (bondTerms custodian seller sellerSecAcc bondQuantity)))
+    >>= signLast seller
+  cashCid <- proposeOnNode bank [bank, buyer]
+      (CreateAgreement (CashPositionTerms (cashTerms bank buyer buyerCashAcc cashConsideration)))
+    >>= signLast buyer
+
+  -- Each owner asks its custodian or bank to lock its leg to the agent
+  lockedBond <- proposeOnNode seller [seller, custodian]
+      (ExerciseJointly (LockSecurityAction (coerceContractId bondCid) (LockSecurity with lockRef; holder = agent)))
+    >>= signLast custodian
+  lockedCash <- proposeOnNode buyer [buyer, bank]
+      (ExerciseJointly (LockCashAction (coerceContractId cashCid) (LockCash with lockRef; holder = agent)))
+    >>= signLast bank
+
+  -- The agent proposes the instruction; seller and buyer sign it on their nodes
+  now <- getTime
+  dvpCid <- proposeOnNode agent [agent, seller, buyer] (CreateAgreement (DvpTerms (dvpTerms agent seller buyer lockRef now)))
+    >>= signAndPass seller >>= signLast buyer
+
+  -- The agent settles from its node
+  let instruction = coerceContractId @_ @DvpInstruction dvpCid
+  _ <- eventually "the instruction on the agent's node" (queryContractId agent instruction)
+  _ <- eventually "the locked bond on the agent's node" (queryContractId agent (coerceContractId @_ @SecurityPosition lockedBond))
+  _ <- eventually "the locked cash on the agent's node" (queryContractId agent (coerceContractId @_ @CashPosition lockedCash))
+  result <- submit agent do
+    exerciseCmd instruction ExecuteDvpSettlement with
+      sellerSecurityCid = coerceContractId lockedBond
+      buyerCashCid = coerceContractId lockedCash
+  Some settled <- queryContractId agent result.instructionCid
+  assertMsg "The DvP is settled" (settled.status == Settled)
+
+  delivered <- eventually "the bond on the buyer's node" (queryContractId buyer result.deliveredSecurityCid)
+  assertMsg "The buyer holds the bond" (delivered.owner == buyer && delivered.quantity == bondQuantity && not delivered.isLocked)
+  paid <- eventually "the cash on the seller's node" (queryContractId seller result.paidCashCid)
+  assertMsg "The seller holds the cash" (paid.owner == seller && paid.amount == cashConsideration && not paid.isLocked)

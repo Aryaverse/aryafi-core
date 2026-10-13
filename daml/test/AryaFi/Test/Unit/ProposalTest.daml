@@ -1,0 +1,264 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Multi-party proposals (AryaFi.Contracts.Proposal): agreeing contracts and
+-- joint choices one signature at a time, as parties on different nodes must.
+module AryaFi.Test.Unit.ProposalTest where
+
+import DA.List (sort)
+import DA.Text (isInfixOf)
+import Daml.Script
+import qualified Splice.Api.Token.MetadataV1 as Metadata
+import AryaFi.Common.Identifiers
+import AryaFi.Common.Types
+import AryaFi.Compliance.Jurisdiction
+import AryaFi.Contracts.Loan
+import AryaFi.Contracts.Proposal
+import AryaFi.Finance.Cash
+import AryaFi.Finance.Security
+import AryaFi.Finance.Settlement
+import AryaFi.Test.Scenarios.DvpSettlementTest
+  (allocateTestParty, bondIsin, bondQuantity, buyerCashAcc, buyerSecAcc, cashConsideration, sellerCashAcc, sellerSecAcc)
+
+-- ---------------------------------------------------------------------------
+-- Helpers
+-- ---------------------------------------------------------------------------
+
+-- | Propose, as `proposer`, something `signers` must all sign.
+propose : Party -> [Party] -> Proposed -> Script (ContractId MultiPartyProposal)
+propose proposer signers proposed = submit proposer do
+  createCmd MultiPartyProposal with proposed; signers; signed = [proposer]; reference = "TEST"
+
+acceptAs : Party -> ContractId MultiPartyProposal -> Script ProposalResult
+acceptAs party cid = submit party do exerciseCmd cid AcceptProposal with signer = party
+
+-- | Accept as `party`, which must not be the last to sign.
+acceptPending : Party -> ContractId MultiPartyProposal -> Script (ContractId MultiPartyProposal)
+acceptPending party cid = acceptAs party cid >>= \result -> case result of
+  AwaitingSignatures next -> pure next
+  CarriedOut _ -> abort "Expected the proposal to wait for more signatures"
+
+-- | Accept as `party`, the last to sign, and return the contract created or changed.
+acceptLast : Party -> ContractId MultiPartyProposal -> Script Metadata.AnyContractId
+acceptLast party cid = acceptAs party cid >>= \result -> case result of
+  CarriedOut contract -> pure contract
+  AwaitingSignatures _ -> abort "Expected the last signature to carry the proposal out"
+
+-- | Submit and check that it fails with an error mentioning `expected`.
+submitFailsWith : Text -> Party -> Commands a -> Script ()
+submitFailsWith expected party cmds = do
+  result <- trySubmit party cmds
+  case result of
+    Left err -> assertMsg
+      ("Expected an error mentioning \"" <> expected <> "\", got: " <> show err)
+      (expected `isInfixOf` show err)
+    Right _ -> abort ("Expected the submission to fail with: " <> expected)
+
+cashTerms : Party -> Party -> AccountId -> Decimal -> CashPosition
+cashTerms bank owner accountId amount = CashPosition with
+  bank; owner; accountId; currency = "USD"; amount
+  isLocked = False; lockReference = None; lockHolder = None; observers = []
+
+bondTerms : Party -> Party -> AccountId -> Decimal -> SecurityPosition
+bondTerms custodian owner accountId quantity = SecurityPosition with
+  custodian; owner; accountId; isin = bondIsin; cusip = Some (CUSIP "912828ZM5")
+  instrumentName = "US Treasury 4.25% Nov 2026"; instrumentType = GovernmentBond
+  quantity; couponRate = Some 0.0425; couponType = Some FixedCoupon
+  dayCountConvention = Some ActActISDA; maturityDate = None; seniority = Some Senior
+  isLocked = False; lockReference = None; lockHolder = None; csdRef = None; observers = []
+
+dvpTerms : Party -> Party -> Party -> Text -> Time -> DvpInstruction
+dvpTerms agent seller buyer lockRef settlementDate = DvpInstruction with
+  settlementAgent = agent; seller; buyer
+  tradeId = TradeId ("TRD-" <> lockRef)
+  isin = bondIsin; securityQuantity = bondQuantity
+  sellerSecurityAccount = sellerSecAcc; buyerSecurityAccount = buyerSecAcc
+  currency = "USD"; cashAmount = cashConsideration
+  sellerCashAccount = sellerCashAcc; buyerCashAccount = buyerCashAcc
+  dvpModel = DvpModel1; settlementDate
+  correlationId = CorrelationId ("CORR-" <> lockRef); idempotencyKey = IdempotencyKey ("IKEY-" <> lockRef)
+  sellerSecurityLockRef = lockRef; buyerCashLockRef = lockRef
+  status = PendingSettlement; failureReason = None; observers = []
+
+-- | The five institutions of a DvP.
+data Parties = Parties
+  with
+    custodian : Party
+    bank : Party
+    seller : Party
+    buyer : Party
+    agent : Party
+
+parties : Text -> Script Parties
+parties test = do
+  custodian <- allocateTestParty "Custodian" test
+  bank <- allocateTestParty "Bank" test
+  seller <- allocateTestParty "Seller" test
+  buyer <- allocateTestParty "Buyer" test
+  agent <- allocateTestParty "Agent" test
+  pure Parties with ..
+
+-- | A DvP agreed entirely through proposals, one signature per submission:
+-- the positions are issued, the legs locked, and the instruction signed.
+-- Returns the instruction and the two locked legs.
+dvpByProposals : Parties -> Text -> Script (ContractId DvpInstruction, ContractId SecurityPosition, ContractId CashPosition)
+dvpByProposals p lockRef = do
+  -- The custodian and the bank each issue a position; the owner accepts
+  bondCid <- propose p.custodian [p.custodian, p.seller] (CreateAgreement (SecurityPositionTerms (bondTerms p.custodian p.seller sellerSecAcc bondQuantity)))
+    >>= acceptLast p.seller
+  cashCid <- propose p.bank [p.bank, p.buyer] (CreateAgreement (CashPositionTerms (cashTerms p.bank p.buyer buyerCashAcc cashConsideration)))
+    >>= acceptLast p.buyer
+  -- Each owner asks its custodian or bank to lock its leg to the agent
+  lockedBond <- propose p.seller [p.seller, p.custodian]
+      (ExerciseJointly (LockSecurityAction (coerceContractId bondCid) (LockSecurity with lockRef; holder = p.agent)))
+    >>= acceptLast p.custodian
+  lockedCash <- propose p.buyer [p.buyer, p.bank]
+      (ExerciseJointly (LockCashAction (coerceContractId cashCid) (LockCash with lockRef; holder = p.agent)))
+    >>= acceptLast p.bank
+  -- The agent proposes the instruction; seller and buyer sign it
+  now <- getTime
+  dvpCid <- propose p.agent [p.agent, p.seller, p.buyer] (CreateAgreement (DvpTerms (dvpTerms p.agent p.seller p.buyer lockRef now)))
+    >>= acceptPending p.seller >>= acceptLast p.buyer
+  pure (coerceContractId dvpCid, coerceContractId lockedBond, coerceContractId lockedCash)
+
+-- ---------------------------------------------------------------------------
+-- Tests
+-- ---------------------------------------------------------------------------
+
+-- A bank issues cash to a client: the bank proposes, the client accepts.
+testIssueByProposal : Script ()
+testIssueByProposal = script do
+  bank <- allocateTestParty "Bank" "PR-ISSUE"
+  alice <- allocateTestParty "Alice" "PR-ISSUE"
+  proposalCid <- propose bank [bank, alice] (CreateAgreement (CashPositionTerms (cashTerms bank alice (AccountId "ACC-ALICE") 1000.0)))
+  Some proposal <- queryContractId alice proposalCid
+  assertMsg "Alice sees the proposal, signed by the bank" (proposal.signed == [bank])
+  cashCid <- acceptLast alice proposalCid
+  Some cash <- queryContractId alice (coerceContractId @_ @CashPosition cashCid)
+  assertMsg "Alice holds the cash, signed by both" (cash.owner == alice && cash.bank == bank && cash.amount == 1000.0)
+  gone <- queryContractId bank proposalCid
+  assertMsg "The proposal is consumed" (gone == None)
+
+-- The whole DvP, agreed through proposals with one signature per submission,
+-- then settled by the agent.
+testDvpThroughProposals : Script ()
+testDvpThroughProposals = script do
+  p <- parties "PR-DVP"
+  (dvpCid, lockedBond, lockedCash) <- dvpByProposals p "PR-DVP"
+  Some bond <- queryContractId p.seller lockedBond
+  assertMsg "The bond is locked to the agent" (bond.isLocked && bond.lockHolder == Some p.agent)
+  Some dvp <- queryContractId p.buyer dvpCid
+  assertMsg "Seller, buyer and agent all signed the instruction"
+    (sort (signatory dvp) == sort [p.agent, p.seller, p.buyer])
+  result <- submit p.agent do
+    exerciseCmd dvpCid ExecuteDvpSettlement with sellerSecurityCid = lockedBond; buyerCashCid = lockedCash
+  Some delivered <- queryContractId p.buyer result.deliveredSecurityCid
+  assertMsg "The buyer holds the bond" (delivered.owner == p.buyer && not delivered.isLocked)
+  Some paid <- queryContractId p.seller result.paidCashCid
+  assertMsg "The seller holds the cash" (paid.owner == p.seller && paid.amount == cashConsideration)
+
+-- Seller and buyer cancel the DvP jointly; seller, buyer and agent retry a failed one.
+testJointDvpChoices : Script ()
+testJointDvpChoices = script do
+  p <- parties "PR-JOINT"
+  (dvpCid, _, _) <- dvpByProposals p "PR-JOINT"
+  failed <- submit p.agent do exerciseCmd dvpCid FailDvpSettlement with reason = "Counterparty limit"
+  retried <- propose p.agent [p.agent, p.seller, p.buyer] (ExerciseJointly (RetryDvpAction failed))
+    >>= acceptPending p.buyer >>= acceptLast p.seller
+  Some pending <- queryContractId p.agent (coerceContractId @_ @DvpInstruction retried)
+  assertMsg "The DvP is pending again" (pending.status == PendingSettlement)
+  cancelled <- propose p.seller [p.seller, p.buyer]
+      (ExerciseJointly (CancelDvpAction (coerceContractId retried) (CancelDvpSettlement with reason = "Trade amended")))
+    >>= acceptLast p.buyer
+  Some dvp <- queryContractId p.agent (coerceContractId @_ @DvpInstruction cancelled)
+  assertMsg "The DvP is cancelled" (dvp.status == Cancelled "Trade amended")
+
+-- A bilateral financing contract: the lender proposes the loan, the borrower signs.
+testLoanByProposal : Script ()
+testLoanByProposal = script do
+  lender <- allocateTestParty "Lender" "PR-LOAN"
+  borrower <- allocateTestParty "Borrower" "PR-LOAN"
+  now <- getTime
+  let loan = InstitutionalLoan with
+        loanId = "FACILITY-PR-001"; lender; borrower; agentBank = None; currency = "USD"
+        facilityLimit = 10000000.0; drawnPrincipal = 5000000.0; accruedInterest = 0.0
+        interestRate = 0.0575; dayCountConvention = Act360; startDate = now
+        interestAccruedThrough = now; maturityDate = now; collateralPledgeRef = None
+        status = Active; defaultReason = None; correlationId = CorrelationId "CORR-PR-LOAN"; observers = []
+  loanCid <- propose lender [lender, borrower] (CreateAgreement (LoanTerms loan)) >>= acceptLast borrower
+  Some agreed <- queryContractId borrower (coerceContractId @_ @InstitutionalLoan loanCid)
+  assertMsg "The loan is agreed by both" (agreed == loan)
+
+-- A regulator and an institution agree a jurisdiction profile: the
+-- institution proposes, the regulator signs.
+testJurisdictionByProposal : Script ()
+testJurisdictionByProposal = script do
+  regulator <- allocateTestParty "Regulator" "PR-JUR"
+  institution <- allocateTestParty "Institution" "PR-JUR"
+  let profile = JurisdictionProfile with
+        regulator; institution; countryCode = "SG"; regulatoryFramework = "MAS"
+        permittedAssetClasses = ["GovernmentBond", "MoneyMarketFund"]; isActive = True
+  profileCid <- propose institution [institution, regulator] (CreateAgreement (JurisdictionTerms profile))
+    >>= acceptLast regulator
+  Some agreed <- queryContractId institution (coerceContractId @_ @JurisdictionProfile profileCid)
+  assertMsg "The profile is signed by both" (agreed == profile)
+
+-- What a proposal refuses.
+testProposalChecks : Script ()
+testProposalChecks = script do
+  bank <- allocateTestParty "Bank" "PR-CHECKS"
+  alice <- allocateTestParty "Alice" "PR-CHECKS"
+  bob <- allocateTestParty "Bob" "PR-CHECKS"
+  let cash = CreateAgreement (CashPositionTerms (cashTerms bank alice (AccountId "ACC-ALICE") 1000.0))
+
+  -- The signers must be exactly the contract's signatories, and the proposer one of them
+  submitMustFail bank do
+    createCmd MultiPartyProposal with proposed = cash; signers = [bank, alice, bob]; signed = [bank]; reference = "X"
+  submitMustFail bank do
+    createCmd MultiPartyProposal with proposed = cash; signers = [bank]; signed = [bank]; reference = "X"
+  submitMustFail bob do
+    createCmd MultiPartyProposal with proposed = cash; signers = [bank, alice]; signed = [bob]; reference = "X"
+
+  proposalCid <- propose bank [bank, alice] cash
+  submitFailsWith "The party has already signed the proposal" bank
+    (exerciseCmd proposalCid AcceptProposal with signer = bank)
+  submitMustFail bob (exerciseCmd proposalCid AcceptProposal with signer = bob)
+  submitFailsWith "Only a party that has signed can withdraw the proposal" alice
+    (exerciseCmd proposalCid WithdrawProposal with party = alice; reason = "Not mine")
+  submitFailsWith "Only a party yet to sign can reject the proposal" bank
+    (exerciseCmd proposalCid RejectProposal with party = bank; reason = "Changed my mind")
+  submit alice do exerciseCmd proposalCid RejectProposal with party = alice; reason = "Wrong account"
+  gone <- queryContractId bank proposalCid
+  assertMsg "A rejected proposal is gone" (gone == None)
+
+  withdrawn <- propose bank [bank, alice] cash
+  submit bank do exerciseCmd withdrawn WithdrawProposal with party = bank; reason = "Issued in error"
+  stillThere <- queryContractId alice withdrawn
+  assertMsg "A withdrawn proposal is gone" (stillThere == None)
+
+-- A joint choice proposed to the wrong parties is not carried out: locking cash
+-- needs its owner and bank, so the bank and an agent cannot lock it without the owner.
+testJointActionNeedsItsControllers : Script ()
+testJointActionNeedsItsControllers = script do
+  bank <- allocateTestParty "Bank" "PR-CTRL"
+  alice <- allocateTestParty "Alice" "PR-CTRL"
+  agent <- allocateTestParty "Agent" "PR-CTRL"
+  cashCid <- propose bank [bank, alice] (CreateAgreement (CashPositionTerms (cashTerms bank alice (AccountId "ACC-ALICE") 1000.0)))
+    >>= acceptLast alice
+  let lock = ExerciseJointly (LockCashAction (coerceContractId cashCid) (LockCash with lockRef = "R-1"; holder = agent))
+  withoutOwner <- propose agent [agent, bank] lock
+  submitFailsWith "The proposal's signers are not exactly the choice's controllers" bank
+    (exerciseCmd withoutOwner AcceptProposal with signer = bank)
+  lockedCid <- propose alice [alice, bank] lock >>= acceptLast bank
+  Some locked <- queryContractId alice (coerceContractId @_ @CashPosition lockedCid)
+  assertMsg "Owner and bank together lock the cash" (locked.isLocked && locked.lockHolder == Some agent)
+
+runProposalTests : Script ()
+runProposalTests = script do
+  testIssueByProposal
+  testDvpThroughProposals
+  testJointDvpChoices
+  testLoanByProposal
+  testJurisdictionByProposal
+  testProposalChecks
+  testJointActionNeedsItsControllers

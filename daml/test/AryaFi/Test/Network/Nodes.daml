@@ -1,0 +1,66 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | What the tests that put each institution on its own participant node share:
+-- allocating the institutions on their nodes, and waiting for contracts to
+-- reach other nodes.
+module AryaFi.Test.Network.Nodes where
+
+import DA.Foldable (forA_)
+import DA.List (unique)
+import DA.Time (seconds)
+import Daml.Script
+
+-- | The participant node of each institution, as named in the participant config.
+data NodesInput = NodesInput
+  with
+    runId : Text
+    -- ^ Names this run's parties, so reruns do not collide.
+    custodianNode : Text
+    bankNode : Text
+    sellerNode : Text
+    buyerNode : Text
+    agentNode : Text
+
+-- | The five institutions of a trade.
+data Institutions = Institutions
+  with
+    custodian : Party
+    bank : Party
+    seller : Party
+    buyer : Party
+    agent : Party
+
+-- | Allocate each institution on its own node, and check that each node hosts
+-- exactly its own institution.
+allocateInstitutions : NodesInput -> Script Institutions
+allocateInstitutions input = do
+  let on name node = allocatePartyOn (name <> "-" <> input.runId) (ParticipantName node)
+  custodian <- on "Custodian" input.custodianNode
+  bank <- on "Bank" input.bankNode
+  seller <- on "Seller" input.sellerNode
+  buyer <- on "Buyer" input.buyerNode
+  agent <- on "Agent" input.agentNode
+  -- Let every node learn where the new parties are hosted
+  sleep (seconds 5)
+  let hosted = [(custodian, input.custodianNode), (bank, input.bankNode), (seller, input.sellerNode), (buyer, input.buyerNode), (agent, input.agentNode)]
+  assertMsg "Every institution has its own node" (unique (map snd hosted))
+  forA_ hosted \(_, node) -> do
+    known <- listKnownPartiesOn (ParticipantName node)
+    let local = [d.party | d <- known, d.isLocal]
+    assertMsg ("Node " <> node <> " hosts exactly one of the institutions")
+      ([p | (p, _) <- hosted, p `elem` local] == [p | (p, n) <- hosted, n == node])
+  pure Institutions with ..
+
+-- | Retry `check` until it returns a value: contracts reach other nodes
+-- shortly after the submitting node.
+eventually : Text -> Script (Optional a) -> Script a
+eventually = retry 60
+
+retry : Int -> Text -> Script (Optional a) -> Script a
+retry attempts what check = do
+  found <- check
+  case found of
+    Some a -> pure a
+    None | attempts > 0 -> sleep (seconds 1) >> retry (attempts - 1) what check
+    None -> abort ("Timed out waiting for " <> what)
