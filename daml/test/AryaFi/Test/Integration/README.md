@@ -34,5 +34,5 @@ Both scripts pass this way against Canton 3.5.19, and CI runs them on every push
 
 ## Not Yet Covered
 
-- **Cross-participant financing workflows.** `Network/DvpAcrossNodes.daml` and `Network/TokenDvpAcrossNodes.daml` run the two DvPs with each institution on its own participant. The joint choices of the financing contracts (repos, securities loans, collateral, margin calls, pledges, escrows) still need their controllers on one participant. See [KNOWN_LIMITATIONS.md](../../../../../docs/KNOWN_LIMITATIONS.md) and [IMPROVEMENT_PLAN.md](../../../../../docs/IMPROVEMENT_PLAN.md).
+- **Cross-participant workflows beyond the `Network/` scripts.** `Network/DvpAcrossNodes.daml`, `Network/TokenDvpAcrossNodes.daml`, and `Network/FinancingAcrossNodes.daml` run both DvPs, a repo, and an escrow with each institution on its own participant. The other financing contracts use the same proposals but are tested on one participant only. See [KNOWN_LIMITATIONS.md](../../../../../docs/KNOWN_LIMITATIONS.md) and [IMPROVEMENT_PLAN.md](../../../../../docs/IMPROVEMENT_PLAN.md).
 - **Scripts that set ledger time** (loan accrual, margin deadlines) only run on the Daml test ledger, which supports static time.
