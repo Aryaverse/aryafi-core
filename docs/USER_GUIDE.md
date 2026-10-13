@@ -77,7 +77,7 @@ dpm version
 # Compile both packages: aryafi-core (production) and aryafi-core-test
 dpm build --all
 
-# Run the test suite (326 scripts; requires Java 17 or 21)
+# Run the test suite (334 scripts; requires Java 17 or 21)
 cd daml/test
 dpm test --all --show-coverage
 cd ../..
@@ -104,7 +104,7 @@ dpm script \
   --ledger-host localhost \
   --ledger-port 10012
 ```
-This uploads the test DAR to the bank participant, allocates the scenario's parties there, and runs the DvP. Workflows whose parties live on different participants need propose/accept templates (see [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)). The token-standard DvP does not: `AryaFi.Test.Network.TokenDvpAcrossNodes:runTokenDvpAcrossNodes` runs one with each institution on its own participant, given a participant config (see the CI workflow's topology job for the files).
+This uploads the test DAR to the bank participant, allocates the scenario's parties there, and runs the DvP. To run a DvP with each institution on its own participant, use `AryaFi.Test.Network.DvpAcrossNodes:runDvpAcrossNodes` (the reference DvP, agreed through multi-party proposals) or `AryaFi.Test.Network.TokenDvpAcrossNodes:runTokenDvpAcrossNodes` (the token-standard DvP), with a participant config and an input file naming the nodes (see the CI workflow's topology job for both files).
 
 ---
 

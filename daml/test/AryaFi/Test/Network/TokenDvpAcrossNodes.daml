@@ -19,8 +19,7 @@
 module AryaFi.Test.Network.TokenDvpAcrossNodes where
 
 import DA.Foldable (forA_)
-import DA.List (unique)
-import DA.Time (addRelTime, days, minutes, seconds)
+import DA.Time (addRelTime, days, minutes)
 import Daml.Script
 import qualified Splice.Api.Token.HoldingV2 as HoldingV2
 import Splice.Api.Token.MetadataV1 (emptyMetadata)
@@ -35,30 +34,7 @@ import AryaFi.Finance.TokenDvp
 import AryaFi.Finance.TokenTransfer
 import AryaFi.Test.Scenarios.DvpSettlementTest (bondIsin)
 import AryaFi.Test.Scenarios.TokenDvpTest
-
--- | The participant node of each institution, as named in the participant config.
-data NodesInput = NodesInput
-  with
-    runId : Text
-    -- ^ Names this run's parties, so reruns do not collide.
-    custodianNode : Text
-    bankNode : Text
-    sellerNode : Text
-    buyerNode : Text
-    agentNode : Text
-
--- | Retry `check` until it returns a value: contracts reach other nodes
--- shortly after the submitting node.
-eventually : Text -> Script (Optional a) -> Script a
-eventually = retry 60
-
-retry : Int -> Text -> Script (Optional a) -> Script a
-retry attempts what check = do
-  found <- check
-  case found of
-    Some a -> pure a
-    None | attempts > 0 -> sleep (seconds 1) >> retry (attempts - 1) what check
-    None -> abort ("Timed out waiting for " <> what)
+import AryaFi.Test.Network.Nodes
 
 -- | `party`'s holdings, once they are exactly `expected`.
 holdingsAre : Party -> [(Text, Decimal, Bool)] -> Script ()
@@ -96,23 +72,7 @@ issue registry owner inventory account amount factory = do
 
 runTokenDvpAcrossNodes : NodesInput -> Script ()
 runTokenDvpAcrossNodes input = do
-  let on name node = allocatePartyOn (name <> "-" <> input.runId) (ParticipantName node)
-  custodian <- on "Custodian" input.custodianNode
-  bank <- on "Bank" input.bankNode
-  seller <- on "Seller" input.sellerNode
-  buyer <- on "Buyer" input.buyerNode
-  agent <- on "Agent" input.agentNode
-  -- Let every node learn where the new parties are hosted
-  sleep (seconds 5)
-
-  -- Each institution is hosted on its own node, and only there
-  let hosted = [(custodian, input.custodianNode), (bank, input.bankNode), (seller, input.sellerNode), (buyer, input.buyerNode), (agent, input.agentNode)]
-  assertMsg "Every institution has its own node" (unique (map snd hosted))
-  forA_ hosted \(_, node) -> do
-    known <- listKnownPartiesOn (ParticipantName node)
-    let local = [d.party | d <- known, d.isLocal]
-    assertMsg ("Node " <> node <> " hosts exactly one of the institutions")
-      ([p | (p, _) <- hosted, p `elem` local] == [p | (p, n) <- hosted, n == node])
+  Institutions{..} <- allocateInstitutions input
 
   -- Each registry issues to its client from its own node
   let clients = [seller, buyer, agent]

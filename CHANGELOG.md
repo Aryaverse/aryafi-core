@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Added
+- **Multi-party proposals.** Parties on different participant nodes can now agree contracts that need all of them. A `MultiPartyProposal` (`AryaFi.Contracts.Proposal`) collects the signatures one party at a time: one party proposes, each of the others accepts from its own node, and the last acceptance creates the contract, or exercises the choice, with everyone's authority. It covers every AryaFi contract with several signatories, and the joint choices on positions and DvP instructions (locking cash, securities and assets; cancelling and retrying a DvP). The signers must be exactly the contract's signatories or the choice's controllers, and any of them can reject or withdraw the proposal until it is carried out. See [`AryaFi.Contracts.Proposal`](daml/src/AryaFi/Contracts/Proposal.daml).
+- **The reference DvP across nodes.** `runDvpAcrossNodes` issues the positions, locks the legs, and signs the `DvpInstruction` through proposals with custodian, bank, seller, buyer, and agent each on their own participant, then settles; CI runs it on the five-participant topology alongside the token-standard DvP.
+- `ProposalTest`: seven tests, including a DvP agreed entirely through proposals, a loan, a jurisdiction profile (so every AryaFi template is now created in the tests), joint cancellation and retry, and what a proposal refuses. CI also runs them on a Canton participant.
+- The website's code viewer shows `Proposal.daml`.
+
 ### Changed
 - CI checks that every build is an upgrade of the latest release (`dpm upgrade-check` against the release's DAR), so an incompatible change fails before it reaches a participant.
 
