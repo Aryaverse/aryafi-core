@@ -5,7 +5,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
-## [3.2.0] - 2026-10-01
+## [Unreleased]
+
+### Changed
+- CI checks that every build is an upgrade of the latest release (`dpm upgrade-check` against the release's DAR), so an incompatible change fails before it reaches a participant.
+
+### Fixed
+- The 3.2.0 entry is dated 2026-10-13, the day it was released, not the day it was prepared.
+
+## [3.2.0] - 2026-10-13
 
 An upgrade-compatible release: Canton's participant upgrade check accepts it as an upgrade of 3.1.0, so participants running 3.1.0 can move to it without migrating contracts. AryaFi cash and securities can now be sent and settled through the Canton Network Token Standard, not only listed, and a new delivery-versus-payment settles through the standard against AryaFi cash or another registry's token, with each institution on its own node. It has not yet been run against Canton Coin itself, which needs a Canton Network; see [KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md#2-platform).
 

@@ -13,7 +13,7 @@
 -- Run it against the deploy/ topology with a participant config that names
 -- the nodes, for example:
 --
---   dpm script --dar daml/test/.daml/dist/aryafi-core-test-3.2.0.dar \
+--   dpm script --dar daml/test/.daml/dist/aryafi-core-test-3.3.0.dar \
 --     --script-name AryaFi.Test.Network.TokenDvpAcrossNodes:runTokenDvpAcrossNodes \
 --     --participant-config participants.json --input-file nodes.json
 module AryaFi.Test.Network.TokenDvpAcrossNodes where
