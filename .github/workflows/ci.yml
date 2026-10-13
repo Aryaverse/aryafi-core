@@ -83,7 +83,9 @@ jobs:
     name: Canton 3.5 Topology Integration
     runs-on: ubuntu-latest
     needs: build-and-test
-    timeout-minutes: 45
+    # The suites on the bank participant take about 30 minutes, the cross-node
+    # DvPs and the smoke test about 10 more.
+    timeout-minutes: 75
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
