@@ -26,15 +26,29 @@
 -- By creating the factory, the registry agrees in advance to transfers between
 -- its clients' accounts. `TransferCash` and `TransferSecurity` need its
 -- signature on each transfer instead.
+--
+-- A registry can also set the compliance requirements its transfers must meet
+-- (see AryaFi.Compliance.Gate). The sender then passes the KYC and sanctions
+-- attestations of both parties, and the instrument's transfer restriction
+-- rule, in the transfer's choice context, and the registry evaluates them in
+-- the transfer transaction. A refused transfer touches no holdings and ends
+-- `Failed`, with the reason in the result's metadata. A pending transfer is
+-- evaluated again when the receiver accepts it, with the evidence the
+-- receiver passes; if it is refused then, the amount is unlocked for the
+-- sender. Every decision is recorded as an audit event for the registry and
+-- the parties to the transfer at that point.
 module AryaFi.Finance.TokenTransfer where
 
 import qualified DA.Map as Map
+import qualified DA.TextMap as TextMap
 import DA.Assert (assertDeadlineExceeded, assertWithinDeadline)
 import DA.Foldable (mapA_)
 import qualified Splice.Api.Token.HoldingV2 as HoldingV2
-import Splice.Api.Token.MetadataV1 (emptyMetadata)
+import Splice.Api.Token.MetadataV1 (ExtraArgs(..), Metadata(..), emptyMetadata)
 import Splice.Api.Token.TransferInstructionV2
 import AryaFi.Common.Errors (require, requirePositive)
+import AryaFi.Common.Identifiers (CorrelationId(..))
+import AryaFi.Compliance.Gate
 import AryaFi.Finance.TokenRegistry
 
 -- | Lock context shown on the amount of a pending transfer.
@@ -53,6 +67,8 @@ template PositionTransferFactory
     -- ^ The registry: the bank for cash, the custodian for securities.
     clients : [Party]
     -- ^ Account owners who can send and receive through this factory.
+    compliance : Optional ComplianceRequirements
+    -- ^ The compliance requirements transfers must meet, if any.
   where
     signatory admin
     observer clients
@@ -84,11 +100,22 @@ template PositionTransferFactory
         require (client `elem` clients) "Party is not a client"
         create this with clients = filter (/= client) clients
 
+    -- | Set or clear the compliance requirements transfers must meet.
+    -- Transfers already instructed are not affected.
+    choice SetTransferCompliance : ContractId PositionTransferFactory
+      with
+        requirements : Optional ComplianceRequirements
+      controller admin
+      do
+        require (requirements /= compliance) "The factory already has these compliance requirements"
+        create this with compliance = requirements
+
 factoryView : Party -> TransferFactoryView
 factoryView admin = TransferFactoryView with admin; meta = emptyMetadata
 
--- | Instruct a transfer through `factory`: check it, fund it from the input
--- holdings, and either complete it or leave it pending for the receiver.
+-- | Instruct a transfer through `factory`: check it, screen it when the
+-- factory has compliance requirements, fund it from the input holdings, and
+-- either complete it or leave it pending for the receiver.
 instructTransfer : PositionTransferFactory -> TransferFactory_Transfer -> Update TransferInstructionResult
 instructTransfer factory arg = do
   let transfer = arg.transfer
@@ -111,6 +138,41 @@ instructTransfer factory arg = do
       total = sum [(positionView p).amount | p <- inputs]
   require (total >= transfer.amount)
     ("Transfer: the input holdings total " <> show total <> ", less than " <> show transfer.amount)
+
+  refusal <- screenTransfer admin [sender] factory.compliance arg.extraArgs sender receiver transfer
+  case refusal of
+    Some reason -> pure (refusedTransfer reason [])
+    None -> fundTransfer factory arg sender receiver first inputs total
+
+-- | Evaluate a transfer against the registry's compliance requirements, if it
+-- has any, with the evidence in the choice context, and record the decision
+-- for `parties`. Returns the reason if the transfer is refused.
+screenTransfer
+  : Party -> [Party] -> Optional ComplianceRequirements -> ExtraArgs -> Party -> Party -> Transfer
+  -> Update (Optional Text)
+screenTransfer _ _ None _ _ _ _ = pure None
+screenTransfer admin parties (Some requirements) extraArgs sender receiver transfer =
+  refusalReason <$> screenMovement admin parties "Token standard transfer"
+    (CorrelationId ("Transfer requested at " <> show transfer.requestedAt)) requirements
+    (evidenceFromContext extraArgs.context)
+    Movement with
+      sender; receiver; instrumentAdmin = admin; instrumentId = transfer.instrumentId.id; amount = transfer.amount
+
+-- | The result of a transfer refused for compliance, returning `returned` to the sender.
+refusedTransfer : Text -> [ContractId HoldingV2.Holding] -> TransferInstructionResult
+refusedTransfer reason returned = TransferInstructionResult with
+  output = TransferInstructionResult_Failed
+  senderChangeCids = returned
+  meta = Metadata with values = TextMap.fromList [(complianceRefusalKey, reason)]
+
+-- | Fund a checked transfer from its input holdings, and either complete it or
+-- leave it pending for the receiver.
+fundTransfer
+  : PositionTransferFactory -> TransferFactory_Transfer -> Party -> Party -> Position -> [Position] -> Decimal
+  -> Update TransferInstructionResult
+fundTransfer factory arg sender receiver first inputs total = do
+  let transfer = arg.transfer
+      admin = factory.admin
   mapA_ archivePosition inputs
   senderChangeCids <-
     if total > transfer.amount
@@ -128,7 +190,7 @@ instructTransfer factory arg = do
     lockedHoldingCid <- createPosition first sender transfer.sender.id transfer.amount
       (Some (admin, transferLockContext)) [receiver]
     instructionCid <- create PositionTransferInstruction with
-      admin; sender; receiver; transfer; lockedHoldingCid
+      admin; sender; receiver; transfer; lockedHoldingCid; compliance = factory.compliance
     pure (transferResult (TransferInstructionResult_Pending (toInterfaceContractId instructionCid)) senderChangeCids)
 
 transferResult : TransferInstructionResult_Output -> [ContractId HoldingV2.Holding] -> TransferInstructionResult
@@ -156,6 +218,9 @@ template PositionTransferInstruction
     -- ^ The transfer as instructed.
     lockedHoldingCid : ContractId HoldingV2.Holding
     -- ^ The sender's position of the transferred amount, locked to the registry.
+    compliance : Optional ComplianceRequirements
+    -- ^ The registry's compliance requirements when the transfer was
+    --   instructed, evaluated again on acceptance.
   where
     signatory admin, sender
     observer receiver
@@ -174,13 +239,21 @@ template PositionTransferInstruction
 
       -- | Deliver the locked amount to the receiver's account, before
       -- executeBefore. The lock holder (the registry) and the receiver
-      -- authorize the delivery.
+      -- authorize the delivery. With compliance requirements, the transfer is
+      -- evaluated again first; if it is refused, the amount is unlocked for
+      -- the sender instead.
       transferInstruction_acceptImpl self arg = do
         require (receiver `elem` arg.actors) "Only the receiver can accept the transfer"
         assertWithinDeadline "executeBefore" transfer.executeBefore
+        refusal <- screenTransfer admin [sender, receiver] compliance arg.extraArgs sender receiver transfer
         archive (fromInterfaceContractId @PositionTransferInstruction self)
-        received <- deliverLocked lockedHoldingCid receiver transfer.receiver.id
-        pure (transferResult (TransferInstructionResult_Completed [received]) [])
+        case refusal of
+          Some reason -> do
+            returned <- releaseLocked lockedHoldingCid
+            pure (refusedTransfer reason [returned])
+          None -> do
+            received <- deliverLocked lockedHoldingCid receiver transfer.receiver.id
+            pure (transferResult (TransferInstructionResult_Completed [received]) [])
 
       -- | Refuse the transfer: the amount is unlocked for the sender.
       transferInstruction_rejectImpl self arg = do

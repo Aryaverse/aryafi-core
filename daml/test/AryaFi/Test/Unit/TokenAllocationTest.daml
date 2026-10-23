@@ -58,8 +58,8 @@ setup test = do
   buyer <- allocateTestParty "Buyer" test
   agent <- allocateTestParty "Agent" test
   let clients = [seller, buyer, agent]
-  custodianFactory <- submit custodian do createCmd PositionAllocationFactory with admin = custodian; clients
-  bankFactory <- submit bank do createCmd PositionAllocationFactory with admin = bank; clients
+  custodianFactory <- submit custodian do createCmd PositionAllocationFactory with admin = custodian; clients; compliance = None
+  bankFactory <- submit bank do createCmd PositionAllocationFactory with admin = bank; clients; compliance = None
   sellerBond <- toInterfaceContractId <$> setupSecurityPosition custodian seller (AccountId "ACC-SELLER-SEC") 5000000.0
   buyerCash <- toInterfaceContractId <$> setupCashPosition bank buyer (AccountId "ACC-BUYER-CASH") 1000000.0
   let account provider owner id = HoldingV2.Account with owner = Some owner; provider = Some provider; id

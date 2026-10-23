@@ -8,6 +8,8 @@
 -- This separation allows policy updates without redeploying core contracts.
 module AryaFi.Common.Policies where
 
+import AryaFi.ComplianceApi.PolicyV1 (ComplianceDecision(..))
+
 -- ---------------------------------------------------------------------------
 -- Policy Decision
 -- ---------------------------------------------------------------------------
@@ -97,3 +99,19 @@ data PolicyRule = PolicyRule
     assetClasses : [Text]
     -- ^ Asset class codes this rule applies to. Empty = all asset classes.
   deriving (Eq, Show)
+
+-- ---------------------------------------------------------------------------
+-- Compliance interface decisions
+-- ---------------------------------------------------------------------------
+
+-- | A PolicyDecision as the compliance interface (aryafi-compliance-api) reports it.
+toComplianceDecision : PolicyDecision -> ComplianceDecision
+toComplianceDecision Approved = Compliant
+toComplianceDecision (Rejected reason) = NonCompliant reason
+toComplianceDecision (RequiresManualReview reason) = NeedsReview reason
+
+-- | A compliance interface decision as a PolicyDecision, for the combinators above.
+fromComplianceDecision : ComplianceDecision -> PolicyDecision
+fromComplianceDecision Compliant = Approved
+fromComplianceDecision (NonCompliant reason) = Rejected reason
+fromComplianceDecision (NeedsReview reason) = RequiresManualReview reason

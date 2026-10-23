@@ -54,7 +54,7 @@ noExtraArgs = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
 -- | An AryaFi bank or custodian, with an allocation factory for `clients`.
 aryafiRegistry : Party -> [Party] -> Script Registry
 aryafiRegistry admin clients = do
-  factory <- submit admin do createCmd PositionAllocationFactory with admin; clients
+  factory <- submit admin do createCmd PositionAllocationFactory with admin; clients; compliance = None
   pure Registry with
     admin
     factory = coerceContractId factory

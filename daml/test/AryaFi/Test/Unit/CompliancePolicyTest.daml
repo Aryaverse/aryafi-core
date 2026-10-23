@@ -1,0 +1,302 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | KYC attestations, sanctions attestations, and transfer restriction rules
+-- evaluated through the compliance interface (aryafi-compliance-api), as a
+-- bank or custodian evaluates them inside its own transactions: the authority
+-- discloses the contract, and the bank exercises the read-only choices.
+module AryaFi.Test.Unit.CompliancePolicyTest where
+
+import DA.Text (isInfixOf)
+import DA.Time (addRelTime, days)
+import Daml.Script
+import AryaFi.ComplianceApi.PolicyV1
+import AryaFi.Common.Identifiers (ISIN(..))
+import AryaFi.Compliance.KYC
+import AryaFi.Compliance.Sanctions
+import AryaFi.Compliance.TransferRestrictions
+import AryaFi.Test.Scenarios.DvpSettlementTest (allocateTestParty, bondIsin)
+import AryaFi.Test.Unit.TokenTransferTest (submitFailsWith)
+
+-- ---------------------------------------------------------------------------
+-- Evidence helpers
+-- ---------------------------------------------------------------------------
+
+-- | A policy contract, with the disclosure its owner gives to whoever needs to
+-- evaluate it.
+data Evidence = Evidence
+  with
+    policyCid : ContractId CompliancePolicy
+    disclosure : Disclosure
+
+evidenceOf : Template t => HasToInterface t CompliancePolicy => Party -> ContractId t -> Script Evidence
+evidenceOf owner cid = do
+  found <- queryDisclosure owner cid
+  case found of
+    Some disclosure -> pure Evidence with policyCid = toInterfaceContractId @CompliancePolicy cid; disclosure
+    None -> abort "The policy's owner cannot disclose it"
+
+inDays : Int -> Script Time
+inDays n = do
+  now <- getTime
+  pure (addRelTime now (days n))
+
+-- | A KYC attestation by `authority` about `subject`, expiring in `validDays`
+-- (negative: already expired).
+issueKyc : Party -> Party -> KycStatus -> Int -> Script Evidence
+issueKyc authority subject status validDays = do
+  now <- getTime
+  expiry <- inDays validDays
+  cid <- submit authority do
+    createCmd KycAttestation with
+      authority; subjectParty = subject; lei = None; status
+      verificationTimestamp = now; expiryTimestamp = expiry
+      jurisdiction = "US"; riskTier = "STANDARD"; providerRef = None; observers = []
+  evidenceOf authority cid
+
+-- | A sanctions screening by `screener` of `subject`, expiring in `validDays`.
+issueSanctions : Party -> Party -> SanctionsStatus -> Int -> Script Evidence
+issueSanctions screener subject status validDays = do
+  now <- getTime
+  expiry <- inDays validDays
+  cid <- submit screener do
+    createCmd SanctionsAttestation with
+      screeningAuthority = screener; subjectParty = subject; lei = None; status
+      screeningTimestamp = now; expiryTimestamp = expiry
+      screeningProviderRef = "SCREEN-REF"; providerRef = None; observers = []
+  evidenceOf screener cid
+
+-- | An active transfer restriction rule for the test bond.
+data RuleTerms = RuleTerms
+  with
+    category : RegulatoryCategory
+    whitelist : Optional [Party]
+    -- ^ The approved receivers, when the rule requires a whitelist.
+    lockupDays : Optional Int
+    holdingDays : Int
+    active : Bool
+
+unrestricted : RuleTerms
+unrestricted = RuleTerms with
+  category = RetailUnrestricted; whitelist = None; lockupDays = None; holdingDays = 0; active = True
+
+whitelistOnly : [Party] -> RuleTerms
+whitelistOnly parties = unrestricted with category = RegD_506c; whitelist = Some parties
+
+issueRule : Party -> ISIN -> RuleTerms -> Script Evidence
+issueRule officer isin terms = do
+  lockupExpiry <- case terms.lockupDays of
+    Some n -> Some <$> inDays n
+    None -> pure None
+  cid <- submit officer do
+    createCmd TransferRestrictionRule with
+      complianceOfficer = officer; isin; regulatoryCategory = terms.category
+      holdingPeriodDays = terms.holdingDays
+      whitelistRequired = terms.whitelist /= None
+      whitelist = case terms.whitelist of
+        Some parties -> parties
+        None -> []
+      lockupExpiry; isActive = terms.active
+  evidenceOf officer cid
+
+-- ---------------------------------------------------------------------------
+-- Evaluation helpers
+-- ---------------------------------------------------------------------------
+
+-- | `party`'s part in moving 1,000 of the test bond between `party` and
+-- `counterparty` at `custodian`.
+bondRequest : Party -> Party -> Party -> Bool -> ComplianceRequest
+bondRequest custodian party counterparty receiving = ComplianceRequest with
+  party; receiving; counterparty
+  instrumentAdmin = custodian; instrumentId = unISIN bondIsin; amount = 1000.0
+
+-- | The bank or custodian evaluates a policy disclosed to it.
+evaluateAs : Party -> Evidence -> ComplianceRequest -> Script ComplianceDecision
+evaluateAs requester evidence request =
+  submit (actAs requester <> disclose evidence.disclosure) do
+    exerciseCmd evidence.policyCid CompliancePolicy_Evaluate with requester; request
+
+describeAs : Party -> Evidence -> Script CompliancePolicyView
+describeAs requester evidence =
+  submit (actAs requester <> disclose evidence.disclosure) do
+    exerciseCmd evidence.policyCid CompliancePolicy_Describe with requester
+
+expectDecision : Text -> ComplianceDecision -> ComplianceDecision -> Script ()
+expectDecision what expected actual =
+  assertMsg (what <> ": expected " <> show expected <> ", got " <> show actual) (actual == expected)
+
+data Fixture = Fixture
+  with
+    authority : Party
+    custodian : Party
+    alice : Party
+    bob : Party
+
+setup : Text -> Script Fixture
+setup test = do
+  authority <- allocateTestParty "Authority" test
+  custodian <- allocateTestParty "Custodian" test
+  alice <- allocateTestParty "Alice" test
+  bob <- allocateTestParty "Bob" test
+  pure Fixture with ..
+
+-- ---------------------------------------------------------------------------
+-- KYC attestations
+-- ---------------------------------------------------------------------------
+
+testKycPolicy : Script ()
+testKycPolicy = script do
+  p <- setup "POL-KYC"
+  let request = bondRequest p.custodian p.alice p.bob False
+
+  verified <- issueKyc p.authority p.alice KycVerified 365
+  described <- describeAs p.custodian verified
+  assertMsg "The view names the authority, the kind, and the subject"
+    (described == CompliancePolicyView with owner = p.authority; kind = KycPolicy; subject = Some p.alice; instrumentId = None)
+  evaluateAs p.custodian verified request >>= expectDecision "Verified" Compliant
+
+  -- Evaluating changes nothing: the attestation is still active
+  stillActive <- queryContractId p.authority (fromInterfaceContractId @KycAttestation verified.policyCid)
+  assertMsg "Evaluating does not archive the attestation" (stillActive /= None)
+
+  evaluateAs p.custodian verified (bondRequest p.custodian p.bob p.alice True)
+    >>= expectDecision "Another party" (NonCompliant "KYC_ATTESTATION_FOR_ANOTHER_PARTY")
+  issueKyc p.authority p.alice KycVerified (-1) >>= \e -> evaluateAs p.custodian e request
+    >>= expectDecision "Expired" (NonCompliant "KYC_EXPIRED")
+  issueKyc p.authority p.alice KycPending 365 >>= \e -> evaluateAs p.custodian e request
+    >>= expectDecision "Pending" (NonCompliant "KYC_PENDING")
+  issueKyc p.authority p.alice (KycRejected "HIGH_RISK_COUNTRY") 365 >>= \e -> evaluateAs p.custodian e request
+    >>= expectDecision "Rejected" (NonCompliant "KYC_REJECTED: HIGH_RISK_COUNTRY")
+  issueKyc p.authority p.alice KycExpired 365 >>= \e -> evaluateAs p.custodian e request
+    >>= expectDecision "Marked expired" (NonCompliant "KYC_EXPIRED")
+
+-- ---------------------------------------------------------------------------
+-- Sanctions attestations
+-- ---------------------------------------------------------------------------
+
+testSanctionsPolicy : Script ()
+testSanctionsPolicy = script do
+  p <- setup "POL-SANCTIONS"
+  let request = bondRequest p.custodian p.bob p.alice True
+
+  clear <- issueSanctions p.authority p.bob SanctionsClear 30
+  described <- describeAs p.custodian clear
+  assertMsg "The view names the screener, the kind, and the subject"
+    (described == CompliancePolicyView with owner = p.authority; kind = SanctionsPolicy; subject = Some p.bob; instrumentId = None)
+  evaluateAs p.custodian clear request >>= expectDecision "Clear" Compliant
+  evaluateAs p.custodian clear (bondRequest p.custodian p.alice p.bob False)
+    >>= expectDecision "Another party" (NonCompliant "SANCTIONS_ATTESTATION_FOR_ANOTHER_PARTY")
+  issueSanctions p.authority p.bob SanctionsClear (-1) >>= \e -> evaluateAs p.custodian e request
+    >>= expectDecision "Expired" (NonCompliant "SANCTIONS_SCREENING_EXPIRED")
+  issueSanctions p.authority p.bob (SanctionsFlagged "NAME-MATCH-0042") 30 >>= \e -> evaluateAs p.custodian e request
+    >>= expectDecision "Flagged" (NeedsReview "SANCTIONS_FLAGGED: NAME-MATCH-0042")
+  issueSanctions p.authority p.bob (SanctionsBlocked "OFAC-SDN") 30 >>= \e -> evaluateAs p.custodian e request
+    >>= expectDecision "Blocked" (NonCompliant "SANCTIONED: OFAC-SDN")
+  -- A block stands even after the screening expires
+  issueSanctions p.authority p.bob (SanctionsBlocked "OFAC-SDN") (-1) >>= \e -> evaluateAs p.custodian e request
+    >>= expectDecision "Blocked and expired" (NonCompliant "SANCTIONED: OFAC-SDN")
+
+-- ---------------------------------------------------------------------------
+-- Transfer restriction rules
+-- ---------------------------------------------------------------------------
+
+testTransferRulePolicy : Script ()
+testTransferRulePolicy = script do
+  p <- setup "POL-RULE"
+  let toBob = bondRequest p.custodian p.bob p.alice True
+      fromAlice = bondRequest p.custodian p.alice p.bob False
+      rule = issueRule p.authority bondIsin
+      check what terms request expected = rule terms >>= \e -> evaluateAs p.custodian e request
+        >>= expectDecision what expected
+
+  e <- rule unrestricted
+  described <- describeAs p.custodian e
+  assertMsg "The view names the officer, the kind, and the security"
+    (described == CompliancePolicyView with
+      owner = p.authority; kind = TransferRulePolicy; subject = None; instrumentId = Some (unISIN bondIsin))
+  evaluateAs p.custodian e toBob >>= expectDecision "Unrestricted" Compliant
+
+  check "Whitelisted receiver" (whitelistOnly [p.bob]) toBob Compliant
+  check "Receiver not whitelisted" (whitelistOnly [p.alice]) toBob (NonCompliant "RECEIVER_NOT_WHITELISTED")
+  check "The sender is not restricted" (whitelistOnly []) fromAlice Compliant
+  check "Restricted category without a whitelist" (unrestricted with category = RegD_506c) toBob
+    (NeedsReview "INVESTOR_STATUS_REQUIRED: RegD_506c")
+  check "Lockup" ((whitelistOnly [p.bob]) with lockupDays = Some 30) toBob (NonCompliant "LOCKUP_NOT_EXPIRED")
+  check "Lockup expired" ((whitelistOnly [p.bob]) with lockupDays = Some (-1)) toBob Compliant
+  check "Holding period" (unrestricted with holdingDays = 90) toBob
+    (NeedsReview "HOLDING_PERIOD_NOT_VERIFIABLE: 90 days")
+  -- Rejections take precedence over manual review
+  check "Not whitelisted, with a holding period" ((whitelistOnly []) with holdingDays = 90) toBob
+    (NonCompliant "RECEIVER_NOT_WHITELISTED")
+  check "Inactive rule" ((whitelistOnly []) with active = False) toBob Compliant
+  check "Another security" unrestricted (toBob with instrumentId = "US0000000000")
+    (NonCompliant "TRANSFER_RULE_FOR_ANOTHER_SECURITY")
+
+-- ---------------------------------------------------------------------------
+-- Forged policies
+-- ---------------------------------------------------------------------------
+
+-- | A policy that names an authority as its owner without the authority's
+-- signature, and approves everyone. Anyone can implement the interface.
+template ForgedKyc
+  with
+    forger : Party
+    claimedAuthority : Party
+    subject : Party
+  where
+    signatory forger
+
+    interface instance CompliancePolicy for ForgedKyc where
+      view = CompliancePolicyView with
+        owner = claimedAuthority; kind = KycPolicy; subject = Some subject; instrumentId = None
+      evaluatePolicy _ = pure Compliant
+
+-- | `forger`'s KYC attestation for `subject`, claiming to be `claimedAuthority`'s.
+forgeKyc : Party -> Party -> Party -> Script Evidence
+forgeKyc forger claimedAuthority subject = do
+  cid <- submit forger do createCmd ForgedKyc with forger; claimedAuthority; subject
+  evidenceOf forger cid
+
+-- A policy whose owner did not sign it can be neither described nor evaluated.
+testForgedPolicyRefused : Script ()
+testForgedPolicyRefused = script do
+  p <- setup "POL-FORGED"
+  forged <- forgeKyc p.bob p.authority p.bob
+  let request = bondRequest p.custodian p.bob p.alice True
+  described <- trySubmit (actAs p.custodian <> disclose forged.disclosure) do
+    exerciseCmd forged.policyCid CompliancePolicy_Describe with requester = p.custodian
+  case described of
+    Left err -> assertMsg ("Expected the forgery to be refused, got " <> show err)
+      ("The policy's owner is not its signatory" `isInfixOf` show err)
+    Right _ -> abort "A forged policy must not be described"
+  -- The forger, who sees the contract, cannot evaluate it either
+  submitFailsWith "The policy's owner is not its signatory" [p.bob] do
+    exerciseCmd forged.policyCid CompliancePolicy_Evaluate with requester = p.bob; request
+
+-- ---------------------------------------------------------------------------
+-- Visibility
+-- ---------------------------------------------------------------------------
+
+-- A party evaluates a policy only if it sees the contract, as an observer or
+-- because the owner discloses it, and only as itself. (These error texts are
+-- the IDE ledger's.)
+testPolicyNeedsVisibility : Script ()
+testPolicyNeedsVisibility = script do
+  p <- setup "POL-VISIBILITY"
+  kyc <- issueKyc p.authority p.alice KycVerified 365
+  let request = bondRequest p.custodian p.alice p.bob False
+  submitFailsWith "Could not find contract" [p.custodian] do
+    exerciseCmd kyc.policyCid CompliancePolicy_Evaluate with requester = p.custodian; request
+
+  -- Once the authority shares the attestation, no disclosure is needed
+  shared <- submit p.authority do
+    exerciseCmd (fromInterfaceContractId @KycAttestation kyc.policyCid) AddKycObserver with newObserver = p.custodian
+  decision <- submit p.custodian do
+    exerciseCmd (toInterfaceContractId @CompliancePolicy shared) CompliancePolicy_Evaluate with
+      requester = p.custodian; request
+  expectDecision "Shared attestation" Compliant decision
+
+  -- The requester must be the submitting party
+  submitFailsWith "Authorization failure" [p.custodian] do
+    exerciseCmd (toInterfaceContractId @CompliancePolicy shared) CompliancePolicy_Evaluate with
+      requester = p.bob; request

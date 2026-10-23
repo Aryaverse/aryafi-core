@@ -32,6 +32,16 @@
 --     withdraw it (a committed allocation only after its settlement
 --     deadline). Either way the funding is unlocked for the owner.
 --
+-- A registry can also set the compliance requirements its allocations must
+-- meet (see AryaFi.Compliance.Gate). The account owner then passes the KYC
+-- and sanctions attestations of both sides of its legs, and the instruments'
+-- transfer restriction rules, in the allocation's choice context, and the
+-- registry evaluates each leg it sends or receives when the allocation is
+-- made. A refused allocation locks nothing and ends `Failed`, with the reason
+-- in the result's metadata; every decision is recorded as an audit event for
+-- the registry and the account owner. The evidence is not checked again when
+-- the batch settles.
+--
 -- An allocation settles only as part of its registry's batch, never on its own
 -- with `Allocation_Settle`: the batch is what checks that every leg's other
 -- side is authorized, so nothing is created or destroyed. Iterated settlement
@@ -48,10 +58,13 @@ import DA.List (dedupOn, dedupSort, unique)
 import DA.Optional (fromOptional, isNone, isSome)
 import DA.Time (isLedgerTimeGT)
 import qualified Splice.Api.Token.HoldingV2 as HoldingV2
-import Splice.Api.Token.MetadataV1 (emptyMetadata)
+import Splice.Api.Token.MetadataV1 (Metadata(..), emptyMetadata)
 import Splice.Api.Token.AllocationV2
 import Splice.Api.Token.AllocationInstructionV2
 import AryaFi.Common.Errors (require, requirePositive)
+import AryaFi.Common.Identifiers (CorrelationId(..))
+import AryaFi.Common.Policies (PolicyDecision(..), andDecision)
+import AryaFi.Compliance.Gate
 import AryaFi.Finance.TokenRegistry
 
 -- | Lock context shown on an allocation's funding.
@@ -72,6 +85,8 @@ template PositionAllocationFactory
     clients : [Party]
     -- ^ Account owners who allocate, and settlement agents who settle,
     --   through this factory.
+    compliance : Optional ComplianceRequirements
+    -- ^ The compliance requirements allocations must meet, if any.
   where
     signatory admin
     observer clients
@@ -111,6 +126,16 @@ template PositionAllocationFactory
         require (client `elem` clients) "Party is not a client"
         create this with clients = filter (/= client) clients
 
+    -- | Set or clear the compliance requirements allocations must meet.
+    -- Allocations already made are not affected.
+    choice SetAllocationCompliance : ContractId PositionAllocationFactory
+      with
+        requirements : Optional ComplianceRequirements
+      controller admin
+      do
+        require (requirements /= compliance) "The factory already has these compliance requirements"
+        create this with compliance = requirements
+
 -- | For each instrument, what an allocation's sides receive minus what they send.
 netCredits : [TransferLegSide] -> TextMap.TextMap Decimal
 netCredits sides = TextMap.fromListWithR (+)
@@ -118,7 +143,8 @@ netCredits sides = TextMap.fromListWithR (+)
   | side <- sides ]
 
 -- | Create an allocation for the owner of `allocation.authorizer`: check it,
--- lock the funding it needs, and return the change.
+-- screen it when the factory has compliance requirements, lock the funding it
+-- needs, and return the change.
 allocate : PositionAllocationFactory -> AllocationFactory_Allocate -> Update AllocationInstructionResult
 allocate factory arg = do
   let admin = factory.admin
@@ -144,9 +170,34 @@ allocate factory arg = do
   forA_ spec.settlementDeadline (assertWithinDeadline "settlementDeadline")
   assertDeadlineExceeded "requestedAt" arg.requestedAt
 
+  inputs <- allocationInputs admin account arg.inputHoldingCids
+  refusal <- case factory.compliance of
+    None -> pure None
+    Some requirements -> do
+      let evidence = evidenceFromContext arg.extraArgs.context
+      decisions <- forA spec.transferLegSides \side -> do
+        counterparty <- accountOwner "Counterparty" side.otherside
+        let (sender, receiver) =
+              if side.side == SenderSide then (authorizer, counterparty) else (counterparty, authorizer)
+        screenMovement admin [authorizer] (allocationLockContext settlement) (CorrelationId settlement.id)
+          requirements evidence
+          Movement with sender; receiver; instrumentAdmin = admin; instrumentId = side.instrumentId; amount = side.amount
+      pure (refusalReason (foldl andDecision Approved decisions))
+  case refusal of
+    Some reason -> pure AllocationInstructionResult with
+      output = AllocationInstructionResult_Failed
+      authorizerChangeCids = TextMap.empty
+      meta = Metadata with values = TextMap.fromList [(complianceRefusalKey, reason)]
+    None -> fundAllocation admin authorizer arg inputs
+
+-- | Lock the funding of a checked allocation, create it, and return the change.
+fundAllocation : Party -> Party -> AllocationFactory_Allocate -> [Position] -> Update AllocationInstructionResult
+fundAllocation admin authorizer arg inputs = do
+  let settlement = arg.settlement
+      spec = arg.allocation
+      account = spec.authorizer
   -- Lock, for each instrument, what the allocation sends net of what it receives
   let funding = TextMap.filter (> 0.0) (fmap negate (netCredits spec.transferLegSides))
-  inputs <- allocationInputs admin account arg.inputHoldingCids
   let byInstrument = TextMap.fromListWithR (flip (++))
         [((positionView p).instrumentId.id, [p]) | p <- inputs]
   forA_ (TextMap.toList funding) \(id, _) ->

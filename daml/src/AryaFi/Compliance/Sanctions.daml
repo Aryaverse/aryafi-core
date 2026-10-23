@@ -14,8 +14,11 @@
 -- responsible for not issuing duplicates.
 module AryaFi.Compliance.Sanctions where
 
+import DA.Time (isLedgerTimeGE)
 import AryaFi.Common.Identifiers (LEI, ExternalRef)
 import AryaFi.Common.Errors (require, requireNonEmpty)
+import AryaFi.Common.Policies (PolicyDecision(..), toComplianceDecision)
+import AryaFi.ComplianceApi.PolicyV1
 
 -- ---------------------------------------------------------------------------
 -- Sanctions Status
@@ -59,6 +62,15 @@ template SanctionsAttestation
   where
     signatory screeningAuthority
     observer subjectParty :: observers
+
+    -- Workflows evaluate the attestation in their own transactions (see AryaFi.Compliance.Gate).
+    interface instance CompliancePolicy for SanctionsAttestation where
+      view = CompliancePolicyView with
+        owner = screeningAuthority
+        kind = SanctionsPolicy
+        subject = Some subjectParty
+        instrumentId = None
+      evaluatePolicy request = toComplianceDecision <$> sanctionsDecision this request
 
     -- | Update the sanctions status and extend validity.
     -- The screening timestamp is the current ledger time (cannot be backdated).
@@ -121,3 +133,16 @@ template SanctionsAttestation
         now <- getTime
         pure (status == SanctionsClear && now < expiryTimestamp)
 
+-- | A sanctions attestation's decision for a party: rejected if the party is
+-- blocked or the screening has expired, manual review if it is flagged, and
+-- approved only for the screened party while clear.
+sanctionsDecision : SanctionsAttestation -> ComplianceRequest -> Update PolicyDecision
+sanctionsDecision screening request
+  | request.party /= screening.subjectParty = pure (Rejected "SANCTIONS_ATTESTATION_FOR_ANOTHER_PARTY")
+  | otherwise = do
+      expired <- isLedgerTimeGE screening.expiryTimestamp
+      pure $ case screening.status of
+        SanctionsBlocked listRef -> Rejected ("SANCTIONED: " <> listRef)
+        _ | expired -> Rejected "SANCTIONS_SCREENING_EXPIRED"
+        SanctionsFlagged alert -> RequiresManualReview ("SANCTIONS_FLAGGED: " <> alert)
+        SanctionsClear -> Approved

@@ -15,8 +15,12 @@ data-dependencies:
   - ../deps/splice/splice-api-token-allocation-v2-1.0.0.dar
   - ../deps/splice/splice-api-token-allocation-instruction-v2-1.0.0.dar
   - ../deps/splice/splice-api-token-allocation-request-v2-1.0.0.dar
+  - ../compliance-api/.daml/dist/aryafi-compliance-api-1.0.0.dar
   # Splice's reference V2 token, used by the tests as another registry's token
   - ../deps/splice/splice-test-token-v2-1.0.1.dar
 build-options:
   - --ghc-option=-Wall
   - --ghc-option=-Werror
+  # The tests define a forged compliance policy (a template) to check that it
+  # is refused. This package is only uploaded to test participants.
+  - -Wno-template-interface-depends-on-daml-script

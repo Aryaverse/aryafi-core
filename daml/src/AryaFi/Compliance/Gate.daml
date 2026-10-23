@@ -1,0 +1,156 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Compliance checked inside the transactions that move assets.
+--
+-- A bank or custodian states its `ComplianceRequirements`: the KYC
+-- authorities, sanctions-screening authorities, and transfer-rule officers it
+-- relies on, and the instruments that need a transfer rule. Whoever asks it to move an asset supplies the evidence: the
+-- authorities' attestations and rules, as `CompliancePolicy` contracts
+-- (aryafi-compliance-api). The registry evaluates them with the policies'
+-- read-only choice, in the same transaction, and records the decision with
+-- its reasons as an `AuditLog` event, whether the movement is approved or not.
+-- A movement that needs manual review is refused like a rejected one.
+--
+-- For each movement:
+--   * KYC: sender and receiver each need a valid attestation from one of the
+--     KYC authorities.
+--   * Sanctions: sender and receiver each need to be screened clear by every
+--     sanctions authority. Any block rejects; a flag needs manual review.
+--   * Transfer rules: the receiver must pass every rule given by the
+--     transfer-rule officers for the instrument. A restricted instrument needs
+--     at least one.
+-- A policy counts only for the authority that signed it: the interface's
+-- choices refuse a policy whose owner is not a signatory, which fails the
+-- whole transaction. Missing evidence rejects. Otherwise the evidence is only as complete as the
+-- caller makes it: the gate cannot tell that a party has a second, worse
+-- attestation, or that a rule by another officer was left out. Evidence is
+-- current, though: an authority updates an attestation or rule by archiving
+-- it and creating a new one, and an archived contract cannot be evaluated.
+module AryaFi.Compliance.Gate where
+
+import DA.List (dedup, foldl1)
+import qualified DA.TextMap as TextMap
+import Splice.Api.Token.MetadataV1 (AnyValue(..), ChoiceContext)
+import AryaFi.ComplianceApi.PolicyV1
+import AryaFi.Common.Events (AuditLog(..), EventType(..))
+import AryaFi.Common.Identifiers (CorrelationId(..))
+import AryaFi.Common.Policies (PolicyDecision(..), andDecision, fromComplianceDecision, orDecision)
+
+-- | The authorities a bank or custodian relies on, and the instruments it
+-- restricts. With no KYC or no sanctions authorities, that check is skipped.
+data ComplianceRequirements = ComplianceRequirements
+  with
+    kycAuthorities : [Party]
+    -- ^ Sender and receiver each need a valid KYC attestation from one of these.
+    sanctionsAuthorities : [Party]
+    -- ^ Sender and receiver each need to be screened clear by every one of these.
+    transferRuleOfficers : [Party]
+    -- ^ The officers whose transfer restriction rules the receiver must pass.
+    restrictedInstruments : [Text]
+    -- ^ The instruments (ISINs) that need a transfer restriction rule by one of the officers.
+  deriving (Eq, Show)
+
+-- | A proposed movement of an instrument from one party to another.
+data Movement = Movement
+  with
+    sender : Party
+    receiver : Party
+    instrumentAdmin : Party
+    instrumentId : Text
+    amount : Decimal
+  deriving (Eq, Show)
+
+-- | The key under which callers pass compliance evidence in a token-standard
+-- choice context: a list of `CompliancePolicy` contract IDs.
+complianceEvidenceKey : Text
+complianceEvidenceKey = "aryafi.io/compliance-evidence"
+
+-- | The metadata key under which a refused token-standard transfer or
+-- allocation reports the reason.
+complianceRefusalKey : Text
+complianceRefusalKey = "aryafi.io/compliance-refusal"
+
+-- | The compliance evidence in a token-standard choice context.
+evidenceFromContext : ChoiceContext -> [ContractId CompliancePolicy]
+evidenceFromContext context = case TextMap.lookup complianceEvidenceKey context.values of
+  Some (AV_List values) -> [coerceContractId cid | AV_ContractId cid <- values]
+  _ -> []
+
+-- | Evaluate a movement against `requirements`, as `requester` (the bank or
+-- custodian), with the evidence given.
+evaluateMovement
+  : Party -> ComplianceRequirements -> [ContractId CompliancePolicy] -> Movement -> Update PolicyDecision
+evaluateMovement requester requirements evidence movement = do
+  described <- forA (dedup evidence) \cid -> do
+    policy <- exercise cid CompliancePolicy_Describe with requester
+    pure (cid, policy)
+  let evaluate cid party =
+        fromComplianceDecision <$> exercise cid CompliancePolicy_Evaluate with
+          requester
+          request = ComplianceRequest with
+            party
+            receiving = party == movement.receiver
+            counterparty = if party == movement.sender then movement.receiver else movement.sender
+            instrumentAdmin = movement.instrumentAdmin
+            instrumentId = movement.instrumentId
+            amount = movement.amount
+      attestations kind owners party =
+        [cid | (cid, policy) <- described, policy.kind == kind, policy.owner `elem` owners, policy.subject == Some party]
+      kyc party
+        | null requirements.kycAuthorities = pure Approved
+        | otherwise = case attestations KycPolicy requirements.kycAuthorities party of
+            [] -> pure (Rejected ("NO_KYC_ATTESTATION for " <> partyToText party))
+            cids -> foldl1 orDecision <$> forA cids (`evaluate` party)
+      sanctions party = forA requirements.sanctionsAuthorities \authority ->
+        case attestations SanctionsPolicy [authority] party of
+          [] -> pure (Rejected ("NO_SANCTIONS_SCREENING by " <> partyToText authority <> " for " <> partyToText party))
+          cids -> foldl andDecision Approved <$> forA cids (`evaluate` party)
+      transferRule =
+        case [ cid | (cid, policy) <- described, policy.kind == TransferRulePolicy
+                   , policy.owner `elem` requirements.transferRuleOfficers
+                   , policy.instrumentId == Some movement.instrumentId ] of
+          [] | movement.instrumentId `elem` requirements.restrictedInstruments ->
+                 pure (Rejected ("NO_TRANSFER_RULE for " <> movement.instrumentId))
+             | otherwise -> pure Approved
+          cids -> foldl andDecision Approved <$> forA cids (`evaluate` movement.receiver)
+      parties = dedup [movement.sender, movement.receiver]
+  kycDecisions <- forA parties kyc
+  sanctionsDecisions <- concat <$> forA parties sanctions
+  ruleDecision <- transferRule
+  pure (foldl andDecision Approved (kycDecisions ++ sanctionsDecisions ++ [ruleDecision]))
+
+-- | The policy name in the audit events the gate records.
+gatePolicyName : Text
+gatePolicyName = "AryaFi compliance gate: KYC, sanctions, transfer rules"
+
+-- | Evaluate a movement, as `evaluateMovement` does, and record the decision
+-- as an audit event: kept by `operator` (the bank, custodian, or settlement
+-- agent) and shown to `parties`, the parties that asked for the movement.
+-- `reference` names the workflow or contract the movement belongs to.
+screenMovement
+  : Party -> [Party] -> Text -> CorrelationId -> ComplianceRequirements -> [ContractId CompliancePolicy]
+  -> Movement -> Update PolicyDecision
+screenMovement operator parties reference correlationId requirements evidence movement = do
+  decision <- evaluateMovement operator requirements evidence movement
+  now <- getTime
+  _ <- create AuditLog with
+    operator
+    parties = dedup (filter (/= operator) parties)
+    contractIdRef = reference
+    correlationId
+    eventType = case decision of
+      Approved -> ComplianceCheckPassed gatePolicyName
+      Rejected reason -> ComplianceCheckFailed with policyName = gatePolicyName; failureReason = reason
+      RequiresManualReview reason ->
+        ComplianceCheckFailed with policyName = gatePolicyName; failureReason = "MANUAL_REVIEW: " <> reason
+    timestamp = now
+    details = show movement.amount <> " " <> movement.instrumentId <> " from " <> partyToText movement.sender
+      <> " to " <> partyToText movement.receiver
+  pure decision
+
+-- | The reason a decision gives for refusing a movement, if it does.
+refusalReason : PolicyDecision -> Optional Text
+refusalReason Approved = None
+refusalReason (Rejected reason) = Some reason
+refusalReason (RequiresManualReview reason) = Some ("MANUAL_REVIEW: " <> reason)
