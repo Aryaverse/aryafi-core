@@ -12,7 +12,8 @@ This dossier is the briefing package for an independent security review of **Ary
   - `daml/src/AryaFi/Contracts/Proposal.daml`: `MultiPartyProposal`, which collects the signatures for a contract or a joint choice one party at a time.
   - The token-standard interface packages in `daml/deps/splice` are vendored from Splice 0.8.3 and are out of scope, as is Splice's reference token (`splice-test-token-v2`), which only the tests use.
   - `daml/src/AryaFi/Contracts/`: `InstitutionalLoan`, `RepoAgreement`, `ReverseRepoPosition`, `SecuritiesLendingAgreement`, `MarginCall`, `AssetPledge`, `ConditionalEscrow`, `AssetTransferRequest`, `FundSubscription`, `AssetRedemption`.
-  - `daml/src/AryaFi/Compliance/`: `KycAttestation`, `SanctionsAttestation`, `JurisdictionProfile`, `EligibilityPolicy`, `TransferRestrictionRule`, `OwnershipRestriction`, `RegulatoryReportRecord`.
+  - `daml/src/AryaFi/Compliance/`: `KycAttestation`, `SanctionsAttestation`, `JurisdictionProfile`, `EligibilityPolicy`, `TransferRestrictionRule`, `OwnershipRestriction`, `RegulatoryReportRecord`, and the compliance gate (`Gate`), which the token-standard factories and `DvpInstruction` use to evaluate them.
+  - `daml/compliance-api/`: the `CompliancePolicy` interface (package `aryafi-compliance-api`), which the KYC, sanctions, and transfer-rule templates implement.
 - **Out of scope**: the test package under `daml/test/AryaFi/Test/`, the website, and the deployment configuration.
 - **Authorization reference**: [AUTHORIZATION_MATRIX.md](AUTHORIZATION_MATRIX.md), generated from the source.
 - **Target release**: `v2.0.0`
@@ -80,29 +81,36 @@ Token-standard settlement is atomic in the same way when the settlement agent se
 
 *Tests*: `Authorization/MultiSignatoryTest.daml`, `Privacy/ObserverPrivacyTest.daml`, `Scenarios/EscrowScenario.daml` (`testPledgeAddObserver`), `Unit/TokenTransferTest.daml` (`testInstructionActors`, `testFactoryClients`, `testTransferRejected`), `Unit/TokenAllocationTest.daml` (`testSettlementChecks`, `testAllocateChecks`, `testAllocationVisibility`), `Unit/ProposalTest.daml` (`testProposalChecks`, `testJointActionNeedsItsControllers`), `Unit/FinancingProposalTest.daml` (`testFinancingControllersChecked`, `testAssetTransferJointly`).
 
+### Invariant 7: Compliance Is Checked Where Value Moves
+*Claim*: When a bank or custodian has set compliance requirements, nothing moves through its token-standard factories, and no screened DvP settles, unless the KYC, sanctions, and transfer-rule policies approve both parties in the same transaction; a refused movement changes no holdings, and its reasons are recorded.
+
+*Argument*: `ComplianceRequirements` are a field of the registry-signed `PositionTransferFactory` and `PositionAllocationFactory`, copied onto each `PositionTransferInstruction`, and of the `DvpInstruction` that seller, buyer, and agent sign; the caller cannot change them. `instructTransfer` and `allocate` evaluate the requirements after their input checks and before archiving or locking any holding, and return `Failed` without touching the inputs when refused; `TransferInstruction_Accept` evaluates them before delivering, and on refusal releases the lock to the sender. `ExecuteDvpSettlement` refuses an instruction with requirements, so the agent must use `ExecuteScreenedDvpSettlement`, which settles only on approval. Missing evidence is a rejection, evidence is evaluated through the read-only `CompliancePolicy_Evaluate` (an archived attestation cannot be evaluated), and every decision creates an `AuditLog`. The gate accepts a policy as an authority's only if that authority signed it: the interface's own choices, which implementations cannot override, abort when the view's owner is not a signatory, so a template written by anyone cannot pose as an authority's attestation.
+
+*Tests*: `Unit/CompliancePolicyTest.daml` (`testForgedPolicyRefused`), `Unit/ComplianceGateTest.daml` (`testTransferToSanctionedReceiverFails`, `testTransferToNonWhitelistedReceiverFails`, `testEvidenceIsRequired`, `testReceiverScreenedAgainOnAcceptance`, `testScreenedAllocation`, `testScreenedDvpSettles`, `testScreenedDvpFailsForSanctionedBuyer`), and `Network/ComplianceAcrossNodes.daml` (`runComplianceAcrossNodes`).
+
 ---
 
 ## 3. Automated Test Coverage
 
-`dpm test --all --show-coverage` (in `daml/test`) on 3.2.0 (in development):
+`dpm test --all --show-coverage` (in `daml/test`) on 3.3.0 (in development):
 
 | Measure | Result |
 |:---|:---|
-| Test scripts | 345, all passing |
+| Test scripts | 361, all passing |
 | Templates created | 34 of 34 in `aryafi-core` (100%) |
-| Choices exercised | 156 of 224 in `aryafi-core` (69.6%), counting each template's implicit `Archive`; the report does not count the token-standard interface choices, which the tests exercise |
+| Choices exercised | 159 of 227 in `aryafi-core` (70.0%), counting each template's implicit `Archive`; the report does not count interface choices (the token standard's and `CompliancePolicy`'s), which the tests exercise |
 
 | Suite | Files | Focus |
 |:---|:---|:---|
-| `Unit/` | 16 | Types, day counts, primitives, contracts, compliance policies, token-standard holdings, transfers, and settlement, multi-party proposals for contracts and joint choices |
+| `Unit/` | 18 | Types, day counts, primitives, contracts, compliance policies and the compliance gate, token-standard holdings, transfers, and settlement, multi-party proposals for contracts and joint choices |
 | `Scenarios/` | 10 | End-to-end DvP (including through the token standard), repo, loan, securities lending, treasury, escrow, private credit, transfer |
 | `Negative/` | 3 | Unauthorized submitters, compliance violations, invalid state transitions |
 | `Authorization/` | 1 | Multi-signatory consent |
 | `Privacy/` | 1 | Observer visibility from each party's viewpoint |
 | `Integration/` | 1 | Cross-module workflows on a single ledger |
-| `Network/` | 5 | Smoke test for shared networks such as TestNet (five run-scoped parties, one DvP); both DvPs, a repo, and an escrow with each institution on its own participant |
+| `Network/` | 6 | Smoke test for shared networks such as TestNet (five run-scoped parties, one DvP); both DvPs, a repo, an escrow, and screened transfers with each institution on its own participant |
 
-Not yet covered: property-based tests, concurrency/contention tests, and multi-participant tests beyond the `Network/` scripts (both DvPs, a repo, and an escrow, each run with every institution on its own participant, locally and in CI).
+Not yet covered: property-based tests, concurrency/contention tests, and multi-participant tests beyond the `Network/` scripts (both DvPs, a repo, an escrow, and screened transfers, each run with every institution on its own participant, locally and in CI).
 
 ---
 
@@ -134,6 +142,7 @@ dpm inspect-dar ../../.daml/dist/aryafi-core-3.3.0.dar
 dpm test --files AryaFi/Test/Privacy/ObserverPrivacyTest.daml
 dpm test --files AryaFi/Test/Negative/UnauthorizedAccessTest.daml
 dpm test --files AryaFi/Test/Scenarios/DvpSettlementTest.daml
+dpm test --files AryaFi/Test/Unit/ComplianceGateTest.daml
 cd ../..
 
 # 5. Confirm the authorization matrix matches the source

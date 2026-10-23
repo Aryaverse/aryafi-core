@@ -123,11 +123,12 @@
             <ul class="check-list">
               <li>Bond-for-cash settlement that moves both sides in one transaction</li>
               <li>Runs on Canton 3.5, the version the Canton Network TestNet runs</li>
-              <li>345 automated tests; every change is also tested on a five-institution Canton network</li>
+              <li>361 automated tests; every change is also tested on a five-institution Canton network</li>
               <li>ISO 20022 payment and securities messages mapped to ledger requests</li>
               <li>Cash and bond positions follow the Canton Network token standard: wallets can list and send them, and settlement apps can settle them</li>
               <li>Delivery versus payment through the token standard, against AryaFi cash or another registry's token</li>
               <li>Institutions on different nodes agree contracts, and change them together, one signature at a time; delivery versus payment, repos and escrows run with each institution on its own node</li>
+              <li>KYC, sanctions and transfer rules checked inside the transfers, settlements and delivery versus payment that move assets, with every decision and its reasons recorded</li>
             </ul>
           </article>
           <article class="card status-card status-todo">
@@ -135,7 +136,7 @@
             <ul class="todo-list">
               <li>An independent security audit</li>
               <li>Loans, repos and securities lending moving real assets (today they track the agreement only)</li>
-              <li>KYC, sanctions and transfer rules enforced inside the transactions that move assets (today they are separate approvals)</li>
+              <li>Eligibility, ownership limits and the financing contracts checked inside the workflows too (today: transfers, settlements and delivery versus payment)</li>
               <li>Settling against Canton Coin itself, which needs a Canton Network (tested so far against Splice's reference token)</li>
             </ul>
           </article>
@@ -262,8 +263,9 @@
           <h2 id="area-compliance">Compliance</h2>
           <span class="badge badge-warn">Experimental</span>
         </div>
-        <p class="area-lead">The rules are evaluated correctly, but are not yet enforced automatically inside transfers and settlements.</p>
+        <p class="area-lead">KYC, sanctions and transfer rules are checked inside the transfers, settlements and delivery versus payment that move assets, and every decision is recorded with its reasons. Eligibility and ownership limits are not checked that way yet.</p>
         <div class="grid grid-3">
+          <article class="card"><h3>Checked where assets move</h3><p>A bank or custodian names the KYC providers, sanctions screeners and rule officers it relies on. Each transfer, settlement or delivery versus payment is checked against their records in the same transaction; a refused one moves nothing.</p><code class="tech">CompliancePolicy · ComplianceRequirements</code></article>
           <article class="card"><h3>KYC and sanctions</h3><p>Checks issued by a KYC provider or sanctions screener, with expiry dates. They hold no personal data.</p><code class="tech">KycAttestation · SanctionsAttestation</code></article>
           <article class="card"><h3>Transfer rules</h3><p>Lockups, holding periods, whitelists, and Reg D, Reg S and Rule 144A investor categories, reporting every rule that fails.</p><code class="tech">TransferRestrictionRule</code></article>
           <article class="card"><h3>Eligibility and limits</h3><p>Which assets and counterparties are allowed, and how much of an issue one holder may own.</p><code class="tech">EligibilityPolicy · OwnershipRestriction</code></article>
@@ -277,7 +279,7 @@
           <span class="badge">Planned</span>
         </div>
         <ul class="todo-list todo-list-plain">
-          <li><strong>Compliance inside the workflows.</strong> KYC, sanctions and transfer rules checked inside the transactions that move assets, instead of as separate approvals.</li>
+          <li><strong>Compliance in every workflow.</strong> Eligibility, ownership limits and the financing contracts checked inside their own transactions, as transfers and settlements are today.</li>
           <li><strong>Settling against Canton Coin.</strong> AryaFi's delivery versus payment already settles through the token standard against other registries' tokens. Next, it settles a bond against Canton Coin on a Canton Network.</li>
           <li><strong>Financing on real assets.</strong> Loans, repos and securities lending that lock and move the actual cash and securities.</li>
           <li><strong>An independent security audit</strong> of the finished core.</li>
@@ -304,7 +306,7 @@ git clone https://github.com/Aryaverse/aryafi-core.git
 cd aryafi-core
 dpm build --all
 
-# Run the 345 tests
+# Run the 361 tests
 cd daml/test
 dpm test --all</code></pre>
           <button class="btn btn-small" type="button" data-copy="quickstart-code">Copy</button>
@@ -375,6 +377,7 @@ dpm test --all</code></pre>
             <option value="loan">Loans (credit facilities)</option>
             <option value="repo">Repos (repurchase agreements)</option>
             <option value="transfer">Transfer rules (Reg D, Reg S, 144A)</option>
+            <option value="gate">Compliance checks inside transfers and settlement</option>
           </select>
         </div>
         <div class="code-card">

@@ -900,7 +900,8 @@ const DAML_MODULES = {
   collateral: 'Finance/Collateral.daml',
   loan: 'Contracts/Loan.daml',
   repo: 'Contracts/Repo.daml',
-  transfer: 'Compliance/TransferRestrictions.daml'
+  transfer: 'Compliance/TransferRestrictions.daml',
+  gate: 'Compliance/Gate.daml'
 };
 
 function initDamlViewer() {

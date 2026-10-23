@@ -55,3 +55,4 @@
 !/daml/src/AryaFi/Compliance
 /daml/src/AryaFi/Compliance/*
 !/daml/src/AryaFi/Compliance/TransferRestrictions.daml
+!/daml/src/AryaFi/Compliance/Gate.daml
