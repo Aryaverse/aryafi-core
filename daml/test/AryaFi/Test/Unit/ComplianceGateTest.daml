@@ -28,7 +28,9 @@ import AryaFi.Finance.Settlement
 import AryaFi.Finance.TokenAllocation
 import AryaFi.Finance.TokenTransfer
 import AryaFi.Test.Scenarios.DvpSettlementTest (DvpFixture(..), allocateTestParty, bondIsin, setupSecurityPosition, stageDvpFor)
-import AryaFi.Test.Unit.CompliancePolicyTest (Evidence(..), evidenceOf, forgeKyc, issueKyc, issueRule, issueSanctions, whitelistOnly)
+import AryaFi.Contracts.Transfer
+import AryaFi.Test.Unit.CompliancePolicyTest
+  (Evidence(..), evidenceOf, forgeKyc, issueKyc, issueKycIn, issueRestriction, issueRule, issueSanctions, whitelistOnly)
 import AryaFi.Test.Unit.TokenAllocationTest (receiveSide, sendSide, spec)
 import AryaFi.Test.Unit.TokenTransferTest (submitFailsWith)
 
@@ -68,6 +70,7 @@ setup test = do
         kycAuthorities = [kycAuthority]
         sanctionsAuthorities = [screener]
         transferRuleOfficers = [officer]
+        ownershipRegulators = []
         restrictedInstruments = [bond]
   factoryCid <- submit custodian do
     createCmd PositionTransferFactory with
@@ -344,6 +347,111 @@ testComplianceRequirementsChange = script do
   _ <- pending result
   expectDecisions f.custodian []
 
+-- With an ownership regulator named, the bond also needs its ownership
+-- restriction, evaluated with the receiver's jurisdiction from its KYC
+-- attestation.
+testOwnershipRestrictionInTransfer : Script ()
+testOwnershipRestrictionInTransfer = script do
+  f0 <- setup "GATE-OWNERSHIP"
+  regulator <- allocateTestParty "Regulator" "GATE-OWNERSHIP"
+  let requirements = f0.requirements with ownershipRegulators = [regulator]
+  factoryCid <- submit f0.custodian do
+    exerciseCmd f0.factoryCid SetTransferCompliance with requirements = Some requirements
+  let f = f0 with factoryCid; requirements
+  holding <- aliceBond f
+  aliceEvidence <- cleared f f.alice
+  bobScreening <- issueSanctions f.screener f.bob SanctionsClear 30
+  bobInUs <- issueKycIn f.kycAuthority f.bob "US" KycVerified 365
+  rule <- bobOnlyRule f
+  transfer <- bondTransfer f f.bob holding
+  let base = rule :: bobScreening :: aliceEvidence
+
+  missing <- instruct f transfer (bobInUs :: base)
+  expectRefusedTransfer ("NO_OWNERSHIP_RESTRICTION for " <> bond) missing
+
+  bobInNorthKorea <- issueKycIn f.kycAuthority f.bob "KP" KycVerified 365
+  noKp <- issueRestriction regulator bondIsin ["KP"] 0.0
+  disallowed <- instruct f transfer (noKp :: bobInNorthKorea :: base)
+  expectRefusedTransfer "JURISDICTION_NOT_PERMITTED: KP" disallowed
+
+  capped <- issueRestriction regulator bondIsin [] 100000.0
+  overCap <- instruct f transfer (capped :: bobInUs :: base)
+  expectRefusedTransfer "HOLDING_LIMIT_EXCEEDED: 250000.0 over 100000.0" overCap
+  expectUntouched f holding
+
+  instruct f transfer (noKp :: bobInUs :: base) >>= pending >> pure ()
+  expectDecisions f.alice
+    ["NO_OWNERSHIP_RESTRICTION", "JURISDICTION_NOT_PERMITTED: KP", "HOLDING_LIMIT_EXCEEDED", ""]
+
+-- ---------------------------------------------------------------------------
+-- Asset transfer requests
+-- ---------------------------------------------------------------------------
+
+-- | Alice asks the custodian to transfer 250,000 of the bond to `receiver`,
+-- with the custodian's compliance requirements.
+requestTransfer : Fixture -> Party -> Text -> Script (ContractId AssetTransferRequest)
+requestTransfer f receiver transferId = do
+  now <- getTime
+  submit (actAs [f.alice, f.custodian]) do
+    createCmd AssetTransferRequest with
+      transferId; sender = f.alice; receiver; custodian = f.custodian; complianceOfficer = f.officer
+      assetId = bond; quantity = 250000.0
+      fromAccount = AccountId "ACC-ALICE"; toAccount = AccountId "ACC-RECEIVER"
+      correlationId = CorrelationId ("CORR-" <> transferId); requestTimestamp = now
+      status = TransferPendingCompliance; complianceNote = None; observers = []
+      compliance = Some f.requirements
+
+screen : Fixture -> [Evidence] -> ContractId AssetTransferRequest -> Script AssetTransferRequest
+screen f evidence cid = do
+  screened <- submitWithEvidence f.custodian evidence do
+    exerciseCmd cid CompleteScreenedTransfer with evidence = map (\e -> e.policyCid) evidence
+  Some request <- queryContractId f.custodian screened
+  pure request
+
+-- The custodian completes a request screened by policy, without the
+-- compliance officer; a sanctioned receiver is rejected with the reason, and
+-- a flagged one is left to the officer, who approves it as usual.
+testScreenedAssetTransferRequest : Script ()
+testScreenedAssetTransferRequest = script do
+  f <- setup "GATE-REQUEST"
+  aliceEvidence <- cleared f f.alice
+  bobKyc <- issueKyc f.kycAuthority f.bob KycVerified 365
+  rule <- bobOnlyRule f
+  bobClear <- issueSanctions f.screener f.bob SanctionsClear 30
+
+  completed <- requestTransfer f f.bob "TRF-CLEAR" >>= screen f (rule :: bobKyc :: bobClear :: aliceEvidence)
+  assertMsg ("Expected the request completed by policy, got " <> show (completed.status, completed.complianceNote))
+    (completed.status == TransferCompleted && completed.complianceNote == Some "Approved by policy")
+
+  bobBlocked <- issueSanctions f.screener f.bob (SanctionsBlocked "OFAC-SDN") 30
+  rejected <- requestTransfer f f.bob "TRF-BLOCKED" >>= screen f (rule :: bobKyc :: bobBlocked :: aliceEvidence)
+  assertMsg ("Expected the request rejected, got " <> show rejected.status)
+    (rejected.status == TransferRejected "SANCTIONED: OFAC-SDN")
+
+  bobFlagged <- issueSanctions f.screener f.bob (SanctionsFlagged "NAME-MATCH-0042") 30
+  flaggedCid <- requestTransfer f f.bob "TRF-FLAGGED"
+  flagged <- screen f (rule :: bobKyc :: bobFlagged :: aliceEvidence) flaggedCid
+  assertMsg ("Expected the request left for review, got " <> show (flagged.status, flagged.complianceNote))
+    (flagged.status == TransferPendingCompliance
+      && flagged.complianceNote == Some "MANUAL_REVIEW: SANCTIONS_FLAGGED: NAME-MATCH-0042")
+  [(reviewCid, _)] <- query @AssetTransferRequest f.officer >>= \found ->
+    pure (filter (\(_, r) -> r.transferId == "TRF-FLAGGED") found)
+  approvedCid <- submit f.officer do exerciseCmd reviewCid ApproveTransfer with note = "Name match cleared"
+  doneCid <- submit f.custodian do exerciseCmd approvedCid CompleteTransfer
+  Some done <- queryContractId f.custodian doneCid
+  assertMsg "The officer's approval completes the request" (done.status == TransferCompleted)
+
+  -- The officer and both parties see each decision
+  expectDecisions f.officer ["", "SANCTIONED: OFAC-SDN", "MANUAL_REVIEW: SANCTIONS_FLAGGED"]
+  expectDecisions f.bob ["", "SANCTIONED: OFAC-SDN", "MANUAL_REVIEW: SANCTIONS_FLAGGED"]
+
+  -- A request without requirements is approved by the officer
+  manualCid <- submit (actAs [f.alice, f.custodian]) do
+    createCmd done with
+      transferId = "TRF-MANUAL"; status = TransferPendingCompliance; complianceNote = None; compliance = None
+  submitFailsWith "This transfer has no compliance requirements" [f.custodian] do
+    exerciseCmd manualCid CompleteScreenedTransfer with evidence = []
+
 -- ---------------------------------------------------------------------------
 -- Allocations
 -- ---------------------------------------------------------------------------
@@ -508,6 +616,8 @@ runComplianceGateTests = script do
   testEvidenceIsRequired
   testReceiverScreenedAgainOnAcceptance
   testComplianceRequirementsChange
+  testOwnershipRestrictionInTransfer
+  testScreenedAssetTransferRequest
   testScreenedAllocation
   testScreenedDvpSettles
   testScreenedDvpFailsForSanctionedBuyer

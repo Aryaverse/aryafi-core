@@ -82,6 +82,7 @@ template KycAttestation
         kind = KycPolicy
         subject = Some subjectParty
         instrumentId = None
+        jurisdiction = Some jurisdiction
       evaluatePolicy request = toComplianceDecision <$> kycDecision this request
 
     -- | Update the KYC status and extend the validity window.

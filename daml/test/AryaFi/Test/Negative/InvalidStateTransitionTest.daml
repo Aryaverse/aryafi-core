@@ -302,6 +302,7 @@ negativeApproveCompletedTransfer = script do
       status = TransferCompleted
       complianceNote = Some "Previously approved"
       observers = []
+      compliance = None
 
   -- Cannot approve a completed transfer
   submitMustFail complianceOfficer do
@@ -338,6 +339,7 @@ negativeCancelApprovedTransfer = script do
       status = TransferApproved
       complianceNote = Some "Approved by compliance"
       observers = []
+      compliance = None
 
   -- Cannot cancel an already approved transfer (can only cancel pending)
   submitMustFail sender do

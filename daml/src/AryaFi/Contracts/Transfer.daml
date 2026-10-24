@@ -11,11 +11,22 @@
 -- Authorization: sender + custodian co-sign creation; compliance officer gates approval;
 -- custodian alone completes (having verified custody-level readiness).
 -- Sender may cancel while still pending compliance review.
+--
+-- A request created with compliance requirements can instead be screened by
+-- policy (see AryaFi.Compliance.Gate): the custodian completes it with
+-- CompleteScreenedTransfer, which evaluates both parties' attestations and
+-- the asset's rules in the same transaction. An approved request completes
+-- and a rejected one is rejected with the reasons, without the compliance
+-- officer; one that needs manual review stays with the officer, who approves
+-- or rejects it as usual.
 module AryaFi.Contracts.Transfer where
 
 import AryaFi.Common.Types (Amount)
 import AryaFi.Common.Identifiers (AccountId, ReferenceId, CorrelationId)
 import AryaFi.Common.Errors (require, requireNonEmpty)
+import AryaFi.Common.Policies (PolicyDecision(..))
+import AryaFi.Compliance.Gate
+import AryaFi.ComplianceApi.PolicyV1 (CompliancePolicy)
 
 -- ---------------------------------------------------------------------------
 -- Transfer Status
@@ -79,6 +90,9 @@ template AssetTransferRequest
     -- ^ Compliance review note (populated on approval or rejection).
     observers : [Party]
     -- ^ Additional observers (e.g. regulator, audit team, external counterparty).
+    compliance : Optional ComplianceRequirements
+    -- ^ The custodian's compliance requirements, if the request is screened by
+    --   policy (CompleteScreenedTransfer).
   where
     signatory sender, custodian
     observer receiver :: complianceOfficer :: observers
@@ -117,6 +131,36 @@ template AssetTransferRequest
         require (status == TransferApproved)
           "Transfer must be approved before completion"
         create this with status = TransferCompleted
+
+    -- | Custodian screens a pending request against its compliance requirements
+    -- and completes it, in one transaction, with the attestations and rules
+    -- in `evidence`. A rejected request is rejected with the reasons; one that
+    -- needs manual review stays pending, with the reasons in the note, for
+    -- the compliance officer. The decision is recorded as an audit event.
+    choice CompleteScreenedTransfer : ContractId AssetTransferRequest
+      with
+        evidence : [ContractId CompliancePolicy]
+        -- ^ The parties' KYC and sanctions attestations and the asset's
+        --   restrictions, shared with or disclosed to the custodian.
+      controller custodian
+      do
+        require (status == TransferPendingCompliance)
+          "Transfer must be in PendingCompliance status to screen"
+        requirements <- case compliance of
+          Some requirements -> pure requirements
+          None -> abort "This transfer has no compliance requirements: the compliance officer approves it"
+        decision <- screenMovement custodian (complianceOfficer :: sender :: receiver :: observers)
+          transferId correlationId requirements evidence
+          Movement with sender; receiver; instrumentAdmin = custodian; instrumentId = assetId; amount = quantity
+        case decision of
+          Approved -> create this with
+            status = TransferCompleted
+            complianceNote = Some "Approved by policy"
+          Rejected reason -> create this with
+            status = TransferRejected reason
+            complianceNote = Some reason
+          RequiresManualReview reason -> create this with
+            complianceNote = Some ("MANUAL_REVIEW: " <> reason)
 
     -- | Sender cancels the transfer while it is still pending compliance review.
     choice CancelTransfer : ContractId AssetTransferRequest

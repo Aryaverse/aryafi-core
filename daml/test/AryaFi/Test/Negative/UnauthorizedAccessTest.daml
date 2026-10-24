@@ -379,6 +379,7 @@ negativeUnauthorizedTransferApproval = script do
       status = TransferPendingCompliance
       complianceNote = None
       observers = []
+      compliance = None
 
   -- Eve (non-compliance officer) tries to approve -> Must Fail
   submitMustFail eve do
@@ -413,6 +414,7 @@ negativeUnauthorizedTransferCancel = script do
       status = TransferPendingCompliance
       complianceNote = None
       observers = []
+      compliance = None
 
   -- Eve (non-sender) tries to cancel -> Must Fail
   submitMustFail eve do

@@ -36,6 +36,7 @@ mkTransfer sender receiver custodian complianceOfficer = do
       status = TransferPendingCompliance
       complianceNote = None
       observers = []
+      compliance = None
 
 -- ---------------------------------------------------------------------------
 -- Full Approval and Completion Scenario
@@ -238,6 +239,7 @@ testTransferEnsurePositiveQuantity = script do
       status = TransferPendingCompliance
       complianceNote = None
       observers = []
+      compliance = None
 
 -- ---------------------------------------------------------------------------
 -- Entry Point

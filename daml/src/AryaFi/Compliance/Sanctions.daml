@@ -70,6 +70,7 @@ template SanctionsAttestation
         kind = SanctionsPolicy
         subject = Some subjectParty
         instrumentId = None
+        jurisdiction = None
       evaluatePolicy request = toComplianceDecision <$> sanctionsDecision this request
 
     -- | Update the sanctions status and extend validity.

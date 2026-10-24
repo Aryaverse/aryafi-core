@@ -4,8 +4,8 @@
 -- | Compliance checked inside the transactions that move assets.
 --
 -- A bank or custodian states its `ComplianceRequirements`: the KYC
--- authorities, sanctions-screening authorities, and transfer-rule officers it
--- relies on, and the instruments that need a transfer rule. Whoever asks it to move an asset supplies the evidence: the
+-- authorities, sanctions-screening authorities, transfer-rule officers, and
+-- ownership regulators it relies on, and the instruments they restrict. Whoever asks it to move an asset supplies the evidence: the
 -- authorities' attestations and rules, as `CompliancePolicy` contracts
 -- (aryafi-compliance-api). The registry evaluates them with the policies'
 -- read-only choice, in the same transaction, and records the decision with
@@ -17,9 +17,12 @@
 --     KYC authorities.
 --   * Sanctions: sender and receiver each need to be screened clear by every
 --     sanctions authority. Any block rejects; a flag needs manual review.
---   * Transfer rules: the receiver must pass every rule given by the
---     transfer-rule officers for the instrument. A restricted instrument needs
---     at least one.
+--   * Transfer rules and ownership restrictions: the receiver must pass every
+--     rule given by the transfer-rule officers, and every ownership
+--     restriction given by the ownership regulators, for the instrument. A
+--     restricted instrument needs at least one of each. An ownership
+--     restriction is evaluated with the receiver's jurisdiction from the KYC
+--     attestation that approved it.
 -- A policy counts only for the authority that signed it: the interface's
 -- choices refuse a policy whose owner is not a signatory, which fails the
 -- whole transaction. Missing evidence rejects. Otherwise the evidence is only as complete as the
@@ -37,8 +40,9 @@ import AryaFi.Common.Events (AuditLog(..), EventType(..))
 import AryaFi.Common.Identifiers (CorrelationId(..))
 import AryaFi.Common.Policies (PolicyDecision(..), andDecision, fromComplianceDecision, orDecision)
 
--- | The authorities a bank or custodian relies on, and the instruments it
--- restricts. With no KYC or no sanctions authorities, that check is skipped.
+-- | The authorities a bank or custodian relies on, and the instruments they
+-- restrict. With no authorities, officers, or regulators of a kind, that
+-- check is skipped.
 data ComplianceRequirements = ComplianceRequirements
   with
     kycAuthorities : [Party]
@@ -47,8 +51,11 @@ data ComplianceRequirements = ComplianceRequirements
     -- ^ Sender and receiver each need to be screened clear by every one of these.
     transferRuleOfficers : [Party]
     -- ^ The officers whose transfer restriction rules the receiver must pass.
+    ownershipRegulators : [Party]
+    -- ^ The regulators whose ownership restrictions the receiver must pass.
     restrictedInstruments : [Text]
-    -- ^ The instruments (ISINs) that need a transfer restriction rule by one of the officers.
+    -- ^ The instruments (ISINs) that need a transfer restriction rule by one of
+    --   the officers and an ownership restriction by one of the regulators.
   deriving (Eq, Show)
 
 -- | A proposed movement of an instrument from one party to another.
@@ -85,7 +92,7 @@ evaluateMovement requester requirements evidence movement = do
   described <- forA (dedup evidence) \cid -> do
     policy <- exercise cid CompliancePolicy_Describe with requester
     pure (cid, policy)
-  let evaluate cid party =
+  let evaluate cid party jurisdiction =
         fromComplianceDecision <$> exercise cid CompliancePolicy_Evaluate with
           requester
           request = ComplianceRequest with
@@ -95,30 +102,46 @@ evaluateMovement requester requirements evidence movement = do
             instrumentAdmin = movement.instrumentAdmin
             instrumentId = movement.instrumentId
             amount = movement.amount
+            jurisdiction
       attestations kind owners party =
-        [cid | (cid, policy) <- described, policy.kind == kind, policy.owner `elem` owners, policy.subject == Some party]
+        [(cid, policy) | (cid, policy) <- described, policy.kind == kind, policy.owner `elem` owners, policy.subject == Some party]
+      -- A party's KYC decision, with the jurisdiction of the attestation that approved it
       kyc party
-        | null requirements.kycAuthorities = pure Approved
+        | null requirements.kycAuthorities = pure (Approved, None)
         | otherwise = case attestations KycPolicy requirements.kycAuthorities party of
-            [] -> pure (Rejected ("NO_KYC_ATTESTATION for " <> partyToText party))
-            cids -> foldl1 orDecision <$> forA cids (`evaluate` party)
+            [] -> pure (Rejected ("NO_KYC_ATTESTATION for " <> partyToText party), None)
+            found -> do
+              decisions <- forA found \(cid, policy) -> do
+                decision <- evaluate cid party None
+                pure (decision, policy.jurisdiction)
+              pure $ case [jurisdiction | (Approved, jurisdiction) <- decisions] of
+                jurisdiction :: _ -> (Approved, jurisdiction)
+                [] -> (foldl1 orDecision (map fst decisions), None)
       sanctions party = forA requirements.sanctionsAuthorities \authority ->
         case attestations SanctionsPolicy [authority] party of
           [] -> pure (Rejected ("NO_SANCTIONS_SCREENING by " <> partyToText authority <> " for " <> partyToText party))
-          cids -> foldl andDecision Approved <$> forA cids (`evaluate` party)
-      transferRule =
-        case [ cid | (cid, policy) <- described, policy.kind == TransferRulePolicy
-                   , policy.owner `elem` requirements.transferRuleOfficers
-                   , policy.instrumentId == Some movement.instrumentId ] of
-          [] | movement.instrumentId `elem` requirements.restrictedInstruments ->
-                 pure (Rejected ("NO_TRANSFER_RULE for " <> movement.instrumentId))
-             | otherwise -> pure Approved
-          cids -> foldl andDecision Approved <$> forA cids (`evaluate` movement.receiver)
+          found -> foldl andDecision Approved <$> forA found \(cid, _) -> evaluate cid party None
+      -- Every restriction of `kind` by `owners` for the instrument, for the receiver
+      restriction kind owners missing jurisdiction
+        | null owners = pure Approved
+        | otherwise =
+            case [ cid | (cid, policy) <- described, policy.kind == kind, policy.owner `elem` owners
+                       , policy.instrumentId == Some movement.instrumentId ] of
+              [] | movement.instrumentId `elem` requirements.restrictedInstruments ->
+                     pure (Rejected (missing <> " for " <> movement.instrumentId))
+                 | otherwise -> pure Approved
+              cids -> foldl andDecision Approved <$> forA cids \cid -> evaluate cid movement.receiver jurisdiction
       parties = dedup [movement.sender, movement.receiver]
-  kycDecisions <- forA parties kyc
+  kycResults <- forA parties \party -> (,) party <$> kyc party
+  let receiverJurisdiction = case [jurisdiction | (party, (_, jurisdiction)) <- kycResults, party == movement.receiver] of
+        jurisdiction :: _ -> jurisdiction
+        [] -> None
   sanctionsDecisions <- concat <$> forA parties sanctions
-  ruleDecision <- transferRule
-  pure (foldl andDecision Approved (kycDecisions ++ sanctionsDecisions ++ [ruleDecision]))
+  ruleDecision <- restriction TransferRulePolicy requirements.transferRuleOfficers "NO_TRANSFER_RULE" receiverJurisdiction
+  ownershipDecision <-
+    restriction OwnershipPolicy requirements.ownershipRegulators "NO_OWNERSHIP_RESTRICTION" receiverJurisdiction
+  pure (foldl andDecision Approved
+    (map (fst . snd) kycResults ++ sanctionsDecisions ++ [ruleDecision, ownershipDecision]))
 
 -- | The policy name in the audit events the gate records.
 gatePolicyName : Text
