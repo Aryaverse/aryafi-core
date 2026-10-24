@@ -19,14 +19,25 @@
 -- security to the buyer and the cash to the seller. Either both legs settle or
 -- the whole transaction is rejected.
 --
+-- An instruction can carry the compliance requirements both parties must meet
+-- (see AryaFi.Compliance.Gate). The agent then settles it with
+-- ExecuteScreenedDvpSettlement, which evaluates the parties' KYC and sanctions
+-- attestations and the security's transfer restriction rule in the settlement
+-- transaction: the instruction settles, or fails with the reasons, and the
+-- decisions are recorded as audit events.
+--
 -- Settlement model: DVP Model 1 (simultaneous, gross, final). Models 2 and 3
 -- (netted legs) are declared for reference data but are not executed here.
 -- Reference: BIS CPSS/IOSCO Principles for Financial Market Infrastructures.
 module AryaFi.Finance.Settlement where
 
+import DA.Optional (isNone)
 import AryaFi.Common.Types (Amount, Currency, SettlementStatus(..))
-import AryaFi.Common.Identifiers (AccountId, ISIN, CorrelationId, TradeId, IdempotencyKey)
+import AryaFi.Common.Identifiers (AccountId, ISIN(..), CorrelationId, TradeId(..), IdempotencyKey)
 import AryaFi.Common.Errors (require, requireNonEmpty)
+import AryaFi.Common.Policies (andDecision)
+import AryaFi.Compliance.Gate
+import AryaFi.ComplianceApi.PolicyV1 (CompliancePolicy)
 import AryaFi.Finance.Cash (CashPosition, SettleLockedCash(..))
 import AryaFi.Finance.Security (SecurityPosition, SettleLockedSecurity(..))
 
@@ -56,6 +67,16 @@ data DvpSettlementResult = DvpSettlementResult
     -- ^ The seller's new CashPosition.
   deriving (Eq, Show)
 
+-- | Result of a screened DvP: settled, or failed with the compliance reasons.
+data ScreenedDvpResult
+  = ScreenedDvpSettled with
+      settled : DvpSettlementResult
+  | ScreenedDvpFailed with
+      instructionCid : ContractId DvpInstruction
+      -- ^ The instruction, now in Failed status.
+      reason : Text
+  deriving (Eq, Show)
+
 -- ---------------------------------------------------------------------------
 -- DvpInstruction Template
 -- ---------------------------------------------------------------------------
@@ -72,7 +93,8 @@ data DvpSettlementResult = DvpSettlementResult
 --      matches currency and cashAmount exactly, and is locked to the settlement
 --      agent with lockReference = buyerCashLockRef.
 --   3. Party and asset eligibility (KYC, sanctions, restrictions) is checked by
---      the settlement agent before execution.
+--      the settlement agent before execution, or, when the instruction has
+--      compliance requirements, by ExecuteScreenedDvpSettlement on-ledger.
 --
 -- Execution (ExecuteDvpSettlement), in a single transaction:
 --   - Archives the locked SecurityPosition and creates the buyer's position
@@ -127,6 +149,9 @@ template DvpInstruction
     -- ^ Populated when status is Failed (e.g. "INSUFFICIENT_SECURITY_BALANCE").
     observers : [Party]
     -- ^ Additional observers (e.g. CSD, trade repository, regulator).
+    compliance : Optional ComplianceRequirements
+    -- ^ The compliance requirements seller and buyer must meet at settlement,
+    --   if any; ExecuteScreenedDvpSettlement checks them.
   where
     signatory settlementAgent, seller, buyer
     observer observers
@@ -145,45 +170,51 @@ template DvpInstruction
         -- ^ The buyer's CashPosition, locked to the settlement agent.
       controller settlementAgent
       do
-        require (status == PendingSettlement)
-          "DvP can only be executed from PendingSettlement status"
-        require (dvpModel == DvpModel1)
-          "Only DvP Model 1 (gross, simultaneous) settlement is executed on-ledger"
-        requireNonEmpty sellerSecurityLockRef "sellerSecurityLockRef"
-        requireNonEmpty buyerCashLockRef "buyerCashLockRef"
+        require (isNone compliance)
+          "This DvP has compliance requirements: settle it with ExecuteScreenedDvpSettlement"
+        _ <- checkDvpLegs this sellerSecurityCid buyerCashCid
+        settleDvp this sellerSecurityCid buyerCashCid
 
-        sec <- fetch sellerSecurityCid
-        require (sec.owner == seller) "Security leg: position is not owned by the seller"
-        require (sec.accountId == sellerSecurityAccount) "Security leg: position is not in the seller's security account"
-        require (sec.isin == isin) "Security leg: ISIN does not match the instruction"
-        require (sec.quantity == securityQuantity)
-          ("Security leg: quantity " <> show sec.quantity <> " does not match instructed " <> show securityQuantity)
-        require (sec.isLocked && sec.lockHolder == Some settlementAgent)
-          "Security leg: position is not locked to the settlement agent"
-        require (sec.lockReference == Some sellerSecurityLockRef)
-          "Security leg: lock reference does not match the instruction"
-
-        cash <- fetch buyerCashCid
-        require (cash.owner == buyer) "Cash leg: position is not owned by the buyer"
-        require (cash.accountId == buyerCashAccount) "Cash leg: position is not in the buyer's cash account"
-        require (cash.currency == currency) "Cash leg: currency does not match the instruction"
-        require (cash.amount == cashAmount)
-          ("Cash leg: amount " <> show cash.amount <> " does not match instructed " <> show cashAmount)
-        require (cash.isLocked && cash.lockHolder == Some settlementAgent)
-          "Cash leg: position is not locked to the settlement agent"
-        require (cash.lockReference == Some buyerCashLockRef)
-          "Cash leg: lock reference does not match the instruction"
-
-        deliveredSecurityCid <- exercise sellerSecurityCid SettleLockedSecurity with
-          newOwner = buyer
-          newAccountId = buyerSecurityAccount
-        paidCashCid <- exercise buyerCashCid SettleLockedCash with
-          newOwner = seller
-          newAccountId = sellerCashAccount
-        instructionCid <- create this with
-          status = Settled
-          failureReason = None
-        pure DvpSettlementResult with instructionCid; deliveredSecurityCid; paidCashCid
+    -- | Execute the DvP settlement after evaluating the instruction's
+    -- compliance requirements in the same transaction. The attestations and
+    -- rules in `evidence` are evaluated for both legs: KYC and sanctions for
+    -- seller and buyer, and the security's transfer restriction rule for the
+    -- buyer. If both legs are approved, the DvP settles as with
+    -- ExecuteDvpSettlement. Otherwise nothing moves: the instruction is Failed
+    -- with the reasons, and both legs stay locked to the agent, as with
+    -- FailDvpSettlement. Either way the decisions are recorded as audit events
+    -- for seller and buyer.
+    choice ExecuteScreenedDvpSettlement : ScreenedDvpResult
+      with
+        sellerSecurityCid : ContractId SecurityPosition
+        -- ^ The seller's SecurityPosition, locked to the settlement agent.
+        buyerCashCid : ContractId CashPosition
+        -- ^ The buyer's CashPosition, locked to the settlement agent.
+        evidence : [ContractId CompliancePolicy]
+        -- ^ The parties' KYC and sanctions attestations and the security's
+        --   transfer restriction rule, shared with or disclosed to the agent.
+      controller settlementAgent
+      do
+        requirements <- case compliance of
+          Some requirements -> pure requirements
+          None -> abort "This DvP has no compliance requirements: settle it with ExecuteDvpSettlement"
+        (sec, cash) <- checkDvpLegs this sellerSecurityCid buyerCashCid
+        let screen = screenMovement settlementAgent [seller, buyer] (unTradeId tradeId) correlationId requirements evidence
+        securityDecision <- screen Movement with
+          sender = seller; receiver = buyer; instrumentAdmin = sec.custodian
+          instrumentId = unISIN isin; amount = securityQuantity
+        cashDecision <- screen Movement with
+          sender = buyer; receiver = seller; instrumentAdmin = cash.bank
+          instrumentId = currency; amount = cashAmount
+        case refusalReason (andDecision securityDecision cashDecision) of
+          None -> do
+            settled <- settleDvp this sellerSecurityCid buyerCashCid
+            pure ScreenedDvpSettled with settled
+          Some reason -> do
+            instructionCid <- create this with
+              status = Failed reason
+              failureReason = Some reason
+            pure ScreenedDvpFailed with instructionCid; reason
 
     -- | Fail the settlement with a specific reason.
     -- Called when settlement cannot proceed (e.g. failed pre-checks,
@@ -244,3 +275,53 @@ template DvpInstruction
       controller settlementAgent
       do
         pure (status /= PendingSettlement)
+
+-- | Validate both locked legs of a pending DvP against the instruction.
+checkDvpLegs
+  : DvpInstruction -> ContractId SecurityPosition -> ContractId CashPosition -> Update (SecurityPosition, CashPosition)
+checkDvpLegs this sellerSecurityCid buyerCashCid = do
+  require (this.status == PendingSettlement)
+    "DvP can only be executed from PendingSettlement status"
+  require (this.dvpModel == DvpModel1)
+    "Only DvP Model 1 (gross, simultaneous) settlement is executed on-ledger"
+  requireNonEmpty this.sellerSecurityLockRef "sellerSecurityLockRef"
+  requireNonEmpty this.buyerCashLockRef "buyerCashLockRef"
+
+  sec <- fetch sellerSecurityCid
+  require (sec.owner == this.seller) "Security leg: position is not owned by the seller"
+  require (sec.accountId == this.sellerSecurityAccount) "Security leg: position is not in the seller's security account"
+  require (sec.isin == this.isin) "Security leg: ISIN does not match the instruction"
+  require (sec.quantity == this.securityQuantity)
+    ("Security leg: quantity " <> show sec.quantity <> " does not match instructed " <> show this.securityQuantity)
+  require (sec.isLocked && sec.lockHolder == Some this.settlementAgent)
+    "Security leg: position is not locked to the settlement agent"
+  require (sec.lockReference == Some this.sellerSecurityLockRef)
+    "Security leg: lock reference does not match the instruction"
+
+  cash <- fetch buyerCashCid
+  require (cash.owner == this.buyer) "Cash leg: position is not owned by the buyer"
+  require (cash.accountId == this.buyerCashAccount) "Cash leg: position is not in the buyer's cash account"
+  require (cash.currency == this.currency) "Cash leg: currency does not match the instruction"
+  require (cash.amount == this.cashAmount)
+    ("Cash leg: amount " <> show cash.amount <> " does not match instructed " <> show this.cashAmount)
+  require (cash.isLocked && cash.lockHolder == Some this.settlementAgent)
+    "Cash leg: position is not locked to the settlement agent"
+  require (cash.lockReference == Some this.buyerCashLockRef)
+    "Cash leg: lock reference does not match the instruction"
+  pure (sec, cash)
+
+-- | Settle a pending DvP whose legs are checked: deliver the locked security
+-- to the buyer and the locked cash to the seller, and record the instruction
+-- as Settled.
+settleDvp : DvpInstruction -> ContractId SecurityPosition -> ContractId CashPosition -> Update DvpSettlementResult
+settleDvp this sellerSecurityCid buyerCashCid = do
+  deliveredSecurityCid <- exercise sellerSecurityCid SettleLockedSecurity with
+    newOwner = this.buyer
+    newAccountId = this.buyerSecurityAccount
+  paidCashCid <- exercise buyerCashCid SettleLockedCash with
+    newOwner = this.seller
+    newAccountId = this.sellerCashAccount
+  instructionCid <- create this with
+    status = Settled
+    failureReason = None
+  pure DvpSettlementResult with instructionCid; deliveredSecurityCid; paidCashCid

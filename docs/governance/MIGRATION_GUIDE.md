@@ -152,3 +152,18 @@ A Canton 2 ledger cannot run the v3.0.0 DAR, and a Canton 3 ledger cannot run v2
 
 ### 6.5 Verification
 Run the runbook in section 3, confirm `dpm test --all` passes in `daml/test`, and run the DvP suites against the `deploy/` topology (see [daml/test/AryaFi/Test/Integration/README.md](../../daml/test/AryaFi/Test/Integration/README.md)).
+
+## 7. Upgrading to v3.3.0
+
+v3.3.0 is an upgrade of v3.2.0: upload the new DAR to every participant that hosts AryaFi parties, and existing contracts carry on under it. No contracts need migrating.
+
+### 7.1 New Package
+The `CompliancePolicy` interface is in a new package, `aryafi-compliance-api` 1.0.0, which the `aryafi-core` DAR includes. An authority or registry outside AryaFi that implements or calls the interface builds against the `aryafi-compliance-api` DAR from the release.
+
+### 7.2 New Optional Fields
+`PositionTransferFactory`, `PositionTransferInstruction`, `PositionAllocationFactory`, and `DvpInstruction` have a new last field, `compliance : Optional ComplianceRequirements`. Contracts created before the upgrade, and new ones without the field (the JSON Ledger API fills a missing optional field with `None`), are not screened. Daml code that constructs these templates must set `compliance = None` or the requirements.
+
+### 7.3 Turning Compliance On
+- The KYC authority and sanctions screener share their attestations with the bank or custodian (`AddKycObserver`, `AddSanctionsObserver`), or disclose them through the registry's API; the compliance officer discloses its transfer restriction rules.
+- The bank or custodian exercises `SetTransferCompliance` and `SetAllocationCompliance` on its factories with its `ComplianceRequirements`. From then on, wallets and settlement apps pass the evidence in the choice context (see [LEDGER_API_CLIENT.md §6.4](../integration/LEDGER_API_CLIENT.md#64-compliance-evidence)); a transfer without it ends `Failed` with the reason. Transfers already pending are screened again on acceptance only if they were instructed under requirements.
+- A DvP is screened only if its instruction is created with requirements; settle it with `ExecuteScreenedDvpSettlement`.

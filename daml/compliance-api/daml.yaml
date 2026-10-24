@@ -1,0 +1,10 @@
+sdk-version: 3.5.12
+name: aryafi-compliance-api
+source: daml
+version: 1.0.0
+dependencies:
+  - daml-prim
+  - daml-stdlib
+build-options:
+  - --ghc-option=-Wall
+  - --ghc-option=-Werror

@@ -62,7 +62,12 @@ jobs:
             PREVIOUS=$(ls previous-release/aryafi-core-*.dar)
             CURRENT=$(ls .daml/dist/aryafi-core-*.dar)
             echo "Checking $CURRENT against $PREVIOUS"
-            dpm upgrade-check --both "$PREVIOUS" "$CURRENT"
+            # The checks participants run when a package is uploaded
+            dpm upgrade-check --participant "$PREVIOUS" "$CURRENT"
+            # The compiler's checks. Adding an interface instance to an existing
+            # template is a supported upgrade, which the compiler refuses unless
+            # told otherwise; it is reported as a warning so each one is visible.
+            dpm build --enable-multi-package no --upgrades "$PREVIOUS" -Wtemplate-has-new-interface-instance
           else
             echo "No release to check against"
           fi
@@ -83,8 +88,8 @@ jobs:
     name: Canton 3.5 Topology Integration
     runs-on: ubuntu-latest
     needs: build-and-test
-    # The suites on the bank participant take about 30 minutes, the cross-node
-    # DvPs and the smoke test about 10 more.
+    # The suites on the bank participant take about 40 minutes, the cross-node
+    # scripts and the smoke test about 10 more.
     timeout-minutes: 75
     steps:
       - name: Checkout Code
@@ -131,7 +136,7 @@ jobs:
 
       # Scenarios that do not call setTime run against a real participant. The
       # test DAR is uploaded to the bank participant by the script runner.
-      - name: Run DvP scenarios and token-standard transfers, settlement, and DvP against the bank participant
+      - name: Run DvP scenarios, token-standard transfers, settlement, and DvP, and compliance checks against the bank participant
         run: |
           DAR=$(ls daml/test/.daml/dist/aryafi-core-test-*.dar)
           for script in \
@@ -141,7 +146,8 @@ jobs:
             AryaFi.Test.Unit.TokenAllocationTest:runTokenAllocationTests \
             AryaFi.Test.Scenarios.TokenDvpTest:runTokenDvpTests \
             AryaFi.Test.Unit.ProposalTest:runProposalTests \
-            AryaFi.Test.Unit.FinancingProposalTest:runFinancingProposalTests; do
+            AryaFi.Test.Unit.FinancingProposalTest:runFinancingProposalTests \
+            AryaFi.Test.Unit.ComplianceGateTest:runComplianceGateTests; do
             echo "::group::$script"
             dpm script --dar "$DAR" --upload-dar=yes --script-name "$script" --ledger-host localhost --ledger-port 10012
             echo "::endgroup::"
@@ -149,9 +155,10 @@ jobs:
 
       # Custodian, bank, seller, buyer, and agent each on their own participant,
       # so no submission acts for parties on two nodes: the reference DvP agreed
-      # through multi-party proposals, the token-standard DvP, and a repo and an
-      # escrow agreed and changed through proposals.
-      - name: Run the DvPs and financing with each institution on its own node
+      # through multi-party proposals, the token-standard DvP, a repo and an
+      # escrow agreed and changed through proposals, and transfers screened
+      # against a compliance authority's disclosed attestations.
+      - name: Run the DvPs, financing, and screened transfers with each institution on its own node
         run: |
           DAR=$(ls daml/test/.daml/dist/aryafi-core-test-*.dar)
           cat > participants.json <<'JSON'
@@ -167,7 +174,8 @@ jobs:
           for script in \
             AryaFi.Test.Network.DvpAcrossNodes:runDvpAcrossNodes \
             AryaFi.Test.Network.TokenDvpAcrossNodes:runTokenDvpAcrossNodes \
-            AryaFi.Test.Network.FinancingAcrossNodes:runFinancingAcrossNodes; do
+            AryaFi.Test.Network.FinancingAcrossNodes:runFinancingAcrossNodes \
+            AryaFi.Test.Network.ComplianceAcrossNodes:runComplianceAcrossNodes; do
             echo "::group::$script"
             echo '{"runId": "ci-${{ github.run_id }}-'"${script##*:}"'", "custodianNode": "custodian_node", "bankNode": "bank_node", "sellerNode": "dealer_a_node", "buyerNode": "dealer_b_node", "agentNode": "regulator_node"}' > nodes.json
             dpm script --dar "$DAR" --script-name "$script" --participant-config participants.json --input-file nodes.json

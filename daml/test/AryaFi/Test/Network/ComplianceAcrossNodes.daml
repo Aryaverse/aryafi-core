@@ -1,0 +1,122 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Compliance checked inside token-standard transfers, with every party on
+-- its own participant node: the custodian, the seller and the buyer, and a
+-- compliance authority on the agent's node that attests KYC and sanctions
+-- screening and keeps the bond's transfer rule. The authority shares nothing
+-- with the seller or buyer; it discloses its contracts to whoever submits,
+-- and the custodian evaluates them in the transfer transaction.
+--
+-- Run it against the deploy/ topology with a participant config that names
+-- the nodes, for example:
+--
+--   dpm script --dar daml/test/.daml/dist/aryafi-core-test-3.3.0.dar \
+--     --script-name AryaFi.Test.Network.ComplianceAcrossNodes:runComplianceAcrossNodes \
+--     --participant-config participants.json --input-file nodes.json
+module AryaFi.Test.Network.ComplianceAcrossNodes where
+
+import DA.List (sort)
+import DA.Time (addRelTime, days, minutes)
+import Daml.Script
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
+import Splice.Api.Token.MetadataV1 (emptyMetadata)
+import Splice.Api.Token.TransferInstructionV2
+import AryaFi.Common.Identifiers
+import AryaFi.Compliance.Gate
+import AryaFi.Compliance.KYC (KycStatus(..))
+import AryaFi.Compliance.Sanctions (SanctionsAttestation, SanctionsStatus(..), BlockParty(..))
+import AryaFi.Finance.Security
+import AryaFi.Finance.TokenTransfer
+import AryaFi.Test.Scenarios.DvpSettlementTest (bondIsin)
+import AryaFi.Test.Unit.CompliancePolicyTest (evidenceOf, issueKyc, issueRule, issueSanctions, whitelistOnly)
+import AryaFi.Test.Unit.ComplianceGateTest (decisionsSeenBy, evidenceArgs, expectRefusedTransfer, submitWithEvidence)
+import AryaFi.Test.Network.Nodes
+import AryaFi.Test.Network.TokenDvpAcrossNodes (holdingsAre, issue)
+
+runComplianceAcrossNodes : NodesInput -> Script ()
+runComplianceAcrossNodes input = do
+  Institutions{..} <- allocateInstitutions input
+  authority <- allocatePartyOn ("ComplianceAuthority-" <> input.runId) (ParticipantName input.agentNode)
+  let bond = unISIN bondIsin
+      requirements = ComplianceRequirements with
+        kycAuthorities = [authority]; sanctionsAuthorities = [authority]
+        transferRuleOfficers = [authority]; restrictedInstruments = [bond]
+
+  -- The custodian issues the bond to the seller through a factory of its own,
+  -- and its clients transfer through one with compliance requirements
+  issuance <- submit custodian do
+    createCmd PositionTransferFactory with admin = custodian; clients = [custodian, seller]; compliance = None
+  screened <- submit custodian do
+    createCmd PositionTransferFactory with
+      admin = custodian; clients = [seller, buyer]; compliance = Some requirements
+  inventory <- submit custodian do
+    createCmd SecurityPosition with
+      custodian; owner = custodian; accountId = AccountId "INVENTORY"; isin = bondIsin
+      cusip = Some (CUSIP "912828ZM5"); instrumentName = "US Treasury 4.25% Nov 2026"
+      instrumentType = GovernmentBond; quantity = 5000000.0; couponRate = Some 0.0425
+      couponType = Some FixedCoupon; dayCountConvention = None; maturityDate = None
+      seniority = Some Senior; isLocked = False; lockReference = None; lockHolder = None
+      csdRef = None; observers = []
+  issue custodian seller (toInterfaceContractId inventory) "ACC-SELLER-SEC" 5000000.0 issuance
+  holdingsAre seller [(bond, 5000000.0, False)]
+
+  -- The authority clears both parties and whitelists the buyer for the bond
+  sellerKyc <- issueKyc authority seller KycVerified 365
+  sellerScreening <- issueSanctions authority seller SanctionsClear 30
+  buyerKyc <- issueKyc authority buyer KycVerified 365
+  buyerScreening <- issueSanctions authority buyer SanctionsClear 30
+  rule <- issueRule authority bondIsin (whitelistOnly [buyer])
+  let evidence = [sellerKyc, sellerScreening, buyerKyc, buyerScreening, rule]
+
+      sellerAccount = HoldingV2.Account with owner = Some seller; provider = Some custodian; id = "ACC-SELLER-SEC"
+      transferToBuyer given = do
+        [(holdingCid, _)] <- queryInterface @HoldingV2.Holding seller
+        now <- getTime
+        result <- submitWithEvidence seller given do
+          exerciseCmd (toInterfaceContractId @TransferFactory screened) TransferFactory_Transfer with
+            transfer = Transfer with
+              sender = sellerAccount
+              receiver = HoldingV2.Account with owner = Some buyer; provider = Some custodian; id = "ACC-BUYER-SEC"
+              amount = 1000000.0
+              instrumentId = HoldingV2.InstrumentId with admin = custodian; id = bond
+              requestedAt = addRelTime now (minutes (-1))
+              executeBefore = addRelTime now (days 1)
+              inputHoldingCids = [holdingCid]
+              meta = emptyMetadata
+            actors = [seller]
+            extraArgs = evidenceArgs given
+        pure (holdingCid, result)
+
+  -- Approved: the seller instructs from its node, the buyer accepts from its
+  -- node, and each time the custodian evaluates the authority's contracts
+  (_, instructed) <- transferToBuyer evidence
+  instructionCid <- case instructed.output of
+    TransferInstructionResult_Pending cid -> pure cid
+    other -> abort ("Expected a pending transfer, got " <> show other)
+  _ <- eventually "the transfer instruction on the buyer's node" (queryInterfaceContractId buyer instructionCid)
+  accepted <- submitWithEvidence buyer evidence do
+    exerciseCmd instructionCid TransferInstruction_Accept with actors = [buyer]; extraArgs = evidenceArgs evidence
+  case accepted.output of
+    TransferInstructionResult_Completed [_] -> pure ()
+    other -> abort ("Expected a completed transfer, got " <> show other)
+  holdingsAre buyer [(bond, 1000000.0, False)]
+  holdingsAre seller [(bond, 4000000.0, False)]
+
+  -- The authority blocks the buyer: the next transfer fails inside the
+  -- transfer transaction, nothing moves, and the reason is recorded
+  blockedCid <- submit authority do
+    exerciseCmd (fromInterfaceContractId @SanctionsAttestation buyerScreening.policyCid) BlockParty with
+      sanctionsListRef = "OFAC-SDN"
+  blocked <- evidenceOf authority blockedCid
+  (holdingCid, refused) <- transferToBuyer [sellerKyc, sellerScreening, buyerKyc, blocked, rule]
+  expectRefusedTransfer "SANCTIONED: OFAC-SDN" refused
+  kept <- queryInterfaceContractId seller holdingCid
+  assertMsg "The seller's holding is unchanged" (fmap (\v -> (v.amount, v.lock)) kept == Some (4000000.0, None))
+  holdingsAre buyer [(bond, 1000000.0, False)]
+  -- The seller sees three decisions: its approved instruction, the buyer's
+  -- approved acceptance, and the refusal
+  _ <- eventually "the recorded decisions on the seller's node" do
+    decisions <- decisionsSeenBy seller
+    pure (if sort decisions == [(False, "SANCTIONED: OFAC-SDN"), (True, ""), (True, "")] then Some () else None)
+  pure ()

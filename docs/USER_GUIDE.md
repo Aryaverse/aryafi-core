@@ -51,14 +51,14 @@ Use **Next step** and **Back**, or click a step in the bar.
 **What's inside** describes each area of the library in plain words, with its maturity:
 * **Settlement** (Beta): cash, securities and delivery versus payment. Moves real assets on the ledger.
 * **Financing** (Experimental): loans, repos, securities lending, margin calls, pledges and collateral, funds and escrow. Tracks each agreement; assets do not move on the ledger yet. Includes a calculator for the collateral a loan needs: `loan × margin ÷ (1 − haircut)`, with illustrative haircuts.
-* **Compliance** (Experimental): KYC and sanctions, transfer rules, eligibility and limits, regulatory reports. Evaluated correctly, but not yet enforced inside transfers.
-* **Coming next**: agreeing trades across nodes, settling against Canton Coin on a Canton Network, financing on real assets, and an independent audit.
+* **Compliance** (Experimental): KYC and sanctions, transfer rules, eligibility and limits, regulatory reports. KYC, sanctions and transfer rules are checked inside the transfers, settlements and delivery versus payment that move assets, with every decision recorded; eligibility and limits are not checked that way yet.
+* **Coming next**: compliance in every workflow, settling against Canton Coin on a Canton Network, financing on real assets, and an independent audit.
 
 **Developers** has:
 * **Get started**: install the Daml SDK with `dpm`, build, and run the tests.
 * **Run it on a network**: the local five-institution Canton network (`deploy/docker`) and the TestNet runbook (`deploy/testnet`).
 * **Connect your systems: ISO 20022**: pick `pacs.008`, `sese.023`, `camt.053` or `semt.002` to see the message next to the JSON Ledger API v2 request it becomes. **Check this message** runs real checks: XML well-formedness, required elements, ISIN (ISO 6166) and LEI (ISO 17442) check digits, UETR format, currency codes, and consistency between the XML and the request. **Field-by-field mapping** lists each element and the rule that applies.
-* **Read the contracts**: the Daml source of seven core modules, loaded from this repository.
+* **Read the contracts**: the Daml source of twelve core modules, loaded from this repository.
 * **Documentation**: links to the key documents on the Docs view.
 
 **Docs** renders the key documents from this repository's Markdown: known limitations, improvement plan, changelog, this guide, the Ledger API client guide, ISO 20022 mappings, migration guide, TestNet runbook, versioning policy, authorization matrix and threat model. Links between them stay on the site; a link to a file that is not published is shown as plain text.
@@ -77,7 +77,7 @@ dpm version
 # Compile both packages: aryafi-core (production) and aryafi-core-test
 dpm build --all
 
-# Run the test suite (345 scripts; requires Java 17 or 21)
+# Run the test suite (361 scripts; requires Java 17 or 21)
 cd daml/test
 dpm test --all --show-coverage
 cd ../..

@@ -2,7 +2,7 @@
 
 This page records what AryaFi Core does **not** do yet, so that nobody builds on an assumption the code does not support. It is required by the *Definition of Done — Production Module* (Technical & Business Requirements §21, §30) and is updated with every release.
 
-Last reviewed: 2026-10-01, against the code at v3.2.0.
+Last reviewed: 2026-10-23, against the code for 3.3.0 (in development).
 
 ---
 
@@ -17,7 +17,7 @@ Maturity labels follow [VERSIONING_AND_RELEASE.md](governance/VERSIONING_AND_REL
 | `Finance.Settlement` (DvP) | Beta | Atomic Model 1 DvP moves real positions and is tested for leg mismatch, lock integrity, retry, and cancellation. |
 | `Finance.Account`, `Finance.Party`, `Finance.Obligation`, `Finance.Payment`, `Finance.Collateral` | Experimental | State records; not yet linked to the positions they describe. |
 | `Contracts.*` (Loan, Repo, ReverseRepo, SecuritiesLending, Margin, Pledge, Escrow, Transfer, Subscription, Redemption) | Experimental | Lifecycle state machines with corrected authorization, but no on-ledger movement of cash or securities (see §3). |
-| `Compliance.*` | Experimental | Policies evaluate correctly but cannot yet be called from business workflows (see §4). |
+| `Compliance.*` | Experimental | KYC, sanctions, and transfer rules are evaluated inside token-standard transfers and allocations and the screened DvP (`Compliance.Gate`); the policies are simplified, and eligibility, jurisdiction, and ownership limits cannot be called from workflows yet (see §4). |
 
 ## 2. Platform
 
@@ -30,7 +30,7 @@ Maturity labels follow [VERSIONING_AND_RELEASE.md](governance/VERSIONING_AND_REL
   - the registry's off-ledger API (instrument metadata, factory lookup, choice context, disclosed contracts) and the V2 transaction-history events (`TransferEventsV2`). Instead, AryaFi's factories are shown on the ledger to the registry's clients, and wallets find them with an interface query.
 - **Pending transfers and allocations are visible to the other side.** While a token-standard transfer waits for acceptance, the receiver sees the sender's locked holding, because the receiver's participant needs it to accept. A holdings query for the receiver returns it, so wallets should list a party's holdings by account owner. Likewise, a settlement's executors see its allocations and their locked funding, which a holdings query for an executor returns.
 - **No uniqueness guarantees.** Daml-LF 2.2 has no contract keys, so the ledger does not stop a second `Account` with the same custodian and account ID, a second `KycAttestation` or `SanctionsAttestation` for the same authority and subject, or a second `TransferRestrictionRule` or `OwnershipRestriction` for the same ISIN. The issuing party must check its active contracts before creating one.
-- **Upgrades are checked by Canton.** Canton 3 validates every package with the same name (`aryafi-core`) as an upgrade of the versions already on the participant. A release that changes templates incompatibly must use a new package name or a separate participant. CI checks every build with `dpm upgrade-check` against the latest release's DAR.
+- **Upgrades are checked by Canton.** Canton 3 validates every package with the same name (`aryafi-core`) as an upgrade of the versions already on the participant. A release that changes templates incompatibly must use a new package name or a separate participant. CI checks every build against the latest release's DAR, with the participant's upgrade checks and the compiler's; the compiler is told to allow, and report, interface instances added to existing templates, a supported upgrade it otherwise refuses. Interfaces that AryaFi's templates implement live in their own package (`aryafi-compliance-api`), because an interface cannot be upgraded together with its implementations.
 
 ## 3. Composition and Asset Movement
 
@@ -43,8 +43,13 @@ Maturity labels follow [VERSIONING_AND_RELEASE.md](governance/VERSIONING_AND_REL
 ## 4. Multi-Party Workflows and Compliance
 
 - **Across participants, multi-party steps go through proposals.** A `MultiPartyProposal` (`AryaFi.Contracts.Proposal`) collects signatures one party at a time, so parties on different participants can create every AryaFi contract with several signatories and exercise every choice that several parties control. Without a proposal, these steps still need all their parties in one submission (`submit (actAs [...])` in Daml Script, several `actAs` parties on the Ledger API). Proposals have no expiry date: a signer withdraws or rejects one that is no longer wanted. Cash and securities move between participants through token-standard transfers, not proposals; an `AssetHolding` transfer works through a proposal only if the new owner, who cannot yet see the holding, is not the last to sign. `runDvpAcrossNodes`, `runTokenDvpAcrossNodes`, and `runFinancingAcrossNodes` run the reference DvP, the token-standard DvP, and a repo and an escrow on the `deploy/` topology with each institution on its own participant, locally and in CI.
-- **Compliance checks are not composable.** `IsKycValid`, `IsSanctionsClear`, `EvaluateEligibility`, `EvaluateTransfer`, and `CheckOwnershipLimit` are controlled by the policy owner. Transfer approval (`ApproveTransfer`) is a manual decision by the compliance officer; it does not evaluate the policies itself.
-- **Simplified policies.** `EvaluateTransfer` maps regulatory categories to investor flags supplied by the caller; it is not legal advice. `EligibilityPolicy.minCreditRating` is stored but not evaluated. Asset classes are free text rather than the `AssetClass` type. `OwnershipRestriction` percentages are supplied by the caller, not computed from holdings. `JurisdictionProfile` has no effective dates.
+- **Compliance inside transfers, allocations, and DvP.** KYC attestations, sanctions attestations, and transfer restriction rules implement the `CompliancePolicy` interface (package `aryafi-compliance-api`), which any party that sees the contract can evaluate. A bank or custodian sets `ComplianceRequirements` on its `PositionTransferFactory` or `PositionAllocationFactory`, and a `DvpInstruction` can carry them; `AryaFi.Compliance.Gate` then evaluates the evidence the caller passes, in the same transaction, and records each decision as an `AuditLog`. What it does not do yet:
+  - eligibility policies, jurisdiction profiles, and ownership limits do not implement `CompliancePolicy`, so no workflow evaluates them;
+  - `AssetTransferRequest` still needs the compliance officer's manual `ApproveTransfer`, and the financing contracts (loans, repos, securities loans, pledges) do not evaluate compliance;
+  - the evidence is what the caller passes. Missing evidence is refused, but the gate cannot tell that a party has a second, worse attestation, or that a rule by another accepted officer was left out. Evidence is never stale: an authority changes an attestation or rule by archiving it, and an archived contract cannot be evaluated;
+  - an allocation is screened when it is made, not again when its batch settles (a failing check there could only abort the whole settlement); a pending transfer is screened again when the receiver accepts it;
+  - a manual-review decision (a flagged screening, a restricted category without a whitelist, a holding period) refuses the movement; there is no workflow for a reviewer to approve it.
+- **Simplified policies.** `EvaluateTransfer` maps regulatory categories to investor flags supplied by the caller; it is not legal advice. Evaluated through `CompliancePolicy`, a transfer rule has no investor flags: it approves a receiver on its whitelist, refers a restricted category without a whitelist to manual review, and cannot check a holding period, because positions do not record when they were acquired. `EligibilityPolicy.minCreditRating` is stored but not evaluated. Asset classes are free text rather than the `AssetClass` type. `OwnershipRestriction` percentages are supplied by the caller, not computed from holdings. `JurisdictionProfile` has no effective dates.
 - **Identifiers are not validated on-ledger.** ISIN, CUSIP, and LEI values are wrapped in newtypes but their check digits are not verified by any template.
 
 ## 5. Financial Semantics
@@ -56,13 +61,13 @@ Maturity labels follow [VERSIONING_AND_RELEASE.md](governance/VERSIONING_AND_REL
 ## 6. Integration and Operations
 
 - **Idempotency keys are stored, not enforced.** Use the Ledger API command ID and deduplication period for idempotent submission.
-- **Audit events are not emitted automatically.** `AuditLog` and `RegulatoryReportRecord` contracts are created by the reporting party; no workflow emits them on settlement.
+- **Audit events are emitted for compliance decisions only.** The compliance gate records an `AuditLog` for every decision it makes. Otherwise `AuditLog` and `RegulatoryReportRecord` contracts are created by the reporting party; no workflow emits them on settlement.
 - **Local test topology only.** `deploy/` runs five in-memory Canton 3.5 participants and one synchronizer (sequencer and mediator) for integration testing. The config and bootstrap script have been run against Canton 3.5.19, and the DvP scenario and test suites (`runTreasuryDvpScenario`, `runDvpSettlementTests`) pass with `dpm script` against one of its participants. CI builds the Docker image, boots the topology, and runs both suites against it on every push and pull request (`canton-topology` job). Scripts that call `setTime` only run on the test ledger.
 - **No field filters on the JSON Ledger API.** The v2 active-contracts endpoint filters by template and party only, so statement reconciliation (`camt.053`, `semt.002`) filters positions by account, currency, or ISIN in the client. A participant query store (PQS) would move that filtering into SQL.
 - **The website is a replay.** The trade walkthrough at https://aryafi-core.vercel.app replays the tested DvP scenario and does not connect to a ledger. Its code viewer shows the real source files.
 
 ## 7. Test Coverage
 
-`dpm test` runs 345 scripts, all passing. Coverage of the `aryafi-core` package: all 34 templates created and 156 of 224 template choices exercised (70%, including each template's implicit `Archive`). The coverage report does not count the token-standard interface choices; the tests exercise all fifteen that AryaFi implements (`Allocation_Settle`, which AryaFi refuses, to check the refusal). Property-based tests do not exist yet, and the multi-participant tests cover both DvPs, a repo, and an escrow (`runDvpAcrossNodes`, `runTokenDvpAcrossNodes`, `runFinancingAcrossNodes`).
+`dpm test` runs 361 scripts, all passing. Coverage of the `aryafi-core` package: all 34 templates created and 159 of 227 template choices exercised (70%, including each template's implicit `Archive`). The coverage report does not count interface choices; the tests exercise all fifteen token-standard choices that AryaFi implements (`Allocation_Settle`, which AryaFi refuses, to check the refusal) and both `CompliancePolicy` choices. Property-based tests do not exist yet, and the multi-participant tests cover both DvPs, a repo, an escrow, and screened transfers (`runDvpAcrossNodes`, `runTokenDvpAcrossNodes`, `runFinancingAcrossNodes`, `runComplianceAcrossNodes`).
 
 See [IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md) for how these limitations are addressed.

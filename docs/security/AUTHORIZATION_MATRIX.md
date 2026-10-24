@@ -11,6 +11,8 @@ The tables below list every template in the production modules (`daml/src/AryaFi
 
 Choices of the Canton Network Token Standard interfaces (`TransferFactory_*`, `TransferInstruction_*`, `AllocationFactory_*`, `SettlementFactory_*`, `Allocation_*`, `AllocationRequest_*`) are controlled by their `actors` argument. For these, the table names the party the implementation requires among the actors.
 
+Choices of AryaFi's compliance interface (`CompliancePolicy_*`, in the `aryafi-compliance-api` package) are controlled by their `requester` argument: any party that sees the policy contract, as an observer or because its owner disclosed it, can exercise them as itself. They only read the policy.
+
 ---
 
 ## 2. Authorization Matrix (generated from source)
@@ -86,6 +88,7 @@ Choices of the Canton Network Token Standard interfaces (`TransferFactory_*`, `T
 |  |  |  | `IsTransferable` *(read-only)* | `custodian` | Nonconsuming query: can this position be transferred or pledged? |
 |  |  |  | `IsFixedIncome` *(read-only)* | `custodian` | Nonconsuming query: is this a fixed-income instrument? |
 | **`DvpInstruction`** (Settlement.daml) | `settlementAgent, seller, buyer` | `observers` | `ExecuteDvpSettlement` | `settlementAgent` | Execute the DvP settlement atomically: deliver the locked security to the buyer and the locked cash to the seller in one transaction |
+|  |  |  | `ExecuteScreenedDvpSettlement` | `settlementAgent` | Execute the DvP settlement after evaluating the instruction's compliance requirements in the same transaction |
 |  |  |  | `FailDvpSettlement` | `settlementAgent` | Fail the settlement with a specific reason |
 |  |  |  | `CancelDvpSettlement` | `seller, buyer` | Cancel the DvP instruction by mutual agreement |
 |  |  |  | `RetrySettlement` | `settlementAgent, seller, buyer` | Retry a failed settlement instruction |
@@ -97,6 +100,7 @@ Choices of the Canton Network Token Standard interfaces (`TransferFactory_*`, `T
 |  |  |  | `SettlementFactory_PublicFetch` *(read-only)* | `actors` | Return the factory's view: its admin |
 |  |  |  | `AddAllocationFactoryClient` | `admin` | Let another account owner or settlement agent use this factory |
 |  |  |  | `RemoveAllocationFactoryClient` | `admin` | Stop an account owner or settlement agent using this factory |
+|  |  |  | `SetAllocationCompliance` | `admin` | Set or clear the compliance requirements allocations must meet |
 | **`PositionAllocation`** (TokenAllocation.daml) | `admin, authorizer` | `settlement.executors` | `Allocation_Settle` | `nobody (refused)` | Refused: an allocation settles only with the others of its batch, through SettlementFactory_SettleBatch, which checks every leg's other side |
 |  |  |  | `Allocation_Cancel` | `actors, including all of settlement.executors` | Release the funding to the authorizer, when the settlement will not happen |
 |  |  |  | `Allocation_Withdraw` | `actors, including authorizer` | Take the allocation back; a committed one only after its settlement deadline |
@@ -111,6 +115,7 @@ Choices of the Canton Network Token Standard interfaces (`TransferFactory_*`, `T
 |  |  |  | `TransferFactory_PublicFetch` *(read-only)* | `actors` | Return the factory's view: its admin |
 |  |  |  | `AddTransferFactoryClient` | `admin` | Let another account owner send and receive through this factory |
 |  |  |  | `RemoveTransferFactoryClient` | `admin` | Stop an account owner sending and receiving through this factory |
+|  |  |  | `SetTransferCompliance` | `admin` | Set or clear the compliance requirements transfers must meet |
 | **`PositionTransferInstruction`** (TokenTransfer.daml) | `admin, sender` | `receiver` | `TransferInstruction_Accept` | `actors, including receiver` | Deliver the locked amount to the receiver's account, before executeBefore |
 |  |  |  | `TransferInstruction_Reject` | `actors, including receiver` | Refuse the transfer: the amount is unlocked for the sender |
 |  |  |  | `TransferInstruction_Withdraw` | `actors, including sender` | Take the transfer back: the amount is unlocked for the sender |
@@ -214,7 +219,9 @@ Choices of the Canton Network Token Standard interfaces (`TransferFactory_*`, `T
 |  |  |  | `RemovePermittedAssetClass` | `regulator` | Remove a permitted asset class from this profile |
 |  |  |  | `UpdateRegulatoryFramework` | `regulator` | Update the regulatory framework reference (e.g. after a regulatory change) |
 |  |  |  | `IsAssetClassPermitted` *(read-only)* | `regulator` | Nonconsuming query: is the given asset class permitted in this active profile? |
-| **`KycAttestation`** (KYC.daml) | `authority` | `subjectParty, observers` | `UpdateKycStatus` | `authority` | Update the KYC status and extend the validity window |
+| **`KycAttestation`** (KYC.daml) | `authority` | `subjectParty, observers` | `CompliancePolicy_Describe` *(read-only)* | `requester` | Describe the policy: its owner, kind, and subject or instrument |
+|  |  |  | `CompliancePolicy_Evaluate` *(read-only)* | `requester` | Evaluate the policy for a request, at the current ledger time, without changing anything |
+|  |  |  | `UpdateKycStatus` | `authority` | Update the KYC status and extend the validity window |
 |  |  |  | `RevokeKyc` | `authority` | Revoke this KYC attestation (e.g. AML alert, watchlist match, data quality failure) |
 |  |  |  | `UpdateProviderRef` | `authority` | Link an external KYC provider reference to this attestation |
 |  |  |  | `AddKycObserver` | `authority` | Grant read-only visibility to an additional party (e.g. custodian, clearing member) |
@@ -227,12 +234,16 @@ Choices of the Canton Network Token Standard interfaces (`TransferFactory_*`, `T
 | **`RegulatoryReportRecord`** (RegulatoryReporting.daml) | `reportingParty` | `regulator` | `AcknowledgeReport` | `regulator` | Regulator acknowledges receipt and validation of this report |
 |  |  |  | `RejectReport` | `regulator` | Regulator rejects this report (e.g. failed validation, missing required fields) |
 |  |  |  | `SubmitAmendment` | `reportingParty` | Reporting party submits an amendment (corrected report) |
-| **`SanctionsAttestation`** (Sanctions.daml) | `screeningAuthority` | `subjectParty, observers` | `UpdateSanctionsStatus` | `screeningAuthority` | Update the sanctions status and extend validity |
+| **`SanctionsAttestation`** (Sanctions.daml) | `screeningAuthority` | `subjectParty, observers` | `CompliancePolicy_Describe` *(read-only)* | `requester` | Describe the policy: its owner, kind, and subject or instrument |
+|  |  |  | `CompliancePolicy_Evaluate` *(read-only)* | `requester` | Evaluate the policy for a request, at the current ledger time, without changing anything |
+|  |  |  | `UpdateSanctionsStatus` | `screeningAuthority` | Update the sanctions status and extend validity |
 |  |  |  | `BlockParty` | `screeningAuthority` | Block a party following a confirmed sanctions hit |
 |  |  |  | `ClearParty` | `screeningAuthority` | Clear a previously flagged or blocked party following compliance resolution |
 |  |  |  | `AddSanctionsObserver` | `screeningAuthority` | Add an observer (e.g. custodian, prime broker, regulator) |
 |  |  |  | `IsSanctionsClear` *(read-only)* | `screeningAuthority` | Nonconsuming query: is this party currently sanctions-clear and within validity? Returns True only when status is SanctionsClear and attestation has not expired |
-| **`TransferRestrictionRule`** (TransferRestrictions.daml) | `complianceOfficer` | `—` | `UpdateRestriction` | `complianceOfficer` | Update the regulatory category and lockup configuration |
+| **`TransferRestrictionRule`** (TransferRestrictions.daml) | `complianceOfficer` | `—` | `CompliancePolicy_Describe` *(read-only)* | `requester` | Describe the policy: its owner, kind, and subject or instrument |
+|  |  |  | `CompliancePolicy_Evaluate` *(read-only)* | `requester` | Evaluate the policy for a request, at the current ledger time, without changing anything |
+|  |  |  | `UpdateRestriction` | `complianceOfficer` | Update the regulatory category and lockup configuration |
 |  |  |  | `ActivateRule` | `complianceOfficer` | Activate this restriction rule |
 |  |  |  | `DeactivateRule` | `complianceOfficer` | Deactivate this restriction rule (e.g. after restriction period ends) |
 |  |  |  | `UpdateHoldingPeriod` | `complianceOfficer` | Update the holding period requirement |
@@ -253,16 +264,18 @@ These principles hold for the current code and are covered by the negative and a
 4. **Token-standard settlement needs both sides' allocations.** A registry's `SettlementFactory_SettleBatch` settles only when the allocations authorize exactly both sides of every leg, and only for the settlement's executors; a single allocation cannot be settled on its own. Each allocation is signed by its account owner, so a receiver signs the position it receives through its own allocation. Funding stays locked to the registry until settlement, cancellation by the executors, or withdrawal by the owner (for a committed allocation, only after its settlement deadline).
 5. **Token-standard DvP moves only what both parties allocated.** A `TokenDvpInstruction` is signed by the settlement agent alone. The seller and buyer consent only through their own allocations, and each registry settles only if those allocations authorize exactly both sides of its legs, so the agent cannot move anything they did not allocate.
 6. **Locks bind to a named lock holder.** `LockCash` / `LockSecurity` / `LockAsset` are authorized by owner and bank/custodian and name a lock holder. Only the lock holder can release the lock, or deliver the position to a receiver who co-authorizes (`SettleLockedCash` / `SettleLockedSecurity`). Neither owner nor custodian can withdraw a leg from an agreed settlement.
-7. **Atomic DvP.** `ExecuteDvpSettlement` validates both locked legs against the instruction (owner, account, ISIN, quantity, currency, amount, lock holder, lock reference) and delivers both in one transaction. The settlement agent cannot change economic terms; the instruction is signed by seller and buyer.
+7. **Atomic DvP.** `ExecuteDvpSettlement` validates both locked legs against the instruction (owner, account, ISIN, quantity, currency, amount, lock holder, lock reference) and delivers both in one transaction. The settlement agent cannot change economic terms; the instruction is signed by seller and buyer. An instruction with compliance requirements settles only through `ExecuteScreenedDvpSettlement`, which evaluates them first.
 8. **No party reduces its own obligation.** Loan repayments and interest payments are recorded by the lender; loan interest is computed from rate, day count, and ledger time; securities-lending fees need both counterparties to accrue and the lender to confirm payment; margin fulfilment needs the caller to confirm receipt; collateral release on a securities return is capped pro rata.
 9. **Disclosure of bilateral agreements needs both counterparties.** Adding an observer to a loan, repo, securities loan, margin call, pledge, or collateral position requires both principals.
 10. **Timestamps come from the ledger.** KYC verification, sanctions screening, pledge enforcement, redemption settlement, and report amendments record ledger time rather than a caller-supplied value.
 11. **Compliance officers cannot move value.** Their choices only approve, reject, or evaluate; they hold no controller rights over positions.
+12. **Compliance requirements are checked where value moves.** A bank or custodian that sets compliance requirements on its transfer or allocation factory evaluates the KYC and sanctions attestations and transfer restriction rules in the transfer, acceptance, or allocation transaction itself, through `CompliancePolicy_Evaluate`. A refused movement touches no holdings, and every decision is recorded as an `AuditLog`. The sender cannot skip the check, because the requirements are on the registry's factory; a settlement agent cannot skip it for a DvP whose instruction, signed by seller and buyer, carries requirements.
 
 ## 4. Known Gaps (see `docs/KNOWN_LIMITATIONS.md`)
 
 - Across separate Canton participants, multi-signatory contracts and joint choices need a `MultiPartyProposal`; without one they need all their parties in one submission. Token-standard transfers and `TokenDvpInstruction` need neither.
-- Policy evaluation choices (`IsKycValid`, `IsSanctionsClear`, `EvaluateEligibility`, `EvaluateTransfer`, `CheckOwnershipLimit`) are controlled by the policy owner only, so business workflows cannot call them inside their own transactions.
+- KYC attestations, sanctions attestations, and transfer restriction rules can be evaluated by business workflows through `CompliancePolicy`; eligibility policies, jurisdiction profiles, and ownership limits cannot yet. Their own evaluation choices (`IsKycValid`, `IsSanctionsClear`, `EvaluateEligibility`, `EvaluateTransfer`, `CheckOwnershipLimit`) remain controlled by the policy owner.
+- A workflow evaluates the evidence its caller supplies. Missing evidence is refused, but the workflow cannot tell that a party has a second, worse attestation, or that a rule by another accepted officer was left out.
 - Loans, repos, pledges, collateral, and margin calls reference assets and payments by text reference rather than contract ID, so the ledger does not prevent one asset being referenced by several agreements.
 
 ## 5. Regenerating This Matrix

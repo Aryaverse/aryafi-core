@@ -297,6 +297,24 @@ Each registry settles only if the allocations authorize exactly both sides of ea
 
 AryaFi's `TokenDvpInstruction` (`#aryafi-core:AryaFi.Finance.TokenDvp:TokenDvpInstruction`) does this for a settlement agent. The agent creates it alone and exercises `RequestTokenDvpAllocations`; seller and buyer then see an allocation request (`#splice-api-token-allocation-request-v2:Splice.Api.Token.AllocationRequestV2:AllocationRequest`) listing the allocations to make. `ExecuteTokenDvp` takes one batch per registry (its settlement factory, the allocations made there, and the choice context the registry asks for) and settles them in one transaction. A registry other than AryaFi's, such as Canton Coin's, supplies the choice context and the contracts to disclose through its off-ledger API; pass them in the batch's `extraArgs` and the submission's `disclosedContracts`.
 
+### 6.4 Compliance Evidence
+
+A bank or custodian whose factory has compliance requirements (`SetTransferCompliance`, `SetAllocationCompliance`) evaluates KYC attestations, sanctions attestations, and transfer restriction rules in the transfer, acceptance, or allocation itself. The submitter lists them in the choice context under `aryafi.io/compliance-evidence`, and discloses the ones its participant does not see (a counterparty's attestations, the instrument's rule), as the registry's off-ledger API would supply them:
+
+```json
+"extraArgs": {
+  "context": { "values": {
+    "aryafi.io/compliance-evidence": { "tag": "AV_List", "value": [
+      { "tag": "AV_ContractId", "value": "<sender's KYC attestation>" },
+      { "tag": "AV_ContractId", "value": "<sender's sanctions attestation>" },
+      { "tag": "AV_ContractId", "value": "<receiver's KYC attestation>" },
+      { "tag": "AV_ContractId", "value": "<receiver's sanctions attestation>" },
+      { "tag": "AV_ContractId", "value": "<the bond's transfer restriction rule>" } ] } } },
+  "meta": { "values": {} } }
+```
+
+with each contract the submitter cannot see in the submission's `disclosedContracts` (its template ID, contract ID, and `createdEventBlob`, which the authority or registry reads from its own participant). A refused transfer or allocation is not an error: the result is `TransferInstructionResult_Failed` or `AllocationInstructionResult_Failed`, no holdings are spent or locked, and the reason is in the result's `meta` under `aryafi.io/compliance-refusal`, for example `SANCTIONED: OFAC-SDN` or `NO_KYC_ATTESTATION for <party>`. The decision is also recorded as an `AuditLog` (`#aryafi-core:AryaFi.Common.Events:AuditLog`) for the registry and the submitter. The Daml Script tests (`ComplianceGateTest`, `runComplianceAcrossNodes`) make these calls; the JSON form above follows from the Daml types.
+
 ---
 
 ## 7. Concrete Client Implementation (TypeScript)

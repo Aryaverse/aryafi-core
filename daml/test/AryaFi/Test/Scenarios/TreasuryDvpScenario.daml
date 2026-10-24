@@ -278,6 +278,7 @@ testTokenizedTreasuryDvp = script do
       status = PendingSettlement
       failureReason = None
       observers = []
+      compliance = None
 
   -- Step 8b: Settlement agent adds CSD and regulator as observers
   dvpWithObsCid <- submit dtcc do
@@ -425,6 +426,7 @@ testParallelDvpInstructions = script do
             status = PendingSettlement
             failureReason = None
             observers = []
+            compliance = None
 
   (secA, cashA) <- stageLegs sellerA buyerA "TRD-DVP-PARALLEL-001"
   (secB, cashB) <- stageLegs sellerB buyerB "TRD-DVP-PARALLEL-002"

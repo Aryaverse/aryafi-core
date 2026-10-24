@@ -77,9 +77,9 @@ runTokenDvpAcrossNodes input = do
   -- Each registry issues to its client from its own node
   let clients = [seller, buyer, agent]
   custodianTransfers <- submit custodian do
-    createCmd PositionTransferFactory with admin = custodian; clients = custodian :: clients
+    createCmd PositionTransferFactory with admin = custodian; clients = custodian :: clients; compliance = None
   bankTransfers <- submit bank do
-    createCmd PositionTransferFactory with admin = bank; clients = bank :: clients
+    createCmd PositionTransferFactory with admin = bank; clients = bank :: clients; compliance = None
   bondInventory <- submit custodian do
     createCmd SecurityPosition with
       custodian; owner = custodian; accountId = AccountId "INVENTORY"; isin = bondIsin

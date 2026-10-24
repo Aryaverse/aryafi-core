@@ -7,7 +7,7 @@
 
 ## 1. Where We Are
 
-v2.0.0 made the library honest and working, and v3.0.0 moved it to Daml 3 / Canton 3.5, the platform the Canton Network runs. It builds with `-Wall -Werror`, 345 test scripts pass, and atomic DvP moves real positions on a real five-participant Canton 3.5 topology. Authorization defects are fixed: receiver-authorized transfers, locks held by a named lock holder, and no party able to reduce its own obligation. The docs and website now describe the code as it is.
+v2.0.0 made the library honest and working, and v3.0.0 moved it to Daml 3 / Canton 3.5, the platform the Canton Network runs. It builds with `-Wall -Werror`, 361 test scripts pass, and atomic DvP moves real positions on a real five-participant Canton 3.5 topology. Authorization defects are fixed: receiver-authorized transfers, locks held by a named lock holder, and no party able to reduce its own obligation. The docs and website now describe the code as it is.
 
 What v3.0.0 is **not** yet is what the requirements call for: *"software infrastructure — not a collection of sample contracts."* Today, only DvP composes primitives. Every other workflow (loan, repo, securities lending, margin, pledge, escrow, subscription, redemption, transfer) is a standalone status record that references assets by text. Compliance policies are correct but cannot be called from those workflows. Every multi-party contract depends on co-submission, which does not work across separate participants.
 
@@ -17,7 +17,7 @@ What v3.0.0 is **not** yet is what the requirements call for: *"software infrast
 | Synchronized DvP (§3, §26) | Done, Model 1. Both `DvpInstruction` and the token-standard DvP run with each institution on its own participant | — |
 | Loan references compliance via controlled interfaces (§10) | No | Workstream 3 |
 | Repo substitution re-runs eligibility (§11) | No | Workstreams 3, 5 |
-| Generic, policy-driven transfer engine (§12) | Manual officer approval | Workstream 3 |
+| Generic, policy-driven transfer engine (§12) | Token-standard transfers, allocations, and the screened DvP evaluate KYC, sanctions, and transfer rules in the transaction (3.3.0); `AssetTransferRequest` still needs manual approval | Workstream 3 |
 | Idempotency, correlation, reconciliation interfaces (§15) | Fields exist; not enforced | Workstreams 6, 9 |
 | Privacy tested from every participant (§16, §18) | Single-ledger tests only | Workstream 7 |
 | Property-based and concurrency tests (§18) | None | Workstream 7 |
@@ -58,6 +58,7 @@ The options as they were weighed:
 - Every decision (approved or rejected, with reasons) is recorded as an audit event.
 - Asset classes become the typed `AssetClass`; jurisdictions gain effective dates (§8); `minCreditRating` is evaluated; ownership percentages are computed from holdings, not supplied by the caller.
 *Done when:* a transfer to a sanctioned or non-whitelisted receiver fails inside the transfer transaction, with the reason recorded.
+*Done in 3.3.0:* KYC attestations, sanctions attestations, and transfer restriction rules implement `CompliancePolicy`, an interface in its own package (`aryafi-compliance-api`) that any party seeing the contract can evaluate; authorities share their contracts by explicit disclosure. A bank or custodian sets `ComplianceRequirements` (accepted KYC and sanctions authorities, transfer-rule officers, restricted instruments) on its token-standard transfer and allocation factories, and a `DvpInstruction` can carry them. `AryaFi.Compliance.Gate` evaluates the evidence the caller passes in the transfer, acceptance, allocation, or `ExecuteScreenedDvpSettlement` transaction, for both parties; a refused movement touches no holdings, and every decision is recorded as an `AuditLog` with its reasons. A transfer to a sanctioned or non-whitelisted receiver fails inside the transfer transaction with the reason recorded (`testTransferToSanctionedReceiverFails`, `testTransferToNonWhitelistedReceiverFails`), also with the authority, custodian, seller, and buyer on their own participants (`runComplianceAcrossNodes`). Next: `AssetTransferRequest` completion and the financing contracts; eligibility, jurisdiction, and ownership limits as policies; then typed asset classes, jurisdiction effective dates, `minCreditRating`, and ownership computed from holdings, which change existing templates and need a new major version or new templates.
 
 **4. Financing contracts that hold real assets.** Rebuild the financing workflows on Workstreams 1–3:
 - **Pledge and collateral** lock the pledged holding to the pledgee or tri-party agent, which closes the double-pledge gap (threat E-04). Release and enforcement act on the locked holding.

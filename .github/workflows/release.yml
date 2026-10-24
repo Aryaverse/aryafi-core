@@ -67,11 +67,14 @@ jobs:
         working-directory: daml/test
         run: dpm test
 
-      # Only the production package is released; the test package stays in CI.
-      - name: Collect Release DAR
+      # The production package and the compliance interface package, which
+      # authorities and registries outside AryaFi build against, are released;
+      # the test package stays in CI.
+      - name: Collect Release DARs
         run: |
           mkdir -p release-artifacts
           cp .daml/dist/aryafi-core-*.dar release-artifacts/
+          cp daml/compliance-api/.daml/dist/aryafi-compliance-api-*.dar release-artifacts/
 
       - name: Generate Cryptographic Checksums
         working-directory: release-artifacts

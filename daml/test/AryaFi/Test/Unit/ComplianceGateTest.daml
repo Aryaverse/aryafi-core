@@ -1,0 +1,514 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Compliance checked inside the transactions that move assets
+-- (AryaFi.Compliance.Gate): token-standard transfers and allocations at a
+-- custodian with compliance requirements, and a screened DvP. The KYC
+-- authority, the sanctions screener, and the compliance officer disclose
+-- their attestations and rule to whoever submits, as a registry's off-ledger
+-- API would, and the custodian or agent evaluates them in the transaction.
+module AryaFi.Test.Unit.ComplianceGateTest where
+
+import qualified DA.TextMap as TextMap
+import DA.Text (isInfixOf)
+import DA.Time (addRelTime, days, minutes)
+import Daml.Script
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
+import Splice.Api.Token.MetadataV1 (AnyValue(..), ChoiceContext(..), ExtraArgs(..), emptyMetadata)
+import Splice.Api.Token.TransferInstructionV2
+import Splice.Api.Token.AllocationV2 (SettlementInfo(..), TransferLeg(..))
+import Splice.Api.Token.AllocationInstructionV2
+import AryaFi.Common.Events (AuditLog(..), EventType(..))
+import AryaFi.Common.Identifiers
+import AryaFi.Common.Types (SettlementStatus(..))
+import AryaFi.Compliance.Gate
+import AryaFi.Compliance.KYC (KycStatus(..))
+import AryaFi.Compliance.Sanctions (SanctionsAttestation, SanctionsStatus(..), BlockParty(..))
+import AryaFi.Finance.Settlement
+import AryaFi.Finance.TokenAllocation
+import AryaFi.Finance.TokenTransfer
+import AryaFi.Test.Scenarios.DvpSettlementTest (DvpFixture(..), allocateTestParty, bondIsin, setupSecurityPosition, stageDvpFor)
+import AryaFi.Test.Unit.CompliancePolicyTest (Evidence(..), evidenceOf, forgeKyc, issueKyc, issueRule, issueSanctions, whitelistOnly)
+import AryaFi.Test.Unit.TokenAllocationTest (receiveSide, sendSide, spec)
+import AryaFi.Test.Unit.TokenTransferTest (submitFailsWith)
+
+-- ---------------------------------------------------------------------------
+-- Fixture and helpers
+-- ---------------------------------------------------------------------------
+
+-- | A custodian whose transfers need KYC by one authority, sanctions screening
+-- by one screener, and, for the bond, a transfer rule by its compliance officer.
+data Fixture = Fixture
+  with
+    custodian : Party
+    kycAuthority : Party
+    screener : Party
+    officer : Party
+    agent : Party
+    alice : Party
+    bob : Party
+    carol : Party
+    requirements : ComplianceRequirements
+    factoryCid : ContractId PositionTransferFactory
+
+bond : Text
+bond = unISIN bondIsin
+
+setup : Text -> Script Fixture
+setup test = do
+  custodian <- allocateTestParty "Custodian" test
+  kycAuthority <- allocateTestParty "KycAuthority" test
+  screener <- allocateTestParty "Screener" test
+  officer <- allocateTestParty "ComplianceOfficer" test
+  agent <- allocateTestParty "Agent" test
+  alice <- allocateTestParty "Alice" test
+  bob <- allocateTestParty "Bob" test
+  carol <- allocateTestParty "Carol" test
+  let requirements = ComplianceRequirements with
+        kycAuthorities = [kycAuthority]
+        sanctionsAuthorities = [screener]
+        transferRuleOfficers = [officer]
+        restrictedInstruments = [bond]
+  factoryCid <- submit custodian do
+    createCmd PositionTransferFactory with
+      admin = custodian; clients = [alice, bob, carol]; compliance = Some requirements
+  pure Fixture with ..
+
+-- | Verified KYC and a clear sanctions screening for `party`.
+cleared : Fixture -> Party -> Script [Evidence]
+cleared f party = do
+  kyc <- issueKyc f.kycAuthority party KycVerified 365
+  screening <- issueSanctions f.screener party SanctionsClear 30
+  pure [kyc, screening]
+
+-- | The bond's transfer rule: only Bob may receive it.
+bobOnlyRule : Fixture -> Script Evidence
+bobOnlyRule f = issueRule f.officer bondIsin (whitelistOnly [f.bob])
+
+-- | The choice context naming the evidence.
+evidenceArgs : [Evidence] -> ExtraArgs
+evidenceArgs evidence = ExtraArgs with
+  context = ChoiceContext with
+    values = TextMap.fromList
+      [(complianceEvidenceKey, AV_List [AV_ContractId (coerceContractId e.policyCid) | e <- evidence])]
+  meta = emptyMetadata
+
+-- | Submit as `party`, with the evidence disclosed.
+submitWithEvidence : Party -> [Evidence] -> Commands a -> Script a
+submitWithEvidence party evidence = submit (actAs party <> discloseMany (map (\e -> e.disclosure) evidence))
+
+account : Fixture -> Party -> Text -> HoldingV2.Account
+account f owner id = HoldingV2.Account with owner = Some owner; provider = Some f.custodian; id
+
+-- | Alice's 1,000,000 of the bond at the custodian.
+aliceBond : Fixture -> Script (ContractId HoldingV2.Holding)
+aliceBond f = toInterfaceContractId <$> setupSecurityPosition f.custodian f.alice (AccountId "ACC-ALICE") 1000000.0
+
+-- | A transfer of 250,000 of the bond from Alice to `receiver`.
+bondTransfer : Fixture -> Party -> ContractId HoldingV2.Holding -> Script Transfer
+bondTransfer f receiver holding = do
+  now <- getTime
+  pure Transfer with
+    sender = account f f.alice "ACC-ALICE"
+    receiver = account f receiver "ACC-RECEIVER"
+    amount = 250000.0
+    instrumentId = HoldingV2.InstrumentId with admin = f.custodian; id = bond
+    requestedAt = addRelTime now (minutes (-1))
+    executeBefore = addRelTime now (days 1)
+    inputHoldingCids = [holding]
+    meta = emptyMetadata
+
+instruct : Fixture -> Transfer -> [Evidence] -> Script TransferInstructionResult
+instruct f transfer evidence = submitWithEvidence f.alice evidence do
+  exerciseCmd (toInterfaceContractId @TransferFactory f.factoryCid) TransferFactory_Transfer with
+    transfer; actors = [f.alice]; extraArgs = evidenceArgs evidence
+
+pending : TransferInstructionResult -> Script (ContractId TransferInstruction)
+pending result = case result.output of
+  TransferInstructionResult_Pending cid -> pure cid
+  other -> abort ("Expected a pending transfer, got " <> show other)
+
+acceptWith : Party -> [Evidence] -> ContractId TransferInstruction -> Script TransferInstructionResult
+acceptWith receiver evidence cid = submitWithEvidence receiver evidence do
+  exerciseCmd cid TransferInstruction_Accept with actors = [receiver]; extraArgs = evidenceArgs evidence
+
+-- | Check that a token-standard result's metadata gives a refusal mentioning `expected`.
+expectRefusal : Text -> TextMap.TextMap Text -> Script ()
+expectRefusal expected meta = do
+  let reason = TextMap.lookup complianceRefusalKey meta
+  assertMsg ("Expected a refusal mentioning \"" <> expected <> "\", got " <> show reason)
+    (optional False (isInfixOf expected) reason)
+
+expectRefusedTransfer : Text -> TransferInstructionResult -> Script ()
+expectRefusedTransfer expected result = do
+  assertMsg ("Expected a failed transfer, got " <> show result.output) (result.output == TransferInstructionResult_Failed)
+  expectRefusal expected result.meta.values
+
+-- | The compliance decisions recorded for `party`: whether each passed, and its reason.
+decisionsSeenBy : Party -> Script [(Bool, Text)]
+decisionsSeenBy party = do
+  logs <- query @AuditLog party
+  pure [decision | (_, log) <- logs, Some decision <- [complianceDecision log.eventType]]
+
+complianceDecision : EventType -> Optional (Bool, Text)
+complianceDecision event = case event of
+  ComplianceCheckPassed _ -> Some (True, "")
+  ComplianceCheckFailed with failureReason -> Some (False, failureReason)
+  _ -> None
+
+-- | Check the decisions `party` sees, in any order: one per expected reason,
+-- "" for a pass.
+expectDecisions : Party -> [Text] -> Script ()
+expectDecisions party expected = do
+  decisions <- decisionsSeenBy party
+  assertMsg ("Expected decisions " <> show expected <> ", got " <> show decisions)
+    (matchDecisions expected decisions)
+
+-- | Whether each expected reason matches a different decision, and none is left over.
+matchDecisions : [Text] -> [(Bool, Text)] -> Bool
+matchDecisions [] decisions = null decisions
+matchDecisions (reason :: rest) decisions =
+  case break matches decisions of
+    (before, _ :: after) -> matchDecisions rest (before ++ after)
+    _ -> False
+  where
+    matches (passed, actual) = if reason == "" then passed else not passed && reason `isInfixOf` actual
+
+-- | Alice still has her bond holding, unlocked.
+expectUntouched : Fixture -> ContractId HoldingV2.Holding -> Script ()
+expectUntouched f holding = do
+  kept <- queryInterfaceContractId f.alice holding
+  assertMsg "Alice's holding is unchanged and unlocked" (fmap (\v -> v.lock) kept == Some None)
+
+-- ---------------------------------------------------------------------------
+-- Transfers
+-- ---------------------------------------------------------------------------
+
+-- With every party cleared and Bob whitelisted, the transfer is instructed
+-- and, evaluated again, accepted. Each decision is recorded.
+testScreenedTransferAccepted : Script ()
+testScreenedTransferAccepted = script do
+  f <- setup "GATE-ACCEPTED"
+  holding <- aliceBond f
+  aliceEvidence <- cleared f f.alice
+  bobEvidence <- cleared f f.bob
+  rule <- bobOnlyRule f
+  let evidence = rule :: aliceEvidence ++ bobEvidence
+  transfer <- bondTransfer f f.bob holding
+  instructionCid <- instruct f transfer evidence >>= pending
+  expectDecisions f.custodian [""]
+  expectDecisions f.alice [""]
+  expectDecisions f.bob []
+
+  accepted <- acceptWith f.bob evidence instructionCid
+  case accepted.output of
+    TransferInstructionResult_Completed [received] -> do
+      held <- queryInterfaceContractId f.bob received
+      assertMsg "Bob holds the bond" (fmap (\v -> (v.amount, v.lock)) held == Some (250000.0, None))
+    other -> abort ("Expected a completed transfer, got " <> show other)
+  expectDecisions f.custodian ["", ""]
+  expectDecisions f.bob [""]
+
+-- The plan's test: a transfer to a sanctioned receiver fails inside the
+-- transfer transaction, with the reason recorded. Nothing moves.
+testTransferToSanctionedReceiverFails : Script ()
+testTransferToSanctionedReceiverFails = script do
+  f <- setup "GATE-SANCTIONED"
+  holding <- aliceBond f
+  aliceEvidence <- cleared f f.alice
+  bobKyc <- issueKyc f.kycAuthority f.bob KycVerified 365
+  bobBlocked <- issueSanctions f.screener f.bob (SanctionsBlocked "OFAC-SDN") 30
+  rule <- bobOnlyRule f
+  transfer <- bondTransfer f f.bob holding
+  result <- instruct f transfer (rule :: bobKyc :: bobBlocked :: aliceEvidence)
+  expectRefusedTransfer "SANCTIONED: OFAC-SDN" result
+  assertMsg "No holdings are returned: none were spent" (null result.senderChangeCids)
+  expectUntouched f holding
+  bobHoldings <- queryInterface @HoldingV2.Holding f.bob
+  assertMsg "Bob receives nothing" (null bobHoldings)
+  expectDecisions f.custodian ["SANCTIONED: OFAC-SDN"]
+  expectDecisions f.alice ["SANCTIONED: OFAC-SDN"]
+  expectDecisions f.bob []
+
+-- The plan's other test: a receiver the bond's rule does not whitelist.
+testTransferToNonWhitelistedReceiverFails : Script ()
+testTransferToNonWhitelistedReceiverFails = script do
+  f <- setup "GATE-WHITELIST"
+  holding <- aliceBond f
+  aliceEvidence <- cleared f f.alice
+  carolEvidence <- cleared f f.carol
+  rule <- bobOnlyRule f
+  transfer <- bondTransfer f f.carol holding
+  result <- instruct f transfer (rule :: aliceEvidence ++ carolEvidence)
+  expectRefusedTransfer "RECEIVER_NOT_WHITELISTED" result
+  expectUntouched f holding
+  expectDecisions f.alice ["RECEIVER_NOT_WHITELISTED"]
+
+-- Missing evidence is refused, only the custodian's authorities count, and a
+-- forged attestation fails the transfer.
+testEvidenceIsRequired : Script ()
+testEvidenceIsRequired = script do
+  f <- setup "GATE-EVIDENCE"
+  holding <- aliceBond f
+  transfer <- bondTransfer f f.bob holding
+  none <- instruct f transfer []
+  expectRefusedTransfer "NO_KYC_ATTESTATION for" none
+  expectRefusal "NO_SANCTIONS_SCREENING by" none.meta.values
+  expectRefusal "NO_TRANSFER_RULE for " none.meta.values
+
+  -- A KYC attestation and a rule by parties the custodian does not rely on
+  aliceEvidence <- cleared f f.alice
+  bobScreening <- issueSanctions f.screener f.bob SanctionsClear 30
+  otherKyc <- issueKyc f.carol f.bob KycVerified 365
+  otherRule <- issueRule f.carol bondIsin (whitelistOnly [f.bob])
+  others <- instruct f transfer (otherKyc :: otherRule :: bobScreening :: aliceEvidence)
+  expectRefusedTransfer "NO_KYC_ATTESTATION for" others
+  expectRefusal "NO_TRANSFER_RULE for" others.meta.values
+
+  -- Expired KYC, and a screening flagged for review
+  expiredKyc <- issueKyc f.kycAuthority f.bob KycVerified (-1)
+  flagged <- issueSanctions f.screener f.bob (SanctionsFlagged "NAME-MATCH-0042") 30
+  rule <- bobOnlyRule f
+  expired <- instruct f transfer (expiredKyc :: flagged :: rule :: aliceEvidence)
+  expectRefusedTransfer "KYC_EXPIRED" expired
+  bobKyc <- issueKyc f.kycAuthority f.bob KycVerified 365
+  review <- instruct f transfer (bobKyc :: flagged :: rule :: aliceEvidence)
+  expectRefusedTransfer "MANUAL_REVIEW: SANCTIONS_FLAGGED: NAME-MATCH-0042" review
+  expectUntouched f holding
+  expectDecisions f.alice
+    ["NO_KYC_ATTESTATION", "NO_KYC_ATTESTATION", "KYC_EXPIRED", "MANUAL_REVIEW: SANCTIONS_FLAGGED"]
+
+  -- A KYC attestation forged in the KYC authority's name fails the transfer
+  forged <- forgeKyc f.carol f.kycAuthority f.bob
+  let withForgery = forged :: bobScreening :: rule :: aliceEvidence
+  forgedTransfer <- trySubmit (actAs f.alice <> discloseMany (map (\e -> e.disclosure) withForgery)) do
+    exerciseCmd (toInterfaceContractId @TransferFactory f.factoryCid) TransferFactory_Transfer with
+      transfer; actors = [f.alice]; extraArgs = evidenceArgs withForgery
+  case forgedTransfer of
+    Left err -> assertMsg ("Expected the forgery to be refused, got " <> show err)
+      ("The policy's owner is not its signatory" `isInfixOf` show err)
+    Right _ -> abort "A forged attestation must not be accepted"
+  expectUntouched f holding
+
+-- Bob is blocked after Alice instructs the transfer. His acceptance is
+-- evaluated again, refused, and the amount goes back to Alice. The screening
+-- he was cleared by is archived, so it cannot be used.
+testReceiverScreenedAgainOnAcceptance : Script ()
+testReceiverScreenedAgainOnAcceptance = script do
+  f <- setup "GATE-ACCEPTANCE"
+  holding <- aliceBond f
+  aliceEvidence <- cleared f f.alice
+  bobKyc <- issueKyc f.kycAuthority f.bob KycVerified 365
+  bobScreening <- issueSanctions f.screener f.bob SanctionsClear 30
+  rule <- bobOnlyRule f
+  let evidence = rule :: bobKyc :: bobScreening :: aliceEvidence
+  transfer <- bondTransfer f f.bob holding
+  instructionCid <- instruct f transfer evidence >>= pending
+
+  blockedCid <- submit f.screener do
+    exerciseCmd (fromInterfaceContractId @SanctionsAttestation bobScreening.policyCid) BlockParty with
+      sanctionsListRef = "OFAC-SDN"
+  stale <- trySubmit (actAs f.bob <> discloseMany (map (\e -> e.disclosure) evidence)) do
+    exerciseCmd instructionCid TransferInstruction_Accept with actors = [f.bob]; extraArgs = evidenceArgs evidence
+  case stale of
+    Left _ -> pure ()
+    Right _ -> abort "An archived screening cannot be used as evidence"
+
+  blocked <- evidenceOf f.screener blockedCid
+  result <- acceptWith f.bob (rule :: bobKyc :: blocked :: aliceEvidence) instructionCid
+  expectRefusedTransfer "SANCTIONED: OFAC-SDN" result
+  case result.senderChangeCids of
+    [returned] -> do
+      back <- queryInterfaceContractId f.alice returned
+      assertMsg "The amount is unlocked for Alice"
+        (fmap (\v -> (v.amount, v.lock, v.account.owner)) back == Some (250000.0, None, Some f.alice))
+    other -> abort ("Expected the amount returned to Alice, got " <> show other)
+  expectDecisions f.custodian ["", "SANCTIONED: OFAC-SDN"]
+  expectDecisions f.alice ["", "SANCTIONED: OFAC-SDN"]
+  expectDecisions f.bob ["SANCTIONED: OFAC-SDN"]
+
+-- The custodian sets and clears the requirements; without them, transfers are
+-- not screened.
+testComplianceRequirementsChange : Script ()
+testComplianceRequirementsChange = script do
+  f <- setup "GATE-CHANGE"
+  submitFailsWith "The factory already has these compliance requirements" [f.custodian] do
+    exerciseCmd f.factoryCid SetTransferCompliance with requirements = Some f.requirements
+  unscreened <- submit f.custodian do
+    exerciseCmd f.factoryCid SetTransferCompliance with requirements = None
+  holding <- aliceBond f
+  transfer <- bondTransfer f f.carol holding
+  result <- submit f.alice do
+    exerciseCmd (toInterfaceContractId @TransferFactory unscreened) TransferFactory_Transfer with
+      transfer; actors = [f.alice]; extraArgs = evidenceArgs []
+  _ <- pending result
+  expectDecisions f.custodian []
+
+-- ---------------------------------------------------------------------------
+-- Allocations
+-- ---------------------------------------------------------------------------
+
+-- Alice allocates her side of a bond leg to Bob at a custodian with
+-- compliance requirements: refused while Bob is blocked, made once he is
+-- clear. Once the custodian clears the requirements, Bob's side needs no
+-- evidence.
+testScreenedAllocation : Script ()
+testScreenedAllocation = script do
+  f <- setup "GATE-ALLOCATION"
+  factory <- submit f.custodian do
+    createCmd PositionAllocationFactory with
+      admin = f.custodian; clients = [f.alice, f.bob, f.agent]; compliance = Some f.requirements
+  holding <- aliceBond f
+  aliceEvidence <- cleared f f.alice
+  bobKyc <- issueKyc f.kycAuthority f.bob KycVerified 365
+  rule <- bobOnlyRule f
+  now <- getTime
+  let settlement = SettlementInfo with executors = [f.agent]; id = "TRADE-GATE"; cid = None; meta = emptyMetadata
+      leg = TransferLeg with
+        transferLegId = "bond"
+        sender = account f f.alice "ACC-ALICE"
+        receiver = account f f.bob "ACC-BOB"
+        amount = 250000.0
+        instrumentId = bond
+        meta = emptyMetadata
+      allocateWith evidence = submitWithEvidence f.alice evidence do
+        exerciseCmd (toInterfaceContractId @AllocationFactory factory) AllocationFactory_Allocate with
+          settlement
+          allocation = spec f.custodian leg.sender [sendSide leg]
+          requestedAt = addRelTime now (minutes (-1))
+          inputHoldingCids = [holding]
+          extraArgs = evidenceArgs evidence
+          actors = [f.alice]
+
+  bobBlocked <- issueSanctions f.screener f.bob (SanctionsBlocked "OFAC-SDN") 30
+  refused <- allocateWith (rule :: bobKyc :: bobBlocked :: aliceEvidence)
+  assertMsg ("Expected a failed allocation, got " <> show refused.output)
+    (refused.output == AllocationInstructionResult_Failed)
+  expectRefusal "SANCTIONED: OFAC-SDN" refused.meta.values
+  assertMsg "No holdings are returned: none were spent" (TextMap.null refused.authorizerChangeCids)
+  expectUntouched f holding
+
+  bobClear <- issueSanctions f.screener f.bob SanctionsClear 30
+  made <- allocateWith (rule :: bobKyc :: bobClear :: aliceEvidence)
+  case made.output of
+    AllocationInstructionResult_Completed _ -> pure ()
+    other -> abort ("Expected an allocation, got " <> show other)
+  expectDecisions f.custodian ["SANCTIONED: OFAC-SDN", ""]
+  expectDecisions f.alice ["SANCTIONED: OFAC-SDN", ""]
+  expectDecisions f.agent []
+
+  submitFailsWith "The factory already has these compliance requirements" [f.custodian] do
+    exerciseCmd factory SetAllocationCompliance with requirements = Some f.requirements
+  unscreened <- submit f.custodian do
+    exerciseCmd factory SetAllocationCompliance with requirements = None
+  received <- submit f.bob do
+    exerciseCmd (toInterfaceContractId @AllocationFactory unscreened) AllocationFactory_Allocate with
+      settlement
+      allocation = spec f.custodian leg.receiver [receiveSide leg]
+      requestedAt = addRelTime now (minutes (-1))
+      inputHoldingCids = []
+      extraArgs = evidenceArgs []
+      actors = [f.bob]
+  case received.output of
+    AllocationInstructionResult_Completed _ -> pure ()
+    other -> abort ("Expected an allocation, got " <> show other)
+  expectDecisions f.bob []
+
+-- ---------------------------------------------------------------------------
+-- Screened DvP
+-- ---------------------------------------------------------------------------
+
+-- | A staged DvP of the bond, Alice selling to Bob, whose instruction carries
+-- the custodian's requirements.
+stageScreenedDvp : Fixture -> Text -> Script DvpFixture
+stageScreenedDvp f lockRef = do
+  bank <- allocateTestParty "Bank" lockRef
+  staged <- stageDvpFor lockRef f.custodian bank f.alice f.bob f.agent
+  Some instruction <- queryContractId f.agent staged.dvpCid
+  _ <- submit (actAs [f.alice, f.bob]) do
+    exerciseCmd staged.dvpCid CancelDvpSettlement with reason = "Replaced by a screened instruction"
+  dvpCid <- submit (actAs [f.agent, f.alice, f.bob]) do
+    createCmd instruction with compliance = Some f.requirements
+  pure staged with dvpCid
+
+screenedExecute : DvpFixture -> [Evidence] -> Script ScreenedDvpResult
+screenedExecute d evidence = submitWithEvidence d.agent evidence do
+  exerciseCmd d.dvpCid ExecuteScreenedDvpSettlement with
+    sellerSecurityCid = d.lockedSecCid
+    buyerCashCid = d.lockedCashCid
+    evidence = map (\e -> e.policyCid) evidence
+
+-- With both parties cleared, the screened DvP settles; the agent cannot skip
+-- the screening.
+testScreenedDvpSettles : Script ()
+testScreenedDvpSettles = script do
+  f <- setup "GATE-DVP"
+  d <- stageScreenedDvp f "GATE-DVP"
+  submitFailsWith "This DvP has compliance requirements" [f.agent] do
+    exerciseCmd d.dvpCid ExecuteDvpSettlement with
+      sellerSecurityCid = d.lockedSecCid; buyerCashCid = d.lockedCashCid
+  aliceEvidence <- cleared f f.alice
+  bobEvidence <- cleared f f.bob
+  rule <- bobOnlyRule f
+  result <- screenedExecute d (rule :: aliceEvidence ++ bobEvidence)
+  case result of
+    ScreenedDvpSettled with settled -> do
+      delivered <- queryContractId f.bob settled.deliveredSecurityCid
+      assertMsg "Bob holds the bond" (fmap (\p -> p.owner) delivered == Some f.bob)
+    other -> abort ("Expected the DvP to settle, got " <> show other)
+  -- One decision for each leg, recorded for the agent, seller, and buyer
+  expectDecisions f.agent ["", ""]
+  expectDecisions f.alice ["", ""]
+  expectDecisions f.bob ["", ""]
+
+-- With Bob blocked, the DvP fails with the reason; both legs stay locked to
+-- the agent, as when it fails a DvP itself.
+testScreenedDvpFailsForSanctionedBuyer : Script ()
+testScreenedDvpFailsForSanctionedBuyer = script do
+  f <- setup "GATE-DVP-FAIL"
+  d <- stageScreenedDvp f "GATE-DVP-FAIL"
+  aliceEvidence <- cleared f f.alice
+  bobKyc <- issueKyc f.kycAuthority f.bob KycVerified 365
+  bobBlocked <- issueSanctions f.screener f.bob (SanctionsBlocked "OFAC-SDN") 30
+  rule <- bobOnlyRule f
+  result <- screenedExecute d (rule :: bobKyc :: bobBlocked :: aliceEvidence)
+  case result of
+    ScreenedDvpFailed with instructionCid; reason -> do
+      assertMsg ("Expected a sanctions reason, got " <> reason) ("SANCTIONED: OFAC-SDN" `isInfixOf` reason)
+      Some failed <- queryContractId f.agent instructionCid
+      assertMsg "The instruction is Failed with the reason" (failed.status == Failed reason)
+    other -> abort ("Expected the DvP to fail, got " <> show other)
+  Some security <- queryContractId f.agent d.lockedSecCid
+  Some cash <- queryContractId f.agent d.lockedCashCid
+  assertMsg "Both legs stay locked to the agent"
+    (security.lockHolder == Some f.agent && cash.lockHolder == Some f.agent)
+  expectDecisions f.alice ["SANCTIONED: OFAC-SDN", "SANCTIONED: OFAC-SDN"]
+  expectDecisions f.bob ["SANCTIONED: OFAC-SDN", "SANCTIONED: OFAC-SDN"]
+
+-- An instruction without requirements is settled the usual way.
+testScreenedDvpNeedsRequirements : Script ()
+testScreenedDvpNeedsRequirements = script do
+  f <- setup "GATE-DVP-NONE"
+  bank <- allocateTestParty "Bank" "GATE-DVP-NONE"
+  d <- stageDvpFor "GATE-DVP-NONE" f.custodian bank f.alice f.bob f.agent
+  submitFailsWith "This DvP has no compliance requirements" [f.agent] do
+    exerciseCmd d.dvpCid ExecuteScreenedDvpSettlement with
+      sellerSecurityCid = d.lockedSecCid; buyerCashCid = d.lockedCashCid; evidence = []
+
+-- ---------------------------------------------------------------------------
+-- Runner
+-- ---------------------------------------------------------------------------
+
+-- | Every test in this module, for running against a participant: none sets time.
+runComplianceGateTests : Script ()
+runComplianceGateTests = script do
+  testScreenedTransferAccepted
+  testTransferToSanctionedReceiverFails
+  testTransferToNonWhitelistedReceiverFails
+  testEvidenceIsRequired
+  testReceiverScreenedAgainOnAcceptance
+  testComplianceRequirementsChange
+  testScreenedAllocation
+  testScreenedDvpSettles
+  testScreenedDvpFailsForSanctionedBuyer
+  testScreenedDvpNeedsRequirements

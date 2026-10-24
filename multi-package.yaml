@@ -1,6 +1,8 @@
 # Production templates (aryafi-core) and their Daml Script tests
 # (aryafi-core-test) are separate packages, so the production DAR does not
-# depend on daml-script.
+# depend on daml-script. The compliance interface (aryafi-compliance-api) is a
+# package of its own, so aryafi-core, which implements it, stays upgradeable.
 packages:
+  - ./daml/compliance-api
   - .
   - ./daml/test

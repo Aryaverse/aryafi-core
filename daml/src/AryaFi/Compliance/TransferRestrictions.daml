@@ -13,10 +13,11 @@
 -- institutions decide which category applies to each security.
 module AryaFi.Compliance.TransferRestrictions where
 
-import AryaFi.Common.Identifiers (ISIN)
+import AryaFi.Common.Identifiers (ISIN(..))
 import AryaFi.Common.Errors (require)
-import AryaFi.Common.Policies (PolicyDecision(..), andDecision)
-import DA.Time (addRelTime, days)
+import AryaFi.Common.Policies (PolicyDecision(..), andDecision, toComplianceDecision)
+import AryaFi.ComplianceApi.PolicyV1
+import DA.Time (addRelTime, days, isLedgerTimeLT)
 
 -- ---------------------------------------------------------------------------
 -- Regulatory Category
@@ -89,6 +90,15 @@ template TransferRestrictionRule
     -- ^ Whether this restriction is currently enforceable.
   where
     signatory complianceOfficer
+
+    -- Workflows evaluate the rule in their own transactions (see AryaFi.Compliance.Gate).
+    interface instance CompliancePolicy for TransferRestrictionRule where
+      view = CompliancePolicyView with
+        owner = complianceOfficer
+        kind = TransferRulePolicy
+        subject = None
+        instrumentId = Some (unISIN isin)
+      evaluatePolicy request = toComplianceDecision <$> ruleDecision this request
 
     -- | Update the regulatory category and lockup configuration.
     choice UpdateRestriction : ContractId TransferRestrictionRule
@@ -181,3 +191,33 @@ template TransferRestrictionRule
         pure $ if not isActive then Approved
                else foldl andDecision Approved [lockupCheck, holdingCheck, whitelistCheck, categoryCheck]
 
+-- | A transfer restriction rule's decision for a receiver, as a workflow
+-- evaluates it. An inactive rule, or a party that only sends, is approved.
+-- For an active rule:
+--   * the lockup must have expired, and the receiver must be whitelisted when
+--     the rule requires a whitelist;
+--   * a rule that requires a whitelist treats whitelisted receivers as eligible
+--     for its regulatory category; otherwise a restricted category needs the
+--     receiver's investor status, which the ledger does not hold, so the
+--     decision is manual review;
+--   * a holding period needs the date the sender acquired the security, which
+--     positions do not record, so it is manual review too.
+-- Rejections take precedence over manual review.
+ruleDecision : TransferRestrictionRule -> ComplianceRequest -> Update PolicyDecision
+ruleDecision rule request
+  | request.instrumentId /= unISIN rule.isin = pure (Rejected "TRANSFER_RULE_FOR_ANOTHER_SECURITY")
+  | not rule.isActive || not request.receiving = pure Approved
+  | otherwise = do
+      lockedUp <- case rule.lockupExpiry of
+        Some expiry -> isLedgerTimeLT expiry
+        None -> pure False
+      let whitelisted = request.party `elem` rule.whitelist
+          lockup = if lockedUp then Rejected "LOCKUP_NOT_EXPIRED" else Approved
+          whitelist = if rule.whitelistRequired && not whitelisted then Rejected "RECEIVER_NOT_WHITELISTED" else Approved
+          category =
+            if rule.regulatoryCategory == RetailUnrestricted || (rule.whitelistRequired && whitelisted) then Approved
+            else RequiresManualReview ("INVESTOR_STATUS_REQUIRED: " <> show rule.regulatoryCategory)
+          holdingPeriod =
+            if rule.holdingPeriodDays == 0 then Approved
+            else RequiresManualReview ("HOLDING_PERIOD_NOT_VERIFIABLE: " <> show rule.holdingPeriodDays <> " days")
+      pure (foldl andDecision Approved [lockup, whitelist, category, holdingPeriod])

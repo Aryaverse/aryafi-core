@@ -16,8 +16,11 @@
 -- responsible for not issuing duplicates.
 module AryaFi.Compliance.KYC where
 
+import DA.Time (isLedgerTimeGE)
 import AryaFi.Common.Identifiers (LEI, ExternalRef)
 import AryaFi.Common.Errors (require, requireNonEmpty)
+import AryaFi.Common.Policies (PolicyDecision(..), toComplianceDecision)
+import AryaFi.ComplianceApi.PolicyV1
 
 -- ---------------------------------------------------------------------------
 -- KYC Status
@@ -72,6 +75,15 @@ template KycAttestation
     signatory authority
     observer subjectParty :: observers
 
+    -- Workflows evaluate the attestation in their own transactions (see AryaFi.Compliance.Gate).
+    interface instance CompliancePolicy for KycAttestation where
+      view = CompliancePolicyView with
+        owner = authority
+        kind = KycPolicy
+        subject = Some subjectParty
+        instrumentId = None
+      evaluatePolicy request = toComplianceDecision <$> kycDecision this request
+
     -- | Update the KYC status and extend the validity window.
     -- The verification timestamp is the current ledger time (cannot be backdated).
     choice UpdateKycStatus : ContractId KycAttestation
@@ -124,3 +136,17 @@ template KycAttestation
       do
         now <- getTime
         pure (status == KycVerified && now < expiryTimestamp)
+
+-- | A KYC attestation's decision for a party: approved only for the attested
+-- party, verified, and before the attestation expires.
+kycDecision : KycAttestation -> ComplianceRequest -> Update PolicyDecision
+kycDecision kyc request
+  | request.party /= kyc.subjectParty = pure (Rejected "KYC_ATTESTATION_FOR_ANOTHER_PARTY")
+  | otherwise = do
+      expired <- isLedgerTimeGE kyc.expiryTimestamp
+      pure $ case kyc.status of
+        KycVerified | not expired -> Approved
+        KycVerified -> Rejected "KYC_EXPIRED"
+        KycExpired -> Rejected "KYC_EXPIRED"
+        KycPending -> Rejected "KYC_PENDING"
+        KycRejected reason -> Rejected ("KYC_REJECTED: " <> reason)

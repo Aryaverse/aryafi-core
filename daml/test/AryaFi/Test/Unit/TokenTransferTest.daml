@@ -41,7 +41,7 @@ setup test = do
   bob <- allocateTestParty "Bob" test
   carol <- allocateTestParty "Carol" test
   factory <- submit registry do
-    createCmd PositionTransferFactory with admin = registry; clients = [alice, bob, carol]
+    createCmd PositionTransferFactory with admin = registry; clients = [alice, bob, carol]; compliance = None
   pure Fixture with factoryCid = toInterfaceContractId factory; ..
 
 aliceAccount, aliceOtherAccount, bobAccount : Text

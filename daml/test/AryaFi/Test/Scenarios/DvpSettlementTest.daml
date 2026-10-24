@@ -107,6 +107,7 @@ mkDvp agent seller buyer secLockRef cashLockRef = do
       status = PendingSettlement
       failureReason = None
       observers = []
+      compliance = None
 
 -- | Allocate a party whose name is unique to one test. On a Canton 3 ledger a
 -- script run cannot allocate the same party name twice, and this suite also
@@ -475,6 +476,7 @@ testNettedDvpModelNotExecuted = script do
       status = PendingSettlement
       failureReason = None
       observers = []
+      compliance = None
   submitMustFail f.agent do
     exerciseCmd model2Cid ExecuteDvpSettlement with
       sellerSecurityCid = f.lockedSecCid
@@ -511,6 +513,7 @@ testDvpEnsurePositiveSecurityQuantity = script do
       status = PendingSettlement
       failureReason = None
       observers = []
+      compliance = None
 
 -- Negative: ensure rejects zero cash amount
 testDvpEnsurePositiveCashAmount : Script ()
@@ -543,6 +546,7 @@ testDvpEnsurePositiveCashAmount = script do
       status = PendingSettlement
       failureReason = None
       observers = []
+      compliance = None
 
 -- ---------------------------------------------------------------------------
 -- Entry Point

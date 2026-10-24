@@ -78,7 +78,7 @@ dvpTerms agent seller buyer lockRef settlementDate = DvpInstruction with
   dvpModel = DvpModel1; settlementDate
   correlationId = CorrelationId ("CORR-" <> lockRef); idempotencyKey = IdempotencyKey ("IKEY-" <> lockRef)
   sellerSecurityLockRef = lockRef; buyerCashLockRef = lockRef
-  status = PendingSettlement; failureReason = None; observers = []
+  status = PendingSettlement; failureReason = None; observers = []; compliance = None
 
 -- | The five institutions of a DvP.
 data Parties = Parties

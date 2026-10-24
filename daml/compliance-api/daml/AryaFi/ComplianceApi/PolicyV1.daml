@@ -1,0 +1,106 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- The code the compiler generates for an interface binds `pred`, which -Wall
+-- reports as shadowing the Prelude's; nothing in this module shadows a name.
+{-# OPTIONS_GHC -Wno-name-shadowing #-}
+
+-- | Compliance policies that business workflows evaluate inside their own
+-- transactions.
+--
+-- A KYC attestation, a sanctions attestation, or a transfer restriction rule
+-- implements `CompliancePolicy`. Its choices only read the policy, and any
+-- party that sees the policy contract can exercise them: an authority shares
+-- an attestation with a bank or custodian by adding it as an observer, or by
+-- disclosing the contract. The bank or custodian can then check a transfer
+-- against the authority's policies in the transfer transaction itself.
+--
+-- A policy counts as its owner's only if the owner signed the contract. Anyone
+-- can implement this interface, and a contract's view could name any party
+-- as its owner, so both choices refuse a policy whose owner is not one of its
+-- signatories. Implementations cannot change these choices.
+--
+-- This package holds only the interface, so that authorities and registries
+-- outside AryaFi can implement it or call it, and so that AryaFi's own
+-- package stays upgradeable. AryaFi's attestations and rules implement it in
+-- `aryafi-core` (AryaFi.Compliance.KYC, .Sanctions, .TransferRestrictions).
+module AryaFi.ComplianceApi.PolicyV1 where
+
+import DA.Action (unless)
+
+-- | What kind of policy a contract is.
+data PolicyKind
+  = KycPolicy
+  | SanctionsPolicy
+  | TransferRulePolicy
+  deriving (Eq, Ord, Show)
+
+-- | What a compliance policy is about.
+data CompliancePolicyView = CompliancePolicyView
+  with
+    owner : Party
+    -- ^ The authority that maintains the policy.
+    kind : PolicyKind
+    subject : Optional Party
+    -- ^ For an attestation, the party it is about.
+    instrumentId : Optional Text
+    -- ^ For a transfer restriction rule, the instrument (ISIN) it restricts.
+  deriving (Eq, Show)
+
+-- | One party's part in a proposed movement of an instrument, as a policy
+-- evaluates it.
+data ComplianceRequest = ComplianceRequest
+  with
+    party : Party
+    -- ^ The party checked.
+    receiving : Bool
+    -- ^ Whether the party receives the instrument; transfer rules apply to receivers.
+    counterparty : Party
+    instrumentAdmin : Party
+    -- ^ The registry of the instrument, such as a bank or custodian.
+    instrumentId : Text
+    -- ^ The currency, ISIN, or other identifier the registry uses.
+    amount : Decimal
+  deriving (Eq, Show)
+
+-- | A policy's decision on a request.
+data ComplianceDecision
+  = Compliant
+  | NonCompliant Text
+    -- ^ With the reason, such as "SANCTIONED: OFAC-SDN".
+  | NeedsReview Text
+    -- ^ The policy cannot decide automatically; with what needs review.
+  deriving (Eq, Show)
+
+-- | A compliance policy that any party seeing it can evaluate.
+interface CompliancePolicy where
+  viewtype CompliancePolicyView
+
+  evaluatePolicy : ComplianceRequest -> Update ComplianceDecision
+
+  -- | Describe the policy: its owner, kind, and subject or instrument.
+  -- Refused if the owner did not sign it.
+  nonconsuming choice CompliancePolicy_Describe : CompliancePolicyView
+    with
+      requester : Party
+    controller requester
+    do
+      requireSignedByOwner this
+      pure (view this)
+
+  -- | Evaluate the policy for a request, at the current ledger time, without
+  -- changing anything. Refused if the owner did not sign it.
+  nonconsuming choice CompliancePolicy_Evaluate : ComplianceDecision
+    with
+      requester : Party
+      request : ComplianceRequest
+    controller requester
+    do
+      requireSignedByOwner this
+      evaluatePolicy this request
+
+-- | Abort unless the policy's owner is one of its signatories.
+requireSignedByOwner : CompliancePolicy -> Update ()
+requireSignedByOwner policy =
+  unless ((view policy).owner `elem` signatory policy) do
+    abort "The policy's owner is not its signatory"
