@@ -1,0 +1,57 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Financing contracts agreed and changed with every institution on its own
+-- participant node, through multi-party proposals: seller, buyer, and
+-- custodian agree a repo and then roll it; the agent and the seller release
+-- an escrow the buyer funded.
+--
+-- Run it like runDvpAcrossNodes, with a participant config that names the nodes.
+module AryaFi.Test.Network.FinancingAcrossNodes where
+
+import DA.Time (addRelTime, days)
+import Daml.Script
+import AryaFi.Common.Identifiers
+import AryaFi.Common.Types (DayCountConvention(..))
+import AryaFi.Contracts.Escrow
+import AryaFi.Contracts.Proposal
+import AryaFi.Contracts.Repo
+import AryaFi.Test.Network.DvpAcrossNodes (proposeOnNode, signAndPass, signLast)
+import AryaFi.Test.Network.Nodes
+
+runFinancingAcrossNodes : NodesInput -> Script ()
+runFinancingAcrossNodes input = do
+  Institutions{..} <- allocateInstitutions input
+  now <- getTime
+
+  -- Seller, buyer and custodian agree the repo, one signature per node
+  let repo = RepoAgreement with
+        repoId = "REPO-NODES-" <> input.runId; seller; buyer; tripartyAgent = None; custodian
+        isin = ISIN "US912828ZM50"; collateralQuantity = 5000000.0; collateralAccountId = AccountId "ACC-COLLAT-NODES"
+        haircut = 0.02; currency = "USD"; purchasePrice = 5000000.0; repurchasePrice = 5005152.78
+        repoRate = 0.053; dayCountConvention = Act360; startDate = now; endDate = addRelTime now (days 7)
+        status = RepoActive; openingSettlementRef = None; closingSettlementRef = None
+        correlationId = CorrelationId ("CORR-REPO-NODES-" <> input.runId); observers = []
+  repoCid <- proposeOnNode seller [seller, buyer, custodian] (CreateAgreement (RepoTerms repo))
+    >>= signAndPass buyer >>= signLast custodian
+
+  -- Seller and buyer roll it a week further
+  rolled <- proposeOnNode buyer [buyer, seller]
+      (ExerciseJointly (RollRepoAction (coerceContractId repoCid)
+        (RollRepo with newEndDate = addRelTime now (days 14); newRepurchasePrice = 5010305.56; newRepoRate = 0.053)))
+    >>= signLast seller
+  agreed <- eventually "the rolled repo on the custodian's node"
+    (queryContractId custodian (coerceContractId @_ @RepoAgreement rolled))
+  assertMsg "The repo is rolled to two weeks" (agreed.endDate == addRelTime now (days 14) && agreed.repurchasePrice == 5010305.56)
+
+  -- The buyer funds an escrow with the agent; the agent and the seller release it
+  let escrow = ConditionalEscrow with
+        escrowId = "ESC-NODES-" <> input.runId; escrowAgent = agent; depositor = buyer; beneficiary = seller
+        currency = "USD"; amount = 1000000.0; releaseCondition = "Repo rolled"; expiryTime = addRelTime now (days 30)
+        correlationId = CorrelationId ("CORR-ESC-NODES-" <> input.runId); status = EscrowHeld; disputeReason = None; observers = []
+  escrowCid <- proposeOnNode buyer [buyer, agent] (CreateAgreement (EscrowTerms escrow)) >>= signLast agent
+  released <- proposeOnNode agent [agent, seller] (ExerciseJointly (ReleaseEscrowAction (coerceContractId escrowCid)))
+    >>= signLast seller
+  final <- eventually "the released escrow on the buyer's node"
+    (queryContractId buyer (coerceContractId @_ @ConditionalEscrow released))
+  assertMsg "The escrow is released to the seller" (final.status == EscrowReleased)

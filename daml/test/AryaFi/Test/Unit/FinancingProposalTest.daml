@@ -1,0 +1,247 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The joint choices of the financing contracts, exercised through
+-- multi-party proposals: one party proposes, the others sign one at a time,
+-- and the last signature exercises the choice. Each test sets the contract up
+-- with one multi-party submission (creating it through a proposal is tested
+-- in ProposalTest) and then changes it only through proposals.
+module AryaFi.Test.Unit.FinancingProposalTest where
+
+import DA.Time (addRelTime, days)
+import Daml.Script
+import qualified Splice.Api.Token.MetadataV1 as Metadata
+import AryaFi.Common.Identifiers
+import AryaFi.Common.Types hiding (Active)
+import qualified AryaFi.Common.Types as Types
+import AryaFi.Contracts.Escrow
+import AryaFi.Contracts.Loan
+import AryaFi.Contracts.Margin
+import AryaFi.Contracts.Pledge
+import AryaFi.Contracts.Proposal
+import AryaFi.Contracts.Repo
+import qualified AryaFi.Contracts.Repo as Repo
+import AryaFi.Contracts.SecuritiesLending
+import qualified AryaFi.Contracts.SecuritiesLending as SecLending
+import AryaFi.Finance.Asset
+import AryaFi.Finance.Collateral hiding (Active)
+import qualified AryaFi.Finance.Collateral as Collateral
+import AryaFi.Finance.Obligation
+import AryaFi.Test.Scenarios.DvpSettlementTest (allocateTestParty)
+import AryaFi.Test.Unit.AssetCashTest (mkAssetHolding)
+import AryaFi.Test.Unit.ObligationPaymentTest (mkObligation)
+import AryaFi.Test.Unit.ProposalTest (acceptLast, acceptPending, propose, submitFailsWith)
+import AryaFi.Test.Unit.SecuritiesLendingTest (mkAgreement)
+
+-- | A joint choice proposed by `proposer` to itself and `others`, signed by the others in order.
+jointly : Party -> [Party] -> JointAction -> Script (ContractId t)
+jointly proposer others action = do
+  cid <- propose proposer (proposer :: others) (ExerciseJointly action)
+  result <- signInTurn others cid
+  pure (coerceContractId result)
+
+-- | Sign the proposal as each of `signers` in turn; the last carries it out.
+signInTurn : [Party] -> ContractId MultiPartyProposal -> Script Metadata.AnyContractId
+signInTurn [lastSigner] cid = acceptLast lastSigner cid
+signInTurn (next :: rest) cid = acceptPending next cid >>= signInTurn rest
+signInTurn [] _ = abort "A joint choice needs another signer"
+
+testLoanObserverJointly : Script ()
+testLoanObserverJointly = script do
+  lender <- allocateTestParty "Lender" "FP-LOAN"
+  borrower <- allocateTestParty "Borrower" "FP-LOAN"
+  regulator <- allocateTestParty "Regulator" "FP-LOAN"
+  now <- getTime
+  loanCid <- submit (actAs [lender, borrower]) do
+    createCmd InstitutionalLoan with
+      loanId = "FACILITY-FP-001"; lender; borrower; agentBank = None; currency = "USD"
+      facilityLimit = 10000000.0; drawnPrincipal = 5000000.0; accruedInterest = 0.0
+      interestRate = 0.0575; dayCountConvention = Act360; startDate = now
+      interestAccruedThrough = now; maturityDate = addRelTime now (days 365); collateralPledgeRef = None
+      status = Types.Active; defaultReason = None; correlationId = CorrelationId "CORR-FP-LOAN"; observers = []
+  observed <- jointly lender [borrower] (AddLoanObserverAction loanCid (AddLoanObserver with newObserver = regulator))
+  Some loan <- queryContractId regulator (observed : ContractId InstitutionalLoan)
+  assertMsg "The regulator now sees the loan" (regulator `elem` loan.observers)
+
+testRepoJointly : Script ()
+testRepoJointly = script do
+  seller <- allocateTestParty "Seller" "FP-REPO"
+  buyer <- allocateTestParty "Buyer" "FP-REPO"
+  custodian <- allocateTestParty "Custodian" "FP-REPO"
+  regulator <- allocateTestParty "Regulator" "FP-REPO"
+  now <- getTime
+  repoCid <- submit (actAs [seller, buyer, custodian]) do
+    createCmd RepoAgreement with
+      repoId = "REPO-FP-001"; seller; buyer; tripartyAgent = None; custodian
+      isin = ISIN "US912828ZM50"; collateralQuantity = 5000000.0; collateralAccountId = AccountId "ACC-COLLAT-FP"
+      haircut = 0.02; currency = "USD"; purchasePrice = 5000000.0; repurchasePrice = 5005152.78
+      repoRate = 0.053; dayCountConvention = Act360; startDate = now; endDate = addRelTime now (days 7)
+      status = RepoActive; openingSettlementRef = None; closingSettlementRef = None
+      correlationId = CorrelationId "CORR-FP-REPO"; observers = []
+  substituted <- jointly seller [buyer] (SubstituteRepoCollateralAction repoCid
+    (Repo.SubstituteCollateral with newIsin = ISIN "US91282CJL54"; newQuantity = 4900000.0; newHaircut = 0.03))
+  rolled <- jointly buyer [seller] (RollRepoAction substituted
+    (RollRepo with newEndDate = addRelTime now (days 14); newRepurchasePrice = 5010305.56; newRepoRate = 0.053))
+  observed <- jointly seller [buyer] (AddRepoObserverAction rolled (AddRepoObserver with newObserver = regulator))
+  Some repo <- queryContractId regulator (observed : ContractId RepoAgreement)
+  assertMsg "Collateral substituted, repo rolled, and the regulator added"
+    (repo.isin == ISIN "US91282CJL54" && repo.endDate == addRelTime now (days 14) && regulator `elem` repo.observers)
+
+testSecuritiesLendingJointly : Script ()
+testSecuritiesLendingJointly = script do
+  lender <- allocateTestParty "Lender" "FP-SECLEND"
+  borrower <- allocateTestParty "Borrower" "FP-SECLEND"
+  custodian <- allocateTestParty "Custodian" "FP-SECLEND"
+  regulator <- allocateTestParty "Regulator" "FP-SECLEND"
+  agreementCid <- mkAgreement lender borrower custodian 0.0
+  accrued <- jointly lender [borrower] (AccrueLendingFeeAction agreementCid (AccrueLendingFee with additionalFee = 2500.0))
+  revalued <- jointly borrower [lender] (RevalueLendingCollateralAction accrued (SecLending.RevalueCollateral with newCollateralAmount = 15500000.0))
+  observed <- jointly lender [borrower] (AddSecLendingObserverAction revalued (AddSecLendingObserver with newObserver = regulator))
+  Some lending <- queryContractId regulator (observed : ContractId SecuritiesLendingAgreement)
+  assertMsg "Fee accrued, collateral revalued, and the regulator added"
+    (lending.accruedLendingFee == 2500.0 && lending.collateralAmount == 15500000.0 && regulator `elem` lending.observers)
+
+testCollateralJointly : Script ()
+testCollateralJointly = script do
+  provider <- allocateTestParty "Provider" "FP-COLL"
+  receiver <- allocateTestParty "Receiver" "FP-COLL"
+  custodian <- allocateTestParty "Custodian" "FP-COLL"
+  auditor <- allocateTestParty "Auditor" "FP-COLL"
+  let position status ref = CollateralPosition with
+        collateralProvider = provider; collateralReceiver = receiver; custodian
+        accountId = AccountId "ACC-COLL-FP"; assetClass = GovernmentSecurity; isin = ISIN "US912828ZM50"
+        quantity = 1000000.0; marketValue = 1000000.0; haircut = 0.02; settlementCurrency = "USD"
+        obligationRef = ref; lockReference = "LOCK-" <> ref; status; externalRef = None; observers = []
+  liveCid <- submit (actAs [provider, receiver, custodian]) do createCmd (position Collateral.Active "REPO-FP-1")
+  substituted <- jointly provider [receiver] (SubstituteCollateralAction liveCid
+    (Collateral.SubstituteCollateral with
+      newIsin = ISIN "US91282CJL54"; newQuantity = 990000.0; newMarketValue = 1001000.0; newHaircut = 0.02
+      newAssetClass = GovernmentSecurity; newLockReference = "LOCK-REPO-FP-1-B"))
+  observed <- jointly receiver [provider] (AddCollateralObserverAction substituted (AddCollateralObserver with newObserver = auditor))
+  released <- jointly provider [receiver] (ReleaseCollateralAction observed)
+  Some collateral <- queryContractId provider (released : ContractId CollateralPosition)
+  assertMsg "Substituted, observed by the auditor, then released"
+    (collateral.isin == ISIN "US91282CJL54" && auditor `elem` collateral.observers && collateral.status == Released)
+
+  disputedCid <- submit (actAs [provider, receiver, custodian]) do createCmd (position InDispute "REPO-FP-2")
+  resolved <- jointly receiver [provider] (ResolveCollateralDisputeAction disputedCid (Collateral.ResolveDispute with agreedMarketValue = 995000.0))
+  Some agreed <- queryContractId provider (resolved : ContractId CollateralPosition)
+  assertMsg "The dispute is resolved at the agreed value" (agreed.marketValue == 995000.0 && agreed.status /= InDispute)
+
+testMarginCallJointly : Script ()
+testMarginCallJointly = script do
+  caller <- allocateTestParty "Caller" "FP-MARGIN"
+  payer <- allocateTestParty "Payer" "FP-MARGIN"
+  custodian <- allocateTestParty "Custodian" "FP-MARGIN"
+  regulator <- allocateTestParty "Regulator" "FP-MARGIN"
+  now <- getTime
+  callCid <- submit (actAs [caller, payer]) do
+    createCmd MarginCall with
+      marginCallId = "MC-FP-001"; caller; payer; custodian; marginType = VariationMargin
+      relatedAgreementRef = "REPO-FP-001"; currency = "USD"; requiredAmount = 300000.0
+      deadline = addRelTime now (days 1); status = MarginCallDisputed "Valuation differs"
+      correlationId = CorrelationId "CORR-FP-MC"; observers = []
+  resolved <- jointly payer [caller] (ResolveMarginDisputeAction callCid (ResolveMarginDispute with adjustedAmount = 250000.0))
+  observed <- jointly caller [payer] (AddMarginObserverAction resolved (AddMarginObserver with newObserver = regulator))
+  Some call <- queryContractId regulator (observed : ContractId MarginCall)
+  assertMsg "The call is resolved at 250,000 and the regulator added"
+    (call.requiredAmount == 250000.0 && regulator `elem` call.observers)
+
+testPledgeJointly : Script ()
+testPledgeJointly = script do
+  pledgor <- allocateTestParty "Pledgor" "FP-PLEDGE"
+  pledgee <- allocateTestParty "Pledgee" "FP-PLEDGE"
+  custodian <- allocateTestParty "Custodian" "FP-PLEDGE"
+  auditor <- allocateTestParty "Auditor" "FP-PLEDGE"
+  pledgeCid <- submit (actAs [pledgor, pledgee, custodian]) do
+    createCmd AssetPledge with
+      pledgeId = "PLEDGE-FP-001"; pledgor; pledgee; custodian; accountId = AccountId "ACC-PLEDGOR-FP"
+      assetId = "ASSET-US-TREAS-4P25-NOV26"; quantity = 5000000.0; perfectionReference = "UCC-1-FP-001"
+      correlationId = CorrelationId "CORR-FP-PLEDGE"; status = Types.Active; enforceTimestamp = None; observers = []
+  substituted <- jointly pledgor [pledgee, custodian] (SubstitutePledgeAction pledgeCid
+    (SubstitutePledge with
+      newAssetId = "ASSET-US-TREAS-4P50-FEB27"; newAccountId = AccountId "ACC-PLEDGOR-FP"
+      newQuantity = 4800000.0; newPerfectionRef = "UCC-1-FP-002"))
+  observed <- jointly pledgee [pledgor] (AddPledgeObserverAction substituted (AddPledgeObserver with newObserver = auditor))
+  Some pledge <- queryContractId auditor (observed : ContractId AssetPledge)
+  assertMsg "The pledge is substituted, with the custodian's signature, and the auditor added"
+    (pledge.assetId == "ASSET-US-TREAS-4P50-FEB27" && auditor `elem` pledge.observers)
+
+testEscrowJointly : Script ()
+testEscrowJointly = script do
+  agent <- allocateTestParty "EscrowAgent" "FP-ESCROW"
+  depositor <- allocateTestParty "Depositor" "FP-ESCROW"
+  beneficiary <- allocateTestParty "Beneficiary" "FP-ESCROW"
+  now <- getTime
+  let escrow id = ConditionalEscrow with
+        escrowId = id; escrowAgent = agent; depositor; beneficiary; currency = "USD"; amount = 10000000.0
+        releaseCondition = "Regulatory approval obtained"; expiryTime = addRelTime now (days 30)
+        correlationId = CorrelationId ("CORR-" <> id); status = EscrowHeld; disputeReason = None; observers = []
+  toRelease <- submit (actAs [agent, depositor]) do createCmd (escrow "ESC-FP-1")
+  released <- jointly agent [beneficiary] (ReleaseEscrowAction toRelease)
+  Some r <- queryContractId beneficiary (released : ContractId ConditionalEscrow)
+  assertMsg "The agent and the beneficiary release the escrow" (r.status == EscrowReleased)
+  toRefund <- submit (actAs [agent, depositor]) do createCmd (escrow "ESC-FP-2")
+  refunded <- jointly depositor [agent] (RefundEscrowAction toRefund)
+  Some f <- queryContractId depositor (refunded : ContractId ConditionalEscrow)
+  assertMsg "The depositor and the agent refund the escrow" (f.status == EscrowRefunded)
+
+testObligationJointly : Script ()
+testObligationJointly = script do
+  obligor <- allocateTestParty "Obligor" "FP-OBLIG"
+  obligee <- allocateTestParty "Obligee" "FP-OBLIG"
+  obligationCid <- mkObligation obligor obligee 1000000.0 "OBL-FP-001"
+  now <- getTime
+  amended <- jointly obligor [obligee] (AmendObligationAction obligationCid
+    (AmendObligation with newAmount = 900000.0; newDueDate = addRelTime now (days 30); amendmentNote = "Partial waiver"))
+  Some a <- queryContractId obligee amended
+  assertMsg "The obligation is amended to 900,000" (a.amount == 900000.0)
+  cancelled <- jointly obligee [obligor] (CancelObligationAction amended (CancelObligation with cancellationReason = "Trade unwound"))
+  Some c <- queryContractId obligor (cancelled : ContractId FinancialObligation)
+  assertMsg "The obligation is cancelled" (c.status /= a.status)
+
+-- An asset holding moves to a new owner through a proposal. The new owner
+-- cannot see the holding before it receives it, so it signs before the
+-- custodian, which signs last and carries the transfer out.
+testAssetTransferJointly : Script ()
+testAssetTransferJointly = script do
+  issuer <- allocateTestParty "FundManager" "FP-ASSET"
+  custodian <- allocateTestParty "Custodian" "FP-ASSET"
+  alice <- allocateTestParty "Alice" "FP-ASSET"
+  bob <- allocateTestParty "Bob" "FP-ASSET"
+  holdingCid <- mkAssetHolding issuer custodian alice (AccountId "ACC-ALICE-FUND")
+  let transfer = TransferAssetAction holdingCid (TransferAsset with newOwner = bob; newAccountId = AccountId "ACC-BOB-FUND")
+  -- With the new owner signing last, its node cannot see the holding
+  wrongOrder <- propose alice [alice, custodian, bob] (ExerciseJointly transfer) >>= acceptPending custodian
+  submitMustFail bob (exerciseCmd wrongOrder AcceptProposal with signer = bob)
+  -- With the custodian signing last, the transfer goes through
+  moved <- propose alice [alice, bob, custodian] (ExerciseJointly transfer) >>= acceptPending bob >>= acceptLast custodian
+  Some holding <- queryContractId bob (coerceContractId @_ @AssetHolding moved)
+  assertMsg "Bob holds the fund shares" (holding.owner == bob && holding.accountId == AccountId "ACC-BOB-FUND")
+
+-- The controllers are checked against the contract: accruing a lending fee
+-- needs the lender and the borrower, so the lender and the custodian cannot do
+-- it without the borrower.
+testFinancingControllersChecked : Script ()
+testFinancingControllersChecked = script do
+  lender <- allocateTestParty "Lender" "FP-CHECK"
+  borrower <- allocateTestParty "Borrower" "FP-CHECK"
+  custodian <- allocateTestParty "Custodian" "FP-CHECK"
+  agreementCid <- mkAgreement lender borrower custodian 0.0
+  withoutBorrower <- propose lender [lender, custodian]
+    (ExerciseJointly (AccrueLendingFeeAction agreementCid (AccrueLendingFee with additionalFee = 1.0)))
+  submitFailsWith "The proposal's signers are not exactly the choice's controllers" custodian
+    (exerciseCmd withoutBorrower AcceptProposal with signer = custodian)
+
+runFinancingProposalTests : Script ()
+runFinancingProposalTests = script do
+  testLoanObserverJointly
+  testRepoJointly
+  testSecuritiesLendingJointly
+  testCollateralJointly
+  testMarginCallJointly
+  testPledgeJointly
+  testEscrowJointly
+  testObligationJointly
+  testAssetTransferJointly
+  testFinancingControllersChecked
