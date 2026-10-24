@@ -77,7 +77,7 @@ dpm version
 # Compile both packages: aryafi-core (production) and aryafi-core-test
 dpm build --all
 
-# Run the test suite (364 scripts; requires Java 17 or 21)
+# Run the test suite (371 scripts; requires Java 17 or 21)
 cd daml/test
 dpm test --all --show-coverage
 cd ../..
@@ -98,7 +98,7 @@ docker compose ps
 ### 3. Run a Scenario via Daml Script
 ```bash
 dpm script \
-  --dar daml/test/.daml/dist/aryafi-core-test-3.3.0.dar \
+  --dar daml/test/.daml/dist/aryafi-core-test-3.4.0.dar \
   --upload-dar=yes \
   --script-name AryaFi.Test.Scenarios.TreasuryDvpScenario:runTreasuryDvpScenario \
   --ledger-host localhost \

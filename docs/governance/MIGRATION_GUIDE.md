@@ -168,3 +168,11 @@ The `CompliancePolicy` interface is in a new package, `aryafi-compliance-api` 1.
 - The bank or custodian exercises `SetTransferCompliance` and `SetAllocationCompliance` on its factories with its `ComplianceRequirements`. From then on, wallets and settlement apps pass the evidence in the choice context (see [LEDGER_API_CLIENT.md §6.4](../integration/LEDGER_API_CLIENT.md#64-compliance-evidence)); a transfer without it ends `Failed` with the reason. Transfers already pending are screened again on acceptance only if they were instructed under requirements.
 - A DvP is screened only if its instruction is created with requirements; settle it with `ExecuteScreenedDvpSettlement`. Likewise, an `AssetTransferRequest` created with requirements is completed with `CompleteScreenedTransfer`.
 - An ownership regulator shares or discloses its `OwnershipRestriction`; name it in `ownershipRegulators`, and the security in `restrictedInstruments`, to require it.
+
+## 8. Upgrading to v3.4.0
+
+v3.4.0 is an upgrade of v3.3.0, so no contracts need migrating.
+
+- `AssetPledge` has a new last field, `pledgedHoldingCid : Optional (ContractId Holding)`. Existing pledges have none and work as before.
+- `EnforcePledge` and `SubstitutePledge` take new optional arguments, `enforcementAccountId` and `newHoldingCid`. Daml code must now pass them (`EnforcePledge with enforcementAccountId = None`); JSON Ledger API clients can leave them out.
+- To make a pledge hold its asset, the pledgor exercises `EncumberHolding` with its position of the pledged asset in the pledge's account. From then on, `EnforcePledge` needs the pledgee's account at the custodian, and `SubstitutePledge` needs the new asset's position, of exactly the new quantity.

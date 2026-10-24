@@ -2,7 +2,7 @@
 
 This page records what AryaFi Core does **not** do yet, so that nobody builds on an assumption the code does not support. It is required by the *Definition of Done — Production Module* (Technical & Business Requirements §21, §30) and is updated with every release.
 
-Last reviewed: 2026-10-24, against the code at v3.3.0.
+Last reviewed: 2026-10-24, against the code for 3.4.0 (in development).
 
 ---
 
@@ -35,7 +35,7 @@ Maturity labels follow [VERSIONING_AND_RELEASE.md](governance/VERSIONING_AND_REL
 ## 3. Composition and Asset Movement
 
 - **Only DvP moves assets.** `ExecuteDvpSettlement` delivers locked `SecurityPosition` and `CashPosition` contracts atomically, and `ExecuteTokenDvp` settles both legs of a token-standard DvP at their registries in one transaction. Every other workflow (`InstitutionalLoan`, `RepoAgreement`, `SecuritiesLendingAgreement`, `MarginCall`, `AssetPledge`, `ConditionalEscrow`, `AssetTransferRequest`, `FundSubscription`, `AssetRedemption`, `PaymentInstruction`) records lifecycle state only. Cash and securities move off-ledger or through separate transfers.
-- **References are text, not contract IDs.** Pledges, collateral positions, margin calls, loans, and repos identify assets and payments by text reference, so the ledger does not stop one asset being pledged to several agreements.
+- **References are text, not contract IDs, except for encumbered pledges.** A pledge can hold the pledged cash or security position, locked to the pledgee (`EncumberHolding`), so it cannot be pledged twice; release, enforcement, and substitution act on the locked position. A pledge that is not encumbered, and collateral positions, margin calls, loans, and repos, identify assets and payments by text reference, so the ledger does not stop one asset being referenced by several agreements. `AssetHolding` positions cannot be pledged this way, because the token-standard helpers cover cash and securities only.
 - **Exact-size legs.** A `DvpInstruction` leg must match the instructed quantity or amount exactly; split the position first. (A token-standard allocation locks the exact amount from larger holdings itself.) Partial settlement is not supported.
 - **Netted settlement.** `DvpModel2` and `DvpModel3` exist as reference data; only Model 1 executes.
 - **Failed or cancelled DvP.** For a `DvpInstruction`, both legs stay locked to the settlement agent, who must release them with `UnlockSecurity` / `UnlockCash`. For a `TokenDvpInstruction`, cancelling cancels the allocations the agent passes, and the parties can withdraw the rest.
@@ -69,6 +69,6 @@ Maturity labels follow [VERSIONING_AND_RELEASE.md](governance/VERSIONING_AND_REL
 
 ## 7. Test Coverage
 
-`dpm test` runs 364 scripts, all passing. Coverage of the `aryafi-core` package: all 34 templates created and 161 of 228 template choices exercised (71%, including each template's implicit `Archive`). The coverage report does not count interface choices; the tests exercise all fifteen token-standard choices that AryaFi implements (`Allocation_Settle`, which AryaFi refuses, to check the refusal) and both `CompliancePolicy` choices. Property-based tests do not exist yet, and the multi-participant tests cover both DvPs, a repo, an escrow, and screened transfers (`runDvpAcrossNodes`, `runTokenDvpAcrossNodes`, `runFinancingAcrossNodes`, `runComplianceAcrossNodes`).
+`dpm test` runs 371 scripts, all passing. Coverage of the `aryafi-core` package: all 34 templates created and 162 of 229 template choices exercised (71%, including each template's implicit `Archive`). The coverage report does not count interface choices; the tests exercise all fifteen token-standard choices that AryaFi implements (`Allocation_Settle`, which AryaFi refuses, to check the refusal) and both `CompliancePolicy` choices. Property-based tests do not exist yet, and the multi-participant tests cover both DvPs, a repo, an escrow, and screened transfers (`runDvpAcrossNodes`, `runTokenDvpAcrossNodes`, `runFinancingAcrossNodes`, `runComplianceAcrossNodes`).
 
 See [IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md) for how these limitations are addressed.

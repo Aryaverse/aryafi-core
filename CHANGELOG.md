@@ -5,6 +5,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Pledges that hold the pledged asset.** With `EncumberHolding`, the pledgor locks its cash or security position of the pledged asset to the pledgee: a position in the pledge's account at the custodian, of at least the pledged quantity, with any more returned to the pledgor at once. The locked position cannot be moved, locked for a settlement, or pledged again, which closes the double-pledge gap (threat E-04) for encumbered pledges. Releasing the pledge unlocks it for the pledgor; enforcing it delivers it to the pledgee's account at the custodian; a substitution, agreed by all three parties, locks the new asset's position and unlocks the old one. Pledges that are not encumbered record the asset by reference, as before. See [`AryaFi.Contracts.Pledge`](daml/src/AryaFi/Contracts/Pledge.daml).
+- `PledgedHoldingTest`: six tests, covering encumbering and release, a second pledge of the same position refused, enforcement, substitution, the checks on the position, and a cash pledge. CI runs them on a Canton participant.
+
+### Changed
+- `AssetPledge` has a new optional field, `pledgedHoldingCid`; `EnforcePledge` takes an optional `enforcementAccountId`, and `SubstitutePledge` an optional `newHoldingCid`. Existing pledges, and calls without the new arguments, behave as before.
+- The versioning guide says that releases publish the compliance interface DAR as well as the production DAR.
+
 ## [3.3.0] - 2026-10-24
 
 An upgrade-compatible release: Canton's participant upgrade check accepts it as an upgrade of 3.2.0, so participants running 3.2.0 can move to it without migrating contracts. Institutions on different participants can now agree contracts and change them together, one signature at a time, and KYC, sanctions, transfer rules, and ownership limits are checked inside the transactions that move assets, for both parties, with every decision recorded. It adds a second package, `aryafi-compliance-api` 1.0.0, which holds the compliance interface for authorities and registries outside AryaFi to build against. Financing contracts do not yet move real assets; see [KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md#3-composition-and-asset-movement).

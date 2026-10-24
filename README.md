@@ -3,7 +3,7 @@
 [![Daml](https://img.shields.io/badge/Daml_SDK-3.5.12-blue.svg)](https://docs.digitalasset.com)
 [![Canton](https://img.shields.io/badge/Canton-3.5_(protocol_35)-green.svg)](deploy/canton/canton.conf)
 [![Release](https://img.shields.io/badge/Release-v3.3.0-purple.svg)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/dpm_test-364_passing-brightgreen.svg)](daml/test/AryaFi/Test)
+[![Tests](https://img.shields.io/badge/dpm_test-371_passing-brightgreen.svg)](daml/test/AryaFi/Test)
 [![Status](https://img.shields.io/badge/Status-Beta_/_Experimental-orange.svg)](docs/KNOWN_LIMITATIONS.md)
 [![Website](https://img.shields.io/badge/Vercel-Website-black.svg?logo=vercel)](https://aryafi-core.vercel.app)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
@@ -86,8 +86,8 @@ aryafi-core/
 │   ├── compliance-api/            # Compliance interface package (aryafi-compliance-api)
 │   └── test/                      # Test package (aryafi-core-test), depends on the production DAR
 │       ├── daml.yaml
-│       └── AryaFi/Test/           # Daml Script test suite (364 scripts, run by `dpm test`)
-│           ├── Unit/              # 18 unit suites across primitives, contracts & compliance
+│       └── AryaFi/Test/           # Daml Script test suite (371 scripts, run by `dpm test`)
+│           ├── Unit/              # 19 unit suites across primitives, contracts & compliance
 │           ├── Scenarios/         # 10 end-to-end multi-party lifecycle scenarios
 │           ├── Negative/          # Unauthorized access, violation & invalid transition tests
 │           ├── Privacy/           # Observer visibility tests
@@ -140,7 +140,7 @@ aryafi-core/
 - **`SecuritiesLending`**: Stock loans with jointly agreed fees, recalls that persist until satisfied, and pro-rata-capped collateral release.
 - **`Margin`**: Initial and variation margin calls: the payer submits, the caller confirms receipt; default only after the deadline.
 - **`Subscription` & `Redemption`**: Institutional private credit fund commitments, capital calls, liquidity gates, and NAV redemptions.
-- **`Transfer`, `Pledge` & `Escrow`**: Compliance-gated transfers, tri-party collateral perfection (UCC Article 8/12), and conditional holding.
+- **`Transfer`, `Pledge` & `Escrow`**: Compliance-gated transfers, tri-party pledges that lock the pledged position to the pledgee until release or enforcement, and conditional holding.
 
 ### 3. Compliance & Policy Engine (`AryaFi.Compliance`)
 - **`Gate`**: Compliance checked inside the transactions that move assets. A bank or custodian names the KYC authorities, sanctions screeners, transfer-rule officers, and ownership regulators it relies on; token-standard transfers and allocations, the screened DvP, and screened transfer requests evaluate their attestations and restrictions for both parties in the same transaction, through the `CompliancePolicy` interface (package `aryafi-compliance-api`). A refused movement moves nothing, and every decision is recorded with its reasons.
@@ -164,7 +164,7 @@ aryafi-core/
 # Build both packages: aryafi-core (production) and aryafi-core-test
 dpm build --all
 
-# Run the test suite (364 scripts); --all includes the production templates in the coverage report
+# Run the test suite (371 scripts); --all includes the production templates in the coverage report
 cd daml/test
 dpm test --all --show-coverage
 ```
