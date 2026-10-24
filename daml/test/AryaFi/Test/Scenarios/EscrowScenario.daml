@@ -170,6 +170,7 @@ mkPledge pledgor pledgee custodian = do
       status = Active
       enforceTimestamp = None
       observers = []
+      pledgedHoldingCid = None
 
 testPledgeRelease : Script ()
 testPledgeRelease = script do
@@ -205,7 +206,7 @@ testPledgeEnforce = script do
 
   -- Pledgee enforces following default
   enforcedCid <- submit pledgee do
-    exerciseCmd pledgeCid EnforcePledge
+    exerciseCmd pledgeCid EnforcePledge with enforcementAccountId = None
 
   enforcedData <- queryContractId pledgor enforcedCid
   case enforcedData of
@@ -229,6 +230,7 @@ testPledgeSubstitution = script do
       newAccountId = AccountId "ACC-PLEDGOR-SEC-002"
       newQuantity = 5000000.0
       newPerfectionRef = "UCC-1-AMENDMENT-2026-NYC-001"
+      newHoldingCid = None
 
   substitutedData <- queryContractId pledgee substitutedCid
   case substitutedData of

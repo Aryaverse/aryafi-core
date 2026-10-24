@@ -115,6 +115,7 @@ testSecuritiesLendingLifecycle = script do
       status = Active
       enforceTimestamp = None
       observers = [agentLender]
+      pledgedHoldingCid = None
 
   -- Link pledge to lending agreement
   lendingLinkedCid <- submit (actAs [beneficialOwner, borrowerDealer, lendingCustodian]) do

@@ -158,10 +158,11 @@ testPledgeJointly = script do
       pledgeId = "PLEDGE-FP-001"; pledgor; pledgee; custodian; accountId = AccountId "ACC-PLEDGOR-FP"
       assetId = "ASSET-US-TREAS-4P25-NOV26"; quantity = 5000000.0; perfectionReference = "UCC-1-FP-001"
       correlationId = CorrelationId "CORR-FP-PLEDGE"; status = Types.Active; enforceTimestamp = None; observers = []
+      pledgedHoldingCid = None
   substituted <- jointly pledgor [pledgee, custodian] (SubstitutePledgeAction pledgeCid
     (SubstitutePledge with
       newAssetId = "ASSET-US-TREAS-4P50-FEB27"; newAccountId = AccountId "ACC-PLEDGOR-FP"
-      newQuantity = 4800000.0; newPerfectionRef = "UCC-1-FP-002"))
+      newQuantity = 4800000.0; newPerfectionRef = "UCC-1-FP-002"; newHoldingCid = None))
   observed <- jointly pledgee [pledgor] (AddPledgeObserverAction substituted (AddPledgeObserver with newObserver = auditor))
   Some pledge <- queryContractId auditor (observed : ContractId AssetPledge)
   assertMsg "The pledge is substituted, with the custodian's signature, and the auditor added"
