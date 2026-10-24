@@ -51,7 +51,7 @@ Use **Next step** and **Back**, or click a step in the bar.
 **What's inside** describes each area of the library in plain words, with its maturity:
 * **Settlement** (Beta): cash, securities and delivery versus payment. Moves real assets on the ledger.
 * **Financing** (Experimental): loans, repos, securities lending, margin calls, pledges and collateral, funds and escrow. Tracks each agreement; assets do not move on the ledger yet. Includes a calculator for the collateral a loan needs: `loan × margin ÷ (1 − haircut)`, with illustrative haircuts.
-* **Compliance** (Experimental): KYC and sanctions, transfer rules, eligibility and limits, regulatory reports. KYC, sanctions and transfer rules are checked inside the transfers, settlements and delivery versus payment that move assets, with every decision recorded; eligibility and limits are not checked that way yet.
+* **Compliance** (Experimental): KYC and sanctions, transfer rules, eligibility and limits, regulatory reports. KYC, sanctions, transfer rules and ownership limits are checked inside the transfers, settlements and delivery versus payment that move assets, with every decision recorded; eligibility rules are not checked that way yet.
 * **Coming next**: compliance in every workflow, settling against Canton Coin on a Canton Network, financing on real assets, and an independent audit.
 
 **Developers** has:
@@ -77,7 +77,7 @@ dpm version
 # Compile both packages: aryafi-core (production) and aryafi-core-test
 dpm build --all
 
-# Run the test suite (361 scripts; requires Java 17 or 21)
+# Run the test suite (364 scripts; requires Java 17 or 21)
 cd daml/test
 dpm test --all --show-coverage
 cd ../..

@@ -309,11 +309,12 @@ A bank or custodian whose factory has compliance requirements (`SetTransferCompl
       { "tag": "AV_ContractId", "value": "<sender's sanctions attestation>" },
       { "tag": "AV_ContractId", "value": "<receiver's KYC attestation>" },
       { "tag": "AV_ContractId", "value": "<receiver's sanctions attestation>" },
-      { "tag": "AV_ContractId", "value": "<the bond's transfer restriction rule>" } ] } } },
+      { "tag": "AV_ContractId", "value": "<the bond's transfer restriction rule>" },
+      { "tag": "AV_ContractId", "value": "<the bond's ownership restriction>" } ] } } },
   "meta": { "values": {} } }
 ```
 
-with each contract the submitter cannot see in the submission's `disclosedContracts` (its template ID, contract ID, and `createdEventBlob`, which the authority or registry reads from its own participant). A refused transfer or allocation is not an error: the result is `TransferInstructionResult_Failed` or `AllocationInstructionResult_Failed`, no holdings are spent or locked, and the reason is in the result's `meta` under `aryafi.io/compliance-refusal`, for example `SANCTIONED: OFAC-SDN` or `NO_KYC_ATTESTATION for <party>`. The decision is also recorded as an `AuditLog` (`#aryafi-core:AryaFi.Common.Events:AuditLog`) for the registry and the submitter. The Daml Script tests (`ComplianceGateTest`, `runComplianceAcrossNodes`) make these calls; the JSON form above follows from the Daml types.
+with each contract the submitter cannot see in the submission's `disclosedContracts` (its template ID, contract ID, and `createdEventBlob`, which the authority or registry reads from its own participant). A refused transfer or allocation is not an error: the result is `TransferInstructionResult_Failed` or `AllocationInstructionResult_Failed`, no holdings are spent or locked, and the reason is in the result's `meta` under `aryafi.io/compliance-refusal`, for example `SANCTIONED: OFAC-SDN`, `JURISDICTION_NOT_PERMITTED: KP`, or `NO_KYC_ATTESTATION for <party>`. The decision is also recorded as an `AuditLog` (`#aryafi-core:AryaFi.Common.Events:AuditLog`) for the registry and the submitter. The Daml Script tests (`ComplianceGateTest`, `runComplianceAcrossNodes`) make these calls; the JSON form above follows from the Daml types.
 
 ---
 

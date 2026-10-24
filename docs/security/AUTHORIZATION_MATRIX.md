@@ -200,6 +200,7 @@ Choices of AryaFi's compliance interface (`CompliancePolicy_*`, in the `aryafi-c
 | **`AssetTransferRequest`** (Transfer.daml) | `sender, custodian` | `receiver, complianceOfficer, observers` | `ApproveTransfer` | `complianceOfficer` | Compliance officer approves the transfer, allowing custodian to proceed |
 |  |  |  | `RejectTransfer` | `complianceOfficer` | Compliance officer rejects the transfer with a mandatory reason |
 |  |  |  | `CompleteTransfer` | `custodian` | Custodian completes an approved transfer |
+|  |  |  | `CompleteScreenedTransfer` | `custodian` | Custodian screens a pending request against its compliance requirements and completes it, in one transaction, with the attestations and rules in `evidence` |
 |  |  |  | `CancelTransfer` | `sender` | Sender cancels the transfer while it is still pending compliance review |
 |  |  |  | `AddTransferObserver` | `custodian` | Add an observer (e.g. regulator, auditor, external custodian) |
 
@@ -226,7 +227,9 @@ Choices of AryaFi's compliance interface (`CompliancePolicy_*`, in the `aryafi-c
 |  |  |  | `UpdateProviderRef` | `authority` | Link an external KYC provider reference to this attestation |
 |  |  |  | `AddKycObserver` | `authority` | Grant read-only visibility to an additional party (e.g. custodian, clearing member) |
 |  |  |  | `IsKycValid` *(read-only)* | `authority` | Nonconsuming query: is this attestation currently valid? Returns True only when status is KycVerified and ledger time has not passed expiryTimestamp |
-| **`OwnershipRestriction`** (OwnershipRestrictions.daml) | `regulator` | `—` | `UpdateCaps` | `regulator` | Update the ownership caps |
+| **`OwnershipRestriction`** (OwnershipRestrictions.daml) | `regulator` | `—` | `CompliancePolicy_Describe` *(read-only)* | `requester` | Describe the policy: its owner, kind, and subject or instrument |
+|  |  |  | `CompliancePolicy_Evaluate` *(read-only)* | `requester` | Evaluate the policy for a request, at the current ledger time, without changing anything |
+|  |  |  | `UpdateCaps` | `regulator` | Update the ownership caps |
 |  |  |  | `AddDisallowedJurisdiction` | `regulator` | Add a jurisdiction to the disallowed list |
 |  |  |  | `RemoveDisallowedJurisdiction` | `regulator` | Remove a jurisdiction from the disallowed list |
 |  |  |  | `SetRestrictionActive` | `regulator` | Activate or deactivate this restriction |
@@ -269,12 +272,12 @@ These principles hold for the current code and are covered by the negative and a
 9. **Disclosure of bilateral agreements needs both counterparties.** Adding an observer to a loan, repo, securities loan, margin call, pledge, or collateral position requires both principals.
 10. **Timestamps come from the ledger.** KYC verification, sanctions screening, pledge enforcement, redemption settlement, and report amendments record ledger time rather than a caller-supplied value.
 11. **Compliance officers cannot move value.** Their choices only approve, reject, or evaluate; they hold no controller rights over positions.
-12. **Compliance requirements are checked where value moves.** A bank or custodian that sets compliance requirements on its transfer or allocation factory evaluates the KYC and sanctions attestations and transfer restriction rules in the transfer, acceptance, or allocation transaction itself, through `CompliancePolicy_Evaluate`. A refused movement touches no holdings, and every decision is recorded as an `AuditLog`. The sender cannot skip the check, because the requirements are on the registry's factory; a settlement agent cannot skip it for a DvP whose instruction, signed by seller and buyer, carries requirements.
+12. **Compliance requirements are checked where value moves.** A bank or custodian that sets compliance requirements on its transfer or allocation factory evaluates the KYC and sanctions attestations and the transfer and ownership restrictions in the transfer, acceptance, or allocation transaction itself, through `CompliancePolicy_Evaluate`. A refused movement touches no holdings, and every decision is recorded as an `AuditLog`. The sender cannot skip the check, because the requirements are on the registry's factory; a settlement agent cannot skip it for a DvP whose instruction, signed by seller and buyer, carries requirements. A screened `AssetTransferRequest` completes only on approval; one that needs manual review stays with the compliance officer.
 
 ## 4. Known Gaps (see `docs/KNOWN_LIMITATIONS.md`)
 
 - Across separate Canton participants, multi-signatory contracts and joint choices need a `MultiPartyProposal`; without one they need all their parties in one submission. Token-standard transfers and `TokenDvpInstruction` need neither.
-- KYC attestations, sanctions attestations, and transfer restriction rules can be evaluated by business workflows through `CompliancePolicy`; eligibility policies, jurisdiction profiles, and ownership limits cannot yet. Their own evaluation choices (`IsKycValid`, `IsSanctionsClear`, `EvaluateEligibility`, `EvaluateTransfer`, `CheckOwnershipLimit`) remain controlled by the policy owner.
+- KYC attestations, sanctions attestations, transfer restriction rules, and ownership restrictions can be evaluated by business workflows through `CompliancePolicy`; eligibility policies and jurisdiction profiles cannot yet. The policies' own evaluation choices (`IsKycValid`, `IsSanctionsClear`, `EvaluateEligibility`, `EvaluateTransfer`, `CheckOwnershipLimit`) remain controlled by the policy owner.
 - A workflow evaluates the evidence its caller supplies. Missing evidence is refused, but the workflow cannot tell that a party has a second, worse attestation, or that a rule by another accepted officer was left out.
 - Loans, repos, pledges, collateral, and margin calls reference assets and payments by text reference rather than contract ID, so the ledger does not prevent one asset being referenced by several agreements.
 
