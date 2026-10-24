@@ -16,7 +16,7 @@ This dossier is the briefing package for an independent security review of **Ary
   - `daml/compliance-api/`: the `CompliancePolicy` interface (package `aryafi-compliance-api`), which the KYC, sanctions, and transfer-rule templates implement.
 - **Out of scope**: the test package under `daml/test/AryaFi/Test/`, the website, and the deployment configuration.
 - **Authorization reference**: [AUTHORIZATION_MATRIX.md](AUTHORIZATION_MATRIX.md), generated from the source.
-- **Target release**: `v2.0.0`
+- **Target release**: `v3.3.0`
 
 ---
 
@@ -92,7 +92,7 @@ Token-standard settlement is atomic in the same way when the settlement agent se
 
 ## 3. Automated Test Coverage
 
-`dpm test --all --show-coverage` (in `daml/test`) on 3.3.0 (in development):
+`dpm test --all --show-coverage` (in `daml/test`) on v3.3.0:
 
 | Measure | Result |
 |:---|:---|

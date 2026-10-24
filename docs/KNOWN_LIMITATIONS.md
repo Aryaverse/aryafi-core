@@ -2,7 +2,7 @@
 
 This page records what AryaFi Core does **not** do yet, so that nobody builds on an assumption the code does not support. It is required by the *Definition of Done — Production Module* (Technical & Business Requirements §21, §30) and is updated with every release.
 
-Last reviewed: 2026-10-23, against the code for 3.3.0 (in development).
+Last reviewed: 2026-10-24, against the code at v3.3.0.
 
 ---
 
