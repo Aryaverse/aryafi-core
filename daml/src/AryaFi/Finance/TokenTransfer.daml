@@ -29,8 +29,8 @@
 --
 -- A registry can also set the compliance requirements its transfers must meet
 -- (see AryaFi.Compliance.Gate). The sender then passes the KYC and sanctions
--- attestations of both parties, and the instrument's transfer restriction
--- rule, in the transfer's choice context, and the registry evaluates them in
+-- attestations of both parties, and the instrument's transfer and ownership
+-- restrictions, in the transfer's choice context, and the registry evaluates them in
 -- the transfer transaction. A refused transfer touches no holdings and ends
 -- `Failed`, with the reason in the result's metadata. A pending transfer is
 -- evaluated again when the receiver accepts it, with the evidence the

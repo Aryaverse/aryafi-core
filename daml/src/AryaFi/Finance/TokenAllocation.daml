@@ -35,7 +35,7 @@
 -- A registry can also set the compliance requirements its allocations must
 -- meet (see AryaFi.Compliance.Gate). The account owner then passes the KYC
 -- and sanctions attestations of both sides of its legs, and the instruments'
--- transfer restriction rules, in the allocation's choice context, and the
+-- transfer and ownership restrictions, in the allocation's choice context, and the
 -- registry evaluates each leg it sends or receives when the allocation is
 -- made. A refused allocation locks nothing and ends `Failed`, with the reason
 -- in the result's metadata; every decision is recorded as an audit event for

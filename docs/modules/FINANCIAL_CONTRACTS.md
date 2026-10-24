@@ -17,7 +17,7 @@ AryaFi Core institutional financial contract workflows implemented in `daml/src/
 | **`AssetRedemption`** | `Redemption.daml` | FundManager, Investor | Custodian, Regulators | RedemptionRequested, RedemptionApproved, RedemptionGated, RedemptionSettled, RedemptionRejected, RedemptionCancelled | `ApproveRedemption`, `ApplyLiquidityGate`, `ReleaseLiquidityGate`, `ExecuteRedemptionSettlement`, `CancelRedemption`, `RejectRedemption` |
 | **`AssetPledge`** | `Pledge.daml` | Pledgor, Pledgee, Custodian | TripartyAgent, Regulators | Active, Defaulted, Closed | `ReleasePledge`, `EnforcePledge`, `SubstitutePledge`, `UpdatePerfectionRef` |
 | **`ConditionalEscrow`** | `Escrow.daml` | EscrowAgent, Depositor | Beneficiary | EscrowHeld, EscrowReleased, EscrowRefunded, EscrowExpired, EscrowDisputed | `ReleaseEscrow`, `RefundEscrow`, `ExpireEscrow`, `DisputeEscrow`, `ResolveDispute` |
-| **`AssetTransferRequest`**| `Transfer.daml`| Sender, Custodian | Receiver, ComplianceOfficer| TransferPendingCompliance, TransferApproved, TransferCompleted, TransferRejected, TransferCancelled | `ApproveTransfer`, `RejectTransfer`, `CompleteTransfer`, `CancelTransfer` |
+| **`AssetTransferRequest`**| `Transfer.daml`| Sender, Custodian | Receiver, ComplianceOfficer| TransferPendingCompliance, TransferApproved, TransferCompleted, TransferRejected, TransferCancelled | `ApproveTransfer`, `RejectTransfer`, `CompleteTransfer`, `CompleteScreenedTransfer`, `CancelTransfer` |
 
 ---
 

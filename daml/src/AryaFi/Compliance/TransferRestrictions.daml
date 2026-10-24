@@ -98,6 +98,7 @@ template TransferRestrictionRule
         kind = TransferRulePolicy
         subject = None
         instrumentId = Some (unISIN isin)
+        jurisdiction = None
       evaluatePolicy request = toComplianceDecision <$> ruleDecision this request
 
     -- | Update the regulatory category and lockup configuration.

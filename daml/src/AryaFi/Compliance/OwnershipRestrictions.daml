@@ -5,13 +5,16 @@
 -- OwnershipRestriction enforces maximum holding caps, quantity limits,
 -- and jurisdiction exclusions to comply with regulatory ownership thresholds.
 -- The nonconsuming CheckOwnershipLimit choice enables compliance gating in
--- transfer workflows without consuming the rule contract.
+-- transfer workflows without consuming the rule contract, and workflows
+-- evaluate the restriction in their own transactions through
+-- `CompliancePolicy` (see AryaFi.Compliance.Gate).
 module AryaFi.Compliance.OwnershipRestrictions where
 
 import AryaFi.Common.Types (Amount)
-import AryaFi.Common.Identifiers (ISIN)
+import AryaFi.Common.Identifiers (ISIN(..))
 import AryaFi.Common.Errors (require, requireNonEmpty)
-import AryaFi.Common.Policies (PolicyDecision(..))
+import AryaFi.Common.Policies (PolicyDecision(..), andDecision, toComplianceDecision)
+import AryaFi.ComplianceApi.PolicyV1
 
 -- | Maximum holding cap and investor concentration restrictions.
 template OwnershipRestriction
@@ -30,6 +33,16 @@ template OwnershipRestriction
     -- ^ Whether this restriction is currently enforceable.
   where
     signatory regulator
+
+    -- Workflows evaluate the restriction in their own transactions (see AryaFi.Compliance.Gate).
+    interface instance CompliancePolicy for OwnershipRestriction where
+      view = CompliancePolicyView with
+        owner = regulator
+        kind = OwnershipPolicy
+        subject = None
+        instrumentId = Some (unISIN isin)
+        jurisdiction = None
+      evaluatePolicy request = pure (toComplianceDecision (restrictionDecision this request))
 
     -- | Update the ownership caps.
     choice UpdateCaps : ContractId OwnershipRestriction
@@ -97,3 +110,28 @@ template OwnershipRestriction
         else
           pure Approved
 
+
+-- | An ownership restriction's decision for a receiver, as a workflow
+-- evaluates it. An inactive restriction, or a party that only sends, is
+-- approved. For an active one:
+--   * the receiver's jurisdiction, from its KYC attestation, must not be
+--     disallowed; if it is unknown and some are disallowed, the decision is
+--     manual review;
+--   * the transferred amount must not exceed the holding limit. What the
+--     receiver already holds is not counted, because positions are not
+--     aggregated on the ledger, and the percentage limit is not checked,
+--     because the ledger does not hold the issue size.
+restrictionDecision : OwnershipRestriction -> ComplianceRequest -> PolicyDecision
+restrictionDecision restriction request
+  | request.instrumentId /= unISIN restriction.isin = Rejected "OWNERSHIP_RESTRICTION_FOR_ANOTHER_SECURITY"
+  | not restriction.isActive || not request.receiving = Approved
+  | otherwise = andDecision jurisdictionCheck holdingCheck
+  where
+    jurisdictionCheck = case request.jurisdiction of
+      Some j | j `elem` restriction.disallowedJurisdictions -> Rejected ("JURISDICTION_NOT_PERMITTED: " <> j)
+      None | not (null restriction.disallowedJurisdictions) -> RequiresManualReview "RECEIVER_JURISDICTION_UNKNOWN"
+      _ -> Approved
+    holdingCheck =
+      if restriction.maxHoldingQuantity > 0.0 && request.amount > restriction.maxHoldingQuantity
+      then Rejected ("HOLDING_LIMIT_EXCEEDED: " <> show request.amount <> " over " <> show restriction.maxHoldingQuantity)
+      else Approved

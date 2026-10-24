@@ -13,6 +13,7 @@ import Daml.Script
 import AryaFi.ComplianceApi.PolicyV1
 import AryaFi.Common.Identifiers (ISIN(..))
 import AryaFi.Compliance.KYC
+import AryaFi.Compliance.OwnershipRestrictions
 import AryaFi.Compliance.Sanctions
 import AryaFi.Compliance.TransferRestrictions
 import AryaFi.Test.Scenarios.DvpSettlementTest (allocateTestParty, bondIsin)
@@ -41,17 +42,21 @@ inDays n = do
   now <- getTime
   pure (addRelTime now (days n))
 
--- | A KYC attestation by `authority` about `subject`, expiring in `validDays`
--- (negative: already expired).
+-- | A KYC attestation by `authority` about `subject` in the US, expiring in
+-- `validDays` (negative: already expired).
 issueKyc : Party -> Party -> KycStatus -> Int -> Script Evidence
-issueKyc authority subject status validDays = do
+issueKyc authority subject status validDays = issueKycIn authority subject "US" status validDays
+
+-- | A KYC attestation by `authority` about `subject` in `jurisdiction`.
+issueKycIn : Party -> Party -> Text -> KycStatus -> Int -> Script Evidence
+issueKycIn authority subject jurisdiction status validDays = do
   now <- getTime
   expiry <- inDays validDays
   cid <- submit authority do
     createCmd KycAttestation with
       authority; subjectParty = subject; lei = None; status
       verificationTimestamp = now; expiryTimestamp = expiry
-      jurisdiction = "US"; riskTier = "STANDARD"; providerRef = None; observers = []
+      jurisdiction; riskTier = "STANDARD"; providerRef = None; observers = []
   evidenceOf authority cid
 
 -- | A sanctions screening by `screener` of `subject`, expiring in `validDays`.
@@ -108,7 +113,7 @@ issueRule officer isin terms = do
 bondRequest : Party -> Party -> Party -> Bool -> ComplianceRequest
 bondRequest custodian party counterparty receiving = ComplianceRequest with
   party; receiving; counterparty
-  instrumentAdmin = custodian; instrumentId = unISIN bondIsin; amount = 1000.0
+  instrumentAdmin = custodian; instrumentId = unISIN bondIsin; amount = 1000.0; jurisdiction = None
 
 -- | The bank or custodian evaluates a policy disclosed to it.
 evaluateAs : Party -> Evidence -> ComplianceRequest -> Script ComplianceDecision
@@ -152,7 +157,8 @@ testKycPolicy = script do
   verified <- issueKyc p.authority p.alice KycVerified 365
   described <- describeAs p.custodian verified
   assertMsg "The view names the authority, the kind, and the subject"
-    (described == CompliancePolicyView with owner = p.authority; kind = KycPolicy; subject = Some p.alice; instrumentId = None)
+    (described == CompliancePolicyView with
+      owner = p.authority; kind = KycPolicy; subject = Some p.alice; instrumentId = None; jurisdiction = Some "US")
   evaluateAs p.custodian verified request >>= expectDecision "Verified" Compliant
 
   -- Evaluating changes nothing: the attestation is still active
@@ -182,7 +188,8 @@ testSanctionsPolicy = script do
   clear <- issueSanctions p.authority p.bob SanctionsClear 30
   described <- describeAs p.custodian clear
   assertMsg "The view names the screener, the kind, and the subject"
-    (described == CompliancePolicyView with owner = p.authority; kind = SanctionsPolicy; subject = Some p.bob; instrumentId = None)
+    (described == CompliancePolicyView with
+      owner = p.authority; kind = SanctionsPolicy; subject = Some p.bob; instrumentId = None; jurisdiction = None)
   evaluateAs p.custodian clear request >>= expectDecision "Clear" Compliant
   evaluateAs p.custodian clear (bondRequest p.custodian p.alice p.bob False)
     >>= expectDecision "Another party" (NonCompliant "SANCTIONS_ATTESTATION_FOR_ANOTHER_PARTY")
@@ -213,7 +220,8 @@ testTransferRulePolicy = script do
   described <- describeAs p.custodian e
   assertMsg "The view names the officer, the kind, and the security"
     (described == CompliancePolicyView with
-      owner = p.authority; kind = TransferRulePolicy; subject = None; instrumentId = Some (unISIN bondIsin))
+      owner = p.authority; kind = TransferRulePolicy; subject = None; instrumentId = Some (unISIN bondIsin)
+      jurisdiction = None)
   evaluateAs p.custodian e toBob >>= expectDecision "Unrestricted" Compliant
 
   check "Whitelisted receiver" (whitelistOnly [p.bob]) toBob Compliant
@@ -233,6 +241,50 @@ testTransferRulePolicy = script do
     (NonCompliant "TRANSFER_RULE_FOR_ANOTHER_SECURITY")
 
 -- ---------------------------------------------------------------------------
+-- Ownership restrictions
+-- ---------------------------------------------------------------------------
+
+-- | An active ownership restriction by `regulator` for `isin`.
+issueRestriction : Party -> ISIN -> [Text] -> Decimal -> Script Evidence
+issueRestriction regulator isin disallowedJurisdictions maxHoldingQuantity = do
+  cid <- submit regulator do
+    createCmd OwnershipRestriction with
+      regulator; isin; maxOwnershipPercentage = 5.0; maxHoldingQuantity; disallowedJurisdictions; isActive = True
+  evidenceOf regulator cid
+
+testOwnershipRestrictionPolicy : Script ()
+testOwnershipRestrictionPolicy = script do
+  p <- setup "POL-OWNERSHIP"
+  let toBob = bondRequest p.custodian p.bob p.alice True
+      fromAlice = bondRequest p.custodian p.alice p.bob False
+      check what disallowed limit request expected =
+        issueRestriction p.authority bondIsin disallowed limit >>= \e -> evaluateAs p.custodian e request
+          >>= expectDecision what expected
+
+  e <- issueRestriction p.authority bondIsin ["KP"] 0.0
+  described <- describeAs p.custodian e
+  assertMsg "The view names the regulator, the kind, and the security"
+    (described == CompliancePolicyView with
+      owner = p.authority; kind = OwnershipPolicy; subject = None; instrumentId = Some (unISIN bondIsin)
+      jurisdiction = None)
+
+  check "Permitted jurisdiction" ["KP", "IR"] 0.0 (toBob with jurisdiction = Some "US") Compliant
+  check "Disallowed jurisdiction" ["KP", "IR"] 0.0 (toBob with jurisdiction = Some "KP")
+    (NonCompliant "JURISDICTION_NOT_PERMITTED: KP")
+  check "Unknown jurisdiction" ["KP"] 0.0 toBob (NeedsReview "RECEIVER_JURISDICTION_UNKNOWN")
+  check "Unknown jurisdiction, none disallowed" [] 0.0 toBob Compliant
+  check "Over the holding limit" [] 500.0 toBob (NonCompliant "HOLDING_LIMIT_EXCEEDED: 1000.0 over 500.0")
+  check "Within the holding limit" [] 5000.0 toBob Compliant
+  check "The sender is not restricted" ["KP"] 500.0 fromAlice Compliant
+  check "Another security" [] 0.0 (toBob with instrumentId = "US0000000000")
+    (NonCompliant "OWNERSHIP_RESTRICTION_FOR_ANOTHER_SECURITY")
+
+  inactive <- submit p.authority do
+    exerciseCmd (fromInterfaceContractId @OwnershipRestriction e.policyCid) SetRestrictionActive with active = False
+  evidenceOf p.authority inactive >>= \r -> evaluateAs p.custodian r (toBob with jurisdiction = Some "KP")
+    >>= expectDecision "Inactive restriction" Compliant
+
+-- ---------------------------------------------------------------------------
 -- Forged policies
 -- ---------------------------------------------------------------------------
 
@@ -248,7 +300,7 @@ template ForgedKyc
 
     interface instance CompliancePolicy for ForgedKyc where
       view = CompliancePolicyView with
-        owner = claimedAuthority; kind = KycPolicy; subject = Some subject; instrumentId = None
+        owner = claimedAuthority; kind = KycPolicy; subject = Some subject; instrumentId = None; jurisdiction = None
       evaluatePolicy _ = pure Compliant
 
 -- | `forger`'s KYC attestation for `subject`, claiming to be `claimedAuthority`'s.

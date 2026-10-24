@@ -41,7 +41,7 @@ runComplianceAcrossNodes input = do
   let bond = unISIN bondIsin
       requirements = ComplianceRequirements with
         kycAuthorities = [authority]; sanctionsAuthorities = [authority]
-        transferRuleOfficers = [authority]; restrictedInstruments = [bond]
+        transferRuleOfficers = [authority]; ownershipRegulators = []; restrictedInstruments = [bond]
 
   -- The custodian issues the bond to the seller through a factory of its own,
   -- and its clients transfer through one with compliance requirements

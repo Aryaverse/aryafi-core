@@ -104,6 +104,7 @@ kycSanctionsGatedTransfer = script do
       status = TransferPendingCompliance
       complianceNote = None
       observers = []
+      compliance = None
 
   -- Step 5: Compliance officer approves (having verified KYC + sanctions above)
   approvedCid <- submit complianceOfficer do

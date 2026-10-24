@@ -22,7 +22,7 @@
 -- An instruction can carry the compliance requirements both parties must meet
 -- (see AryaFi.Compliance.Gate). The agent then settles it with
 -- ExecuteScreenedDvpSettlement, which evaluates the parties' KYC and sanctions
--- attestations and the security's transfer restriction rule in the settlement
+-- attestations and the security's transfer and ownership restrictions in the settlement
 -- transaction: the instruction settles, or fails with the reasons, and the
 -- decisions are recorded as audit events.
 --
@@ -178,8 +178,8 @@ template DvpInstruction
     -- | Execute the DvP settlement after evaluating the instruction's
     -- compliance requirements in the same transaction. The attestations and
     -- rules in `evidence` are evaluated for both legs: KYC and sanctions for
-    -- seller and buyer, and the security's transfer restriction rule for the
-    -- buyer. If both legs are approved, the DvP settles as with
+    -- seller and buyer, and the security's transfer and ownership
+    -- restrictions for the buyer. If both legs are approved, the DvP settles as with
     -- ExecuteDvpSettlement. Otherwise nothing moves: the instruction is Failed
     -- with the reasons, and both legs stay locked to the agent, as with
     -- FailDvpSettlement. Either way the decisions are recorded as audit events
@@ -192,7 +192,7 @@ template DvpInstruction
         -- ^ The buyer's CashPosition, locked to the settlement agent.
         evidence : [ContractId CompliancePolicy]
         -- ^ The parties' KYC and sanctions attestations and the security's
-        --   transfer restriction rule, shared with or disclosed to the agent.
+        --   transfer and ownership restrictions, shared with or disclosed to the agent.
       controller settlementAgent
       do
         requirements <- case compliance of

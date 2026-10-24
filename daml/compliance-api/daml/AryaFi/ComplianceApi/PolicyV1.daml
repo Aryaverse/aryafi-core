@@ -8,8 +8,8 @@
 -- | Compliance policies that business workflows evaluate inside their own
 -- transactions.
 --
--- A KYC attestation, a sanctions attestation, or a transfer restriction rule
--- implements `CompliancePolicy`. Its choices only read the policy, and any
+-- A KYC attestation, a sanctions attestation, a transfer restriction rule, or
+-- an ownership restriction implements `CompliancePolicy`. Its choices only read the policy, and any
 -- party that sees the policy contract can exercise them: an authority shares
 -- an attestation with a bank or custodian by adding it as an observer, or by
 -- disclosing the contract. The bank or custodian can then check a transfer
@@ -23,7 +23,8 @@
 -- This package holds only the interface, so that authorities and registries
 -- outside AryaFi can implement it or call it, and so that AryaFi's own
 -- package stays upgradeable. AryaFi's attestations and rules implement it in
--- `aryafi-core` (AryaFi.Compliance.KYC, .Sanctions, .TransferRestrictions).
+-- `aryafi-core` (AryaFi.Compliance.KYC, .Sanctions, .TransferRestrictions,
+-- .OwnershipRestrictions).
 module AryaFi.ComplianceApi.PolicyV1 where
 
 import DA.Action (unless)
@@ -33,6 +34,7 @@ data PolicyKind
   = KycPolicy
   | SanctionsPolicy
   | TransferRulePolicy
+  | OwnershipPolicy
   deriving (Eq, Ord, Show)
 
 -- | What a compliance policy is about.
@@ -44,7 +46,9 @@ data CompliancePolicyView = CompliancePolicyView
     subject : Optional Party
     -- ^ For an attestation, the party it is about.
     instrumentId : Optional Text
-    -- ^ For a transfer restriction rule, the instrument (ISIN) it restricts.
+    -- ^ For a transfer or ownership restriction, the instrument (ISIN) it restricts.
+    jurisdiction : Optional Text
+    -- ^ For a KYC attestation, the subject's jurisdiction (ISO 3166-1 alpha-2).
   deriving (Eq, Show)
 
 -- | One party's part in a proposed movement of an instrument, as a policy
@@ -61,6 +65,8 @@ data ComplianceRequest = ComplianceRequest
     instrumentId : Text
     -- ^ The currency, ISIN, or other identifier the registry uses.
     amount : Decimal
+    jurisdiction : Optional Text
+    -- ^ The party's jurisdiction, from the KYC attestation that approved it, if known.
   deriving (Eq, Show)
 
 -- | A policy's decision on a request.
