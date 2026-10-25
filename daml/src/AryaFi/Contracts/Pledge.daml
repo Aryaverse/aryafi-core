@@ -23,9 +23,8 @@ import qualified Splice.Api.Token.HoldingV2 as HoldingV2
 import AryaFi.Common.Types (Amount, LifecycleStatus(..))
 import AryaFi.Common.Identifiers (AccountId(..), ReferenceId, CorrelationId)
 import AryaFi.Common.Errors (require, requireNonEmpty)
-import AryaFi.Finance.Cash (UnlockCash(..))
-import AryaFi.Finance.Security (UnlockSecurity(..))
-import AryaFi.Finance.TokenRegistry
+import AryaFi.Finance.Encumbrance
+import AryaFi.Finance.TokenRegistry (deliverLocked)
 
 -- | The result of encumbering a pledge's asset.
 data PledgeEncumbered = PledgeEncumbered
@@ -100,7 +99,7 @@ template AssetPledge
       do
         require (status == Active)
           "Pledge must be Active to release"
-        mapA_ unlockForPledgor pledgedHoldingCid
+        mapA_ unencumber pledgedHoldingCid
         create this with
           status = Closed
           pledgedHoldingCid = None
@@ -154,7 +153,7 @@ template AssetPledge
             (lockedCid, changeCid) <- lockForPledge this newAssetId newAccountId newQuantity cid
             require (changeCid == None) "The new asset's position must be exactly the new quantity"
             pure (Some lockedCid)
-        mapA_ unlockForPledgor pledgedHoldingCid
+        mapA_ unencumber pledgedHoldingCid
         create this with
           assetId = newAssetId
           accountId = newAccountId
@@ -197,31 +196,12 @@ pledgeLockReference pledge = "Pledge " <> pledge.pledgeId
 lockForPledge
   : AssetPledge -> ReferenceId -> AccountId -> Amount -> ContractId HoldingV2.Holding
   -> Update (ContractId HoldingV2.Holding, Optional (ContractId HoldingV2.Holding))
-lockForPledge pledge assetId (AccountId account) quantity holdingCid = do
-  position <- fetchPosition holdingCid
-  let holding = positionView position
-  require (holding.account.owner == Some pledge.pledgor) "Pledged holding: not owned by the pledgor"
-  require (holding.account.provider == Some pledge.custodian && holding.instrumentId.admin == pledge.custodian)
-    "Pledged holding: not kept by the pledge's custodian"
-  require (holding.account.id == account) "Pledged holding: not in the pledge's account"
-  require (holding.instrumentId.id == assetId) "Pledged holding: a different asset"
-  require (holding.lock == None) "Pledged holding: already locked"
-  require (holding.amount >= quantity)
-    ("Pledged holding: " <> show holding.amount <> " is less than the pledged " <> show quantity)
-  archivePosition position
-  lockedCid <- createPosition position pledge.pledgor account quantity
-    (Some (pledge.pledgee, pledgeLockReference pledge)) (positionObservers position)
-  changeCid <-
-    if holding.amount > quantity
-    then Some <$> createPosition position pledge.pledgor account (holding.amount - quantity) None
-      (positionObservers position)
-    else pure None
-  pure (lockedCid, changeCid)
-
--- | Unlock a pledged position for the pledgor, keeping its observers.
-unlockForPledgor : ContractId HoldingV2.Holding -> Update (ContractId HoldingV2.Holding)
-unlockForPledgor cid = do
-  position <- fetchPosition cid
-  case position of
-    CashHolding cashCid _ -> toInterfaceContractId <$> exercise cashCid UnlockCash
-    SecurityHolding securityCid _ -> toInterfaceContractId <$> exercise securityCid UnlockSecurity
+lockForPledge pledge assetId (AccountId account) quantity = encumber Encumbrance with
+  owner = pledge.pledgor
+  keeper = pledge.custodian
+  accountId = account
+  instrumentId = assetId
+  amount = quantity
+  holder = pledge.pledgee
+  reference = pledgeLockReference pledge
+  label = "Pledged holding"

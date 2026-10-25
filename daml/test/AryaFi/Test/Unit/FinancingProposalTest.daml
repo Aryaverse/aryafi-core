@@ -112,11 +112,12 @@ testCollateralJointly = script do
         accountId = AccountId "ACC-COLL-FP"; assetClass = GovernmentSecurity; isin = ISIN "US912828ZM50"
         quantity = 1000000.0; marketValue = 1000000.0; haircut = 0.02; settlementCurrency = "USD"
         obligationRef = ref; lockReference = "LOCK-" <> ref; status; externalRef = None; observers = []
+        lockedHoldingCid = None
   liveCid <- submit (actAs [provider, receiver, custodian]) do createCmd (position Collateral.Active "REPO-FP-1")
   substituted <- jointly provider [receiver] (SubstituteCollateralAction liveCid
     (Collateral.SubstituteCollateral with
       newIsin = ISIN "US91282CJL54"; newQuantity = 990000.0; newMarketValue = 1001000.0; newHaircut = 0.02
-      newAssetClass = GovernmentSecurity; newLockReference = "LOCK-REPO-FP-1-B"))
+      newAssetClass = GovernmentSecurity; newLockReference = "LOCK-REPO-FP-1-B"; newHoldingCid = None))
   observed <- jointly receiver [provider] (AddCollateralObserverAction substituted (AddCollateralObserver with newObserver = auditor))
   released <- jointly provider [receiver] (ReleaseCollateralAction observed)
   Some collateral <- queryContractId provider (released : ContractId CollateralPosition)
