@@ -3,7 +3,7 @@
 [![Daml](https://img.shields.io/badge/Daml_SDK-3.5.12-blue.svg)](https://docs.digitalasset.com)
 [![Canton](https://img.shields.io/badge/Canton-3.5_(protocol_35)-green.svg)](deploy/canton/canton.conf)
 [![Release](https://img.shields.io/badge/Release-v3.3.0-purple.svg)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/dpm_test-371_passing-brightgreen.svg)](daml/test/AryaFi/Test)
+[![Tests](https://img.shields.io/badge/dpm_test-379_passing-brightgreen.svg)](daml/test/AryaFi/Test)
 [![Status](https://img.shields.io/badge/Status-Beta_/_Experimental-orange.svg)](docs/KNOWN_LIMITATIONS.md)
 [![Website](https://img.shields.io/badge/Vercel-Website-black.svg?logo=vercel)](https://aryafi-core.vercel.app)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
@@ -86,8 +86,8 @@ aryafi-core/
 │   ├── compliance-api/            # Compliance interface package (aryafi-compliance-api)
 │   └── test/                      # Test package (aryafi-core-test), depends on the production DAR
 │       ├── daml.yaml
-│       └── AryaFi/Test/           # Daml Script test suite (371 scripts, run by `dpm test`)
-│           ├── Unit/              # 19 unit suites across primitives, contracts & compliance
+│       └── AryaFi/Test/           # Daml Script test suite (379 scripts, run by `dpm test`)
+│           ├── Unit/              # 20 unit suites across primitives, contracts & compliance
 │           ├── Scenarios/         # 10 end-to-end multi-party lifecycle scenarios
 │           ├── Negative/          # Unauthorized access, violation & invalid transition tests
 │           ├── Privacy/           # Observer visibility tests
@@ -164,7 +164,7 @@ aryafi-core/
 # Build both packages: aryafi-core (production) and aryafi-core-test
 dpm build --all
 
-# Run the test suite (371 scripts); --all includes the production templates in the coverage report
+# Run the test suite (379 scripts); --all includes the production templates in the coverage report
 cd daml/test
 dpm test --all --show-coverage
 ```
