@@ -1,0 +1,195 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Pledges that hold the pledged asset: the pledgor locks its position to
+-- the pledgee, so it cannot be pledged twice; releasing unlocks it,
+-- enforcing delivers it to the pledgee, and substituting swaps the locked
+-- positions.
+module AryaFi.Test.Unit.PledgedHoldingTest where
+
+import DA.List (sort)
+import Daml.Script
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
+import AryaFi.Common.Identifiers
+import qualified AryaFi.Common.Types as Types
+import AryaFi.Contracts.Pledge
+import AryaFi.Finance.Security
+import AryaFi.Test.Scenarios.DvpSettlementTest (allocateTestParty, bondIsin, setupCashPosition, setupSecurityPosition)
+import AryaFi.Test.Unit.TokenTransferTest (submitFailsWith)
+
+-- ---------------------------------------------------------------------------
+-- Fixture and helpers
+-- ---------------------------------------------------------------------------
+
+data Fixture = Fixture
+  with
+    custodian : Party
+    pledgor : Party
+    pledgee : Party
+    pledgeCid : ContractId AssetPledge
+    bondHolding : ContractId HoldingV2.Holding
+    -- ^ The pledgor's 5,000,000 of the bond, of which the pledge covers 3,000,000.
+
+bond : Text
+bond = unISIN bondIsin
+
+pledgorAccount : Text
+pledgorAccount = "ACC-PLEDGOR-SEC"
+
+-- | A pledge of 3,000,000 of the bond in `account`, signed by all three parties.
+pledgeOf : Party -> Party -> Party -> Text -> Text -> Text -> Decimal -> Script (ContractId AssetPledge)
+pledgeOf custodian pledgor pledgee pledgeId assetId account quantity =
+  submit (actAs [pledgor, pledgee, custodian]) do
+    createCmd AssetPledge with
+      pledgeId; pledgor; pledgee; custodian; accountId = AccountId account; assetId; quantity
+      perfectionReference = "UCC-1-" <> pledgeId; correlationId = CorrelationId ("CORR-" <> pledgeId)
+      status = Types.Active; enforceTimestamp = None; observers = []; pledgedHoldingCid = None
+
+setup : Text -> Script Fixture
+setup test = do
+  custodian <- allocateTestParty "Custodian" test
+  pledgor <- allocateTestParty "Pledgor" test
+  pledgee <- allocateTestParty "Pledgee" test
+  bondHolding <- toInterfaceContractId <$>
+    setupSecurityPosition custodian pledgor (AccountId pledgorAccount) 5000000.0
+  pledgeCid <- pledgeOf custodian pledgor pledgee ("PLG-" <> test) bond pledgorAccount 3000000.0
+  pure Fixture with ..
+
+encumber : Fixture -> Script PledgeEncumbered
+encumber f = submit f.pledgor do exerciseCmd f.pledgeCid EncumberHolding with holdingCid = f.bondHolding
+
+-- | `party`'s holdings: account, amount, and lock holders.
+holdingsOf : Party -> Script [(Text, Decimal, Optional [Party])]
+holdingsOf party = do
+  found <- queryInterface @HoldingV2.Holding party
+  pure (sort [ (v.account.id, v.amount, (\l -> l.holders) <$> v.lock)
+             | (_, Some v) <- found, v.account.owner == Some party ])
+
+-- ---------------------------------------------------------------------------
+-- Tests
+-- ---------------------------------------------------------------------------
+
+-- The pledgor locks the pledged quantity to the pledgee and keeps the rest;
+-- releasing the pledge unlocks it.
+testEncumberAndRelease : Script ()
+testEncumberAndRelease = script do
+  f <- setup "PLG-RELEASE"
+  encumbered <- encumber f
+  holdings <- holdingsOf f.pledgor
+  assertMsg ("Expected 3,000,000 locked to the pledgee and 2,000,000 free, got " <> show holdings)
+    (holdings == [(pledgorAccount, 2000000.0, None), (pledgorAccount, 3000000.0, Some [f.pledgee])])
+  Some pledge <- queryContractId f.pledgee encumbered.pledgeCid
+  lockedCid <- case pledge.pledgedHoldingCid of
+    Some cid -> pure cid
+    None -> abort "The pledge holds no position"
+  Some locked <- queryInterfaceContractId f.pledgee lockedCid
+  assertMsg "The lock names the pledge"
+    (fmap (\l -> l.context) locked.lock == Some (Some ("Pledge " <> pledge.pledgeId)))
+
+  -- The pledgor can no longer unlock or move the pledged position
+  submitMustFail f.pledgor do
+    exerciseCmd (fromInterfaceContractId @SecurityPosition lockedCid) UnlockSecurity
+
+  released <- submit f.pledgee do exerciseCmd encumbered.pledgeCid ReleasePledge
+  Some closed <- queryContractId f.pledgee released
+  assertMsg "The released pledge is closed and holds nothing"
+    (closed.status == Types.Closed && closed.pledgedHoldingCid == None)
+  afterRelease <- holdingsOf f.pledgor
+  assertMsg ("Expected both positions free, got " <> show afterRelease)
+    (afterRelease == [(pledgorAccount, 2000000.0, None), (pledgorAccount, 3000000.0, None)])
+
+-- Threat E-04: a pledged position cannot be pledged again.
+testDoublePledgeRefused : Script ()
+testDoublePledgeRefused = script do
+  f <- setup "PLG-DOUBLE"
+  encumbered <- encumber f
+  Some pledge <- queryContractId f.pledgee encumbered.pledgeCid
+  Some lockedCid <- pure pledge.pledgedHoldingCid
+  submitFailsWith "The pledge already holds its asset" [f.pledgor] do
+    exerciseCmd encumbered.pledgeCid EncumberHolding with holdingCid = lockedCid
+  other <- allocateTestParty "OtherLender" "PLG-DOUBLE"
+  secondPledge <- pledgeOf f.custodian f.pledgor other "PLG-SECOND" bond pledgorAccount 3000000.0
+  submitFailsWith "Pledged holding: already locked" [f.pledgor] do
+    exerciseCmd secondPledge EncumberHolding with holdingCid = lockedCid
+
+-- Enforcement delivers the pledged position to the pledgee's account.
+testEnforcementDeliversToPledgee : Script ()
+testEnforcementDeliversToPledgee = script do
+  f <- setup "PLG-ENFORCE"
+  encumbered <- encumber f
+  submitFailsWith "name the pledgee's account" [f.pledgee] do
+    exerciseCmd encumbered.pledgeCid EnforcePledge with enforcementAccountId = None
+  enforced <- submit f.pledgee do
+    exerciseCmd encumbered.pledgeCid EnforcePledge with enforcementAccountId = Some (AccountId "ACC-PLEDGEE-SEC")
+  Some defaulted <- queryContractId f.pledgee enforced
+  assertMsg "The enforced pledge is defaulted and holds nothing"
+    (defaulted.status == Types.Defaulted && defaulted.pledgedHoldingCid == None && defaulted.enforceTimestamp /= None)
+  pledgeeHoldings <- holdingsOf f.pledgee
+  assertMsg ("Expected the pledgee to hold 3,000,000, got " <> show pledgeeHoldings)
+    (pledgeeHoldings == [("ACC-PLEDGEE-SEC", 3000000.0, None)])
+  pledgorHoldings <- holdingsOf f.pledgor
+  assertMsg "The pledgor keeps what was not pledged" (pledgorHoldings == [(pledgorAccount, 2000000.0, None)])
+
+-- Substitution locks the new asset's position and unlocks the old one.
+testSubstitutionSwapsHoldings : Script ()
+testSubstitutionSwapsHoldings = script do
+  f <- setup "PLG-SUBSTITUTE"
+  encumbered <- encumber f
+  replacement <- toInterfaceContractId <$>
+    setupSecurityPosition f.custodian f.pledgor (AccountId "ACC-PLEDGOR-SEC-2") 3000000.0
+  let substitute newHoldingCid = exerciseCmd encumbered.pledgeCid SubstitutePledge with
+        newAssetId = bond; newAccountId = AccountId "ACC-PLEDGOR-SEC-2"; newQuantity = 3000000.0
+        newPerfectionRef = "UCC-1-PLG-SUBSTITUTE-2"; newHoldingCid
+  submitFailsWith "give the new asset's position" [f.pledgor, f.pledgee, f.custodian] (substitute None)
+  substituted <- submit (actAs [f.pledgor, f.pledgee, f.custodian]) (substitute (Some replacement))
+  Some pledge <- queryContractId f.pledgee substituted
+  assertMsg "The pledge names the new account" (pledge.accountId == AccountId "ACC-PLEDGOR-SEC-2")
+  holdings <- holdingsOf f.pledgor
+  assertMsg ("Expected only the replacement locked, got " <> show holdings)
+    (holdings == [ (pledgorAccount, 2000000.0, None), (pledgorAccount, 3000000.0, None)
+                 , ("ACC-PLEDGOR-SEC-2", 3000000.0, Some [f.pledgee]) ])
+
+-- The position must match the pledge: owner, custodian, account, asset, and quantity.
+testEncumberChecks : Script ()
+testEncumberChecks = script do
+  f <- setup "PLG-CHECKS"
+  let tryEncumber pledgeCid holdingCid = exerciseCmd pledgeCid EncumberHolding with holdingCid
+  small <- pledgeOf f.custodian f.pledgor f.pledgee "PLG-CHECKS-BIG" bond pledgorAccount 6000000.0
+  submitFailsWith "less than the pledged" [f.pledgor] (tryEncumber small f.bondHolding)
+  otherAsset <- pledgeOf f.custodian f.pledgor f.pledgee "PLG-CHECKS-ASSET" "US0000000000" pledgorAccount 1000.0
+  submitFailsWith "a different asset" [f.pledgor] (tryEncumber otherAsset f.bondHolding)
+  otherAccount <- pledgeOf f.custodian f.pledgor f.pledgee "PLG-CHECKS-ACCOUNT" bond "ACC-ELSEWHERE" 1000.0
+  submitFailsWith "not in the pledge's account" [f.pledgor] (tryEncumber otherAccount f.bondHolding)
+  stranger <- allocateTestParty "Stranger" "PLG-CHECKS"
+  theirs <- toInterfaceContractId <$> setupSecurityPosition f.custodian stranger (AccountId pledgorAccount) 5000000.0
+  -- (the pledgor cannot even see someone else's position)
+  submitMustFail f.pledgor (tryEncumber f.pledgeCid theirs)
+  released <- submit f.pledgee do exerciseCmd f.pledgeCid ReleasePledge
+  submitFailsWith "Pledge must be Active to encumber" [f.pledgor] (tryEncumber released f.bondHolding)
+
+-- Cash can be pledged the same way, at the bank that keeps it.
+testCashPledge : Script ()
+testCashPledge = script do
+  bank <- allocateTestParty "Bank" "PLG-CASH"
+  pledgor <- allocateTestParty "Pledgor" "PLG-CASH"
+  pledgee <- allocateTestParty "Pledgee" "PLG-CASH"
+  cash <- toInterfaceContractId <$> setupCashPosition bank pledgor (AccountId "ACC-PLEDGOR-CASH") 1000000.0
+  pledgeCid <- pledgeOf bank pledgor pledgee "PLG-CASH" "USD" "ACC-PLEDGOR-CASH" 1000000.0
+  encumbered <- submit pledgor do exerciseCmd pledgeCid EncumberHolding with holdingCid = cash
+  assertMsg "Exactly the pledged amount leaves no change" (encumbered.changeCid == None)
+  holdings <- holdingsOf pledgor
+  assertMsg ("Expected the cash locked to the pledgee, got " <> show holdings)
+    (holdings == [("ACC-PLEDGOR-CASH", 1000000.0, Some [pledgee])])
+  _ <- submit pledgee do exerciseCmd encumbered.pledgeCid ReleasePledge
+  afterRelease <- holdingsOf pledgor
+  assertMsg "Released cash is free" (afterRelease == [("ACC-PLEDGOR-CASH", 1000000.0, None)])
+
+-- | Every test in this module, for running against a participant: none sets time.
+runPledgedHoldingTests : Script ()
+runPledgedHoldingTests = script do
+  testEncumberAndRelease
+  testDoublePledgeRefused
+  testEnforcementDeliversToPledgee
+  testSubstitutionSwapsHoldings
+  testEncumberChecks
+  testCashPledge

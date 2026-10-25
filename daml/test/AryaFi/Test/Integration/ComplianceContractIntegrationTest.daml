@@ -360,6 +360,7 @@ securedLoanObligationIntegration = script do
       status = Active
       enforceTimestamp = None
       observers = []
+      pledgedHoldingCid = None
 
   -- Step 3: Link pledge to loan
   linkedLoanCid <- submit borrower do

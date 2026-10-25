@@ -154,6 +154,7 @@ testSecuredInstitutionalLoanWorkflow = script do
       status = Active
       enforceTimestamp = None
       observers = [agentBank, regulator]
+      pledgedHoldingCid = None
 
   -- =========================================================================
   -- Phase 3: Facility Origination & Drawdown
@@ -271,6 +272,7 @@ testLoanDefaultAndEnforcementScenario = script do
       status = Active
       enforceTimestamp = None
       observers = []
+      pledgedHoldingCid = None
 
   -- 2. Setup loan
   loanCid <- submit (actAs [lender, borrower]) do
@@ -304,7 +306,7 @@ testLoanDefaultAndEnforcementScenario = script do
 
   -- 4. Lender enforces collateral pledge
   pledgeCidEnforced <- submit lender do
-    exerciseCmd pledgeCid EnforcePledge
+    exerciseCmd pledgeCid EnforcePledge with enforcementAccountId = None
 
   Some enforcedPledge <- queryContractId lender pledgeCidEnforced
   assertMsg "Pledge status must be Defaulted" (enforcedPledge.status == Defaulted)

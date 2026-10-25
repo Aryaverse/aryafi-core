@@ -152,7 +152,8 @@ Choices of AryaFi's compliance interface (`CompliancePolicy_*`, in the `aryafi-c
 |  |  |  | `CancelMarginCall` | `caller` | Caller cancels the margin call prior to fulfillment |
 |  |  |  | `AddMarginObserver` | `caller, payer` | Add an authorized observer (e.g. tri-party agent) |
 |  |  |  | `IsMarginSatisfied` *(read-only)* | `caller` | Nonconsuming query to check if the margin call has been met |
-| **`AssetPledge`** (Pledge.daml) | `pledgor, pledgee, custodian` | `observers` | `ReleasePledge` | `pledgee` | Pledgee releases the security interest voluntarily (e.g. after loan repayment) |
+| **`AssetPledge`** (Pledge.daml) | `pledgor, pledgee, custodian` | `observers` | `EncumberHolding` | `pledgor` | Pledgor locks the pledged asset to the pledgee: `holdingCid` must be its unlocked cash or security position of the pledged asset, in the pledge's account at the custodian, of at least the pledged quantity |
+|  |  |  | `ReleasePledge` | `pledgee` | Pledgee releases the security interest voluntarily (e.g. after loan repayment) |
 |  |  |  | `EnforcePledge` | `pledgee` | Pledgee enforces the security interest following an event of default |
 |  |  |  | `SubstitutePledge` | `pledgor, pledgee, custodian` | Substitute the pledged asset with an equivalent eligible asset |
 |  |  |  | `UpdatePerfectionRef` | `custodian` | Update the legal perfection reference (e.g. amended UCC-1 filing number) |
@@ -279,7 +280,7 @@ These principles hold for the current code and are covered by the negative and a
 - Across separate Canton participants, multi-signatory contracts and joint choices need a `MultiPartyProposal`; without one they need all their parties in one submission. Token-standard transfers and `TokenDvpInstruction` need neither.
 - KYC attestations, sanctions attestations, transfer restriction rules, and ownership restrictions can be evaluated by business workflows through `CompliancePolicy`; eligibility policies and jurisdiction profiles cannot yet. The policies' own evaluation choices (`IsKycValid`, `IsSanctionsClear`, `EvaluateEligibility`, `EvaluateTransfer`, `CheckOwnershipLimit`) remain controlled by the policy owner.
 - A workflow evaluates the evidence its caller supplies. Missing evidence is refused, but the workflow cannot tell that a party has a second, worse attestation, or that a rule by another accepted officer was left out.
-- Loans, repos, pledges, collateral, and margin calls reference assets and payments by text reference rather than contract ID, so the ledger does not prevent one asset being referenced by several agreements.
+- Loans, repos, collateral, margin calls, and pledges that are not encumbered reference assets and payments by text reference rather than contract ID, so the ledger does not prevent one asset being referenced by several agreements. An encumbered pledge holds the pledged position, locked to the pledgee.
 
 ## 5. Regenerating This Matrix
 

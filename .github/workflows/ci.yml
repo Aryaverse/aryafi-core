@@ -147,7 +147,8 @@ jobs:
             AryaFi.Test.Scenarios.TokenDvpTest:runTokenDvpTests \
             AryaFi.Test.Unit.ProposalTest:runProposalTests \
             AryaFi.Test.Unit.FinancingProposalTest:runFinancingProposalTests \
-            AryaFi.Test.Unit.ComplianceGateTest:runComplianceGateTests; do
+            AryaFi.Test.Unit.ComplianceGateTest:runComplianceGateTests \
+            AryaFi.Test.Unit.PledgedHoldingTest:runPledgedHoldingTests; do
             echo "::group::$script"
             dpm script --dar "$DAR" --upload-dar=yes --script-name "$script" --ledger-host localhost --ledger-port 10012
             echo "::endgroup::"

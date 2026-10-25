@@ -11,7 +11,7 @@
 -- Run it like runTokenDvpAcrossNodes, with a participant config that names
 -- the nodes:
 --
---   dpm script --dar daml/test/.daml/dist/aryafi-core-test-3.3.0.dar \
+--   dpm script --dar daml/test/.daml/dist/aryafi-core-test-3.4.0.dar \
 --     --script-name AryaFi.Test.Network.DvpAcrossNodes:runDvpAcrossNodes \
 --     --participant-config participants.json --input-file nodes.json
 module AryaFi.Test.Network.DvpAcrossNodes where

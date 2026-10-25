@@ -9,11 +9,32 @@
 -- Lifecycle: Active → Released (voluntary) | Defaulted (enforcement)
 -- Substitution: Active asset may be swapped for an equivalent eligible asset,
 -- subject to tri-party consent.
+--
+-- The pledge can hold the pledged asset itself. With EncumberHolding the
+-- pledgor locks the matching cash or security position to the pledgee, so it
+-- cannot be moved, locked for anything else, or pledged again. Releasing the
+-- pledge unlocks it for the pledgor; enforcing it delivers it to the
+-- pledgee's account; a substitution swaps it for the new asset's position. A
+-- pledge without a position records the asset by reference only.
 module AryaFi.Contracts.Pledge where
 
+import DA.Foldable (forA_, mapA_)
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
 import AryaFi.Common.Types (Amount, LifecycleStatus(..))
-import AryaFi.Common.Identifiers (AccountId, ReferenceId, CorrelationId)
+import AryaFi.Common.Identifiers (AccountId(..), ReferenceId, CorrelationId)
 import AryaFi.Common.Errors (require, requireNonEmpty)
+import AryaFi.Finance.Cash (UnlockCash(..))
+import AryaFi.Finance.Security (UnlockSecurity(..))
+import AryaFi.Finance.TokenRegistry
+
+-- | The result of encumbering a pledge's asset.
+data PledgeEncumbered = PledgeEncumbered
+  with
+    pledgeCid : ContractId AssetPledge
+    -- ^ The pledge, now holding the locked position.
+    changeCid : Optional (ContractId HoldingV2.Holding)
+    -- ^ What the holding held beyond the pledged quantity, back with the pledgor.
+  deriving (Eq, Show)
 
 -- | Pledged asset / security interest contract.
 --
@@ -48,40 +69,76 @@ template AssetPledge
     -- ^ Timestamp at which enforcement was triggered (populated on EnforcePledge).
     observers : [Party]
     -- ^ Additional observers (e.g. tri-party agent, regulator).
+    pledgedHoldingCid : Optional (ContractId HoldingV2.Holding)
+    -- ^ The pledged position, locked to the pledgee, once the pledgor has
+    --   encumbered it (EncumberHolding).
   where
     signatory pledgor, pledgee, custodian
     observer observers
 
     ensure quantity > 0.0
 
-    -- | Pledgee releases the security interest voluntarily (e.g. after loan repayment).
+    -- | Pledgor locks the pledged asset to the pledgee: `holdingCid` must be
+    -- its unlocked cash or security position of the pledged asset, in the
+    -- pledge's account at the custodian, of at least the pledged quantity.
+    -- The pledged quantity is locked, and any more goes back to the pledgor.
+    choice EncumberHolding : PledgeEncumbered
+      with
+        holdingCid : ContractId HoldingV2.Holding
+      controller pledgor
+      do
+        require (status == Active) "Pledge must be Active to encumber"
+        require (pledgedHoldingCid == None) "The pledge already holds its asset"
+        (lockedCid, changeCid) <- lockForPledge this assetId accountId quantity holdingCid
+        pledgeCid <- create this with pledgedHoldingCid = Some lockedCid
+        pure PledgeEncumbered with pledgeCid; changeCid
+
+    -- | Pledgee releases the security interest voluntarily (e.g. after loan
+    -- repayment). A pledged position is unlocked for the pledgor.
     choice ReleasePledge : ContractId AssetPledge
       controller pledgee
       do
         require (status == Active)
           "Pledge must be Active to release"
-        create this with status = Closed
+        mapA_ unlockForPledgor pledgedHoldingCid
+        create this with
+          status = Closed
+          pledgedHoldingCid = None
 
     -- | Pledgee enforces the security interest following an event of default.
     -- The enforcement timestamp is the current ledger time (cannot be backdated).
+    -- A pledged position is delivered to the pledgee's `enforcementAccountId`
+    -- at the custodian.
     choice EnforcePledge : ContractId AssetPledge
+      with
+        enforcementAccountId : Optional AccountId
+        -- ^ The pledgee's account for the pledged position, if the pledge holds one.
       controller pledgee
       do
         require (status == Active)
           "Pledge must be Active to enforce"
+        forA_ pledgedHoldingCid \cid -> case enforcementAccountId of
+          Some (AccountId account) -> deliverLocked cid pledgee account
+          None -> abort "The pledge holds a position: name the pledgee's account to deliver it to"
         now <- getTime
         create this with
           status = Defaulted
           enforceTimestamp = Some now
+          pledgedHoldingCid = None
 
     -- | Substitute the pledged asset with an equivalent eligible asset.
     -- Requires unanimous tri-party consent (pledgor, pledgee, custodian).
+    -- If the pledge holds a position, the new asset's position must be given:
+    -- it is locked to the pledgee as with EncumberHolding, and the old one is
+    -- unlocked for the pledgor.
     choice SubstitutePledge : ContractId AssetPledge
       with
         newAssetId : ReferenceId
         newAccountId : AccountId
         newQuantity : Amount
         newPerfectionRef : Text
+        newHoldingCid : Optional (ContractId HoldingV2.Holding)
+        -- ^ The new asset's position, to lock in place of the pledged one.
       controller pledgor, pledgee, custodian
       do
         require (status == Active)
@@ -89,11 +146,21 @@ template AssetPledge
         requireNonEmpty newAssetId "newAssetId"
         requireNonEmpty newPerfectionRef "newPerfectionRef"
         require (newQuantity > 0.0) "New quantity must be positive"
+        require (pledgedHoldingCid == None || newHoldingCid /= None)
+          "The pledge holds a position: give the new asset's position to substitute it"
+        newLocked <- case newHoldingCid of
+          None -> pure None
+          Some cid -> do
+            (lockedCid, changeCid) <- lockForPledge this newAssetId newAccountId newQuantity cid
+            require (changeCid == None) "The new asset's position must be exactly the new quantity"
+            pure (Some lockedCid)
+        mapA_ unlockForPledgor pledgedHoldingCid
         create this with
           assetId = newAssetId
           accountId = newAccountId
           quantity = newQuantity
           perfectionReference = newPerfectionRef
+          pledgedHoldingCid = newLocked
 
     -- | Update the legal perfection reference (e.g. amended UCC-1 filing number).
     choice UpdatePerfectionRef : ContractId AssetPledge
@@ -120,3 +187,41 @@ template AssetPledge
       do
         pure (status == Active)
 
+
+-- | The lock reference a pledged position carries.
+pledgeLockReference : AssetPledge -> Text
+pledgeLockReference pledge = "Pledge " <> pledge.pledgeId
+
+-- | Lock `quantity` of the pledgor's position `holdingCid` of `assetId` in
+-- `accountId` to the pledgee, and return the locked position and any change.
+lockForPledge
+  : AssetPledge -> ReferenceId -> AccountId -> Amount -> ContractId HoldingV2.Holding
+  -> Update (ContractId HoldingV2.Holding, Optional (ContractId HoldingV2.Holding))
+lockForPledge pledge assetId (AccountId account) quantity holdingCid = do
+  position <- fetchPosition holdingCid
+  let holding = positionView position
+  require (holding.account.owner == Some pledge.pledgor) "Pledged holding: not owned by the pledgor"
+  require (holding.account.provider == Some pledge.custodian && holding.instrumentId.admin == pledge.custodian)
+    "Pledged holding: not kept by the pledge's custodian"
+  require (holding.account.id == account) "Pledged holding: not in the pledge's account"
+  require (holding.instrumentId.id == assetId) "Pledged holding: a different asset"
+  require (holding.lock == None) "Pledged holding: already locked"
+  require (holding.amount >= quantity)
+    ("Pledged holding: " <> show holding.amount <> " is less than the pledged " <> show quantity)
+  archivePosition position
+  lockedCid <- createPosition position pledge.pledgor account quantity
+    (Some (pledge.pledgee, pledgeLockReference pledge)) (positionObservers position)
+  changeCid <-
+    if holding.amount > quantity
+    then Some <$> createPosition position pledge.pledgor account (holding.amount - quantity) None
+      (positionObservers position)
+    else pure None
+  pure (lockedCid, changeCid)
+
+-- | Unlock a pledged position for the pledgor, keeping its observers.
+unlockForPledgor : ContractId HoldingV2.Holding -> Update (ContractId HoldingV2.Holding)
+unlockForPledgor cid = do
+  position <- fetchPosition cid
+  case position of
+    CashHolding cashCid _ -> toInterfaceContractId <$> exercise cashCid UnlockCash
+    SecurityHolding securityCid _ -> toInterfaceContractId <$> exercise securityCid UnlockSecurity

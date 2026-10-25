@@ -20,4 +20,4 @@ Every module in the library is tagged with an explicit maturity status:
 
 CI checks every pull request and every push to `main` with `dpm upgrade-check` against the latest release's DAR. Canton accepts a new `aryafi-core` package only as an upgrade of the versions already on a participant, so a MINOR or PATCH release must pass; a change that cannot pass needs a new package name (see §1).
 
-When the tag is pushed, the release workflow (`.github/workflows/release.yml`) runs the test suite, publishes the production DAR and its SHA-256 checksum, and uses the CHANGELOG section for `X.Y.Z` as the release notes. It stops before building if that section is missing.
+When the tag is pushed, the release workflow (`.github/workflows/release.yml`) runs the test suite, publishes the production DAR and the compliance interface DAR (`aryafi-compliance-api`), each with its SHA-256 checksum, and uses the CHANGELOG section for `X.Y.Z` as the release notes. It stops before building if that section is missing.
