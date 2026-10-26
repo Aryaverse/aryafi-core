@@ -5,7 +5,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
-## [Unreleased]
+## [3.4.0] - 2026-10-26
+
+An upgrade-compatible release: Canton's participant upgrade check accepts it as an upgrade of 3.3.0, so participants running 3.3.0 can move to it without migrating contracts. The financing contracts now move real assets. Pledges and collateral lock the positions they secure, and escrows lock the cash deposited with them. Margin calls, loans, capital calls, redemptions, securities-lending fees and rebates, and payment instructions move cash with token-standard transfers. Repo legs, and securities-loan deliveries and returns, settle as token-standard DvPs through the agreement. Fund units are issued and burnt against cash. Each contract can still record a movement settled elsewhere. See [KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md#3-composition-and-asset-movement) for the moves that the compliance gate does not screen.
 
 ### Added
 - **Pledges that hold the pledged asset.** With `EncumberHolding`, the pledgor locks its cash or security position of the pledged asset to the pledgee: a position in the pledge's account at the custodian, of at least the pledged quantity, with any more returned to the pledgor at once. The locked position cannot be moved, locked for a settlement, or pledged again, which closes the double-pledge gap (threat E-04) for encumbered pledges. Releasing the pledge unlocks it for the pledgor; enforcing it delivers it to the pledgee's account at the custodian; a substitution, agreed by all three parties, locks the new asset's position and unlocks the old one. Pledges that are not encumbered record the asset by reference, as before. See [`AryaFi.Contracts.Pledge`](daml/src/AryaFi/Contracts/Pledge.daml).
