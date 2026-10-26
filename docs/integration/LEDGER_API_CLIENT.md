@@ -109,7 +109,7 @@ In high-throughput financial environments, network disconnects or gateway timeou
    - Derive the `commandId` from the business idempotency key (for example the ISO 20022 `MsgId`), so a retry of the same business request carries the same command ID.
    - Canton deduplicates submissions with the same change ID, `(userId, commandId, actAs)`, within the deduplication period. Set it per submission, e.g. `"deduplicationPeriod": { "DeduplicationDuration": { "value": { "seconds": 86400, "nanos": 0 } } }`; the participant's configured maximum applies.
 2. **`IdempotencyKey` on contracts**:
-   - Templates such as `PaymentInstruction` store an `IdempotencyKey` for traceability only. The ledger does not enforce its uniqueness (Daml-LF 2.2 has no contract keys), so deduplication relies on the command ID.
+   - Templates such as `PaymentInstruction` store an `IdempotencyKey` for traceability only. The ledger does not enforce its uniqueness (Daml-LF 2.2 has no contract keys), so deduplication relies on the command ID. When the settlement agent executes a payment instruction on the ledger (`ExecutePayment`), the token-standard transfer's metadata carries the key and the correlation ID (`aryafi.io/idempotency-key`, `aryafi.io/correlation-id`), so wallets and reconciliation see them on the transfer.
 
 ---
 

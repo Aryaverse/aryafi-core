@@ -303,7 +303,7 @@ setupLending test = do
       borrowedQuantity = 1000000.0; borrowAccountId = AccountId "ACC-BORROWER-SEC"
       lendingFeeRate = 0.0075; rebateRate = 0.0; collateralCurrency = "USD"; collateralAmount = 1020000.0
       collateralPledgeRef = None; accruedLendingFee = 0.0; startDate = now; status = LendingPendingDelivery
-      correlationId = CorrelationId ("CORR-" <> test); observers = []
+      correlationId = CorrelationId ("CORR-" <> test); observers = []; feeAccrual = None
   pure LendingFixture with ..
 
 deliveryAccounts, returnAccounts : ExchangeAccounts

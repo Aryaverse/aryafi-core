@@ -84,7 +84,7 @@ testSecuritiesLendingLifecycle = script do
       startDate = now
       status = LendingActive
       correlationId = CorrelationId "CORR-SECLEND-2026-001"
-      observers = [agentLender]
+      observers = [agentLender]; feeAccrual = None
 
   -- Verify agreement created and visible
   lendingData <- queryContractId beneficialOwner lendingCid
@@ -136,7 +136,7 @@ testSecuritiesLendingLifecycle = script do
       startDate = now
       status = LendingActive
       correlationId = CorrelationId "CORR-SECLEND-2026-001"
-      observers = [agentLender, regulator]
+      observers = [agentLender, regulator]; feeAccrual = None
 
   -- Retire the original unlinked agreement; the linked one replaces it.
   -- Archiving requires all three signatories.
@@ -178,7 +178,7 @@ testSecuritiesLendingLifecycle = script do
   -- New collateral = 5,200,000 (security price increased, need more coverage)
   revaluedCid <- submit (actAs [beneficialOwner, borrowerDealer]) do
     exerciseCmd feesPaidCid RevalueCollateral with
-      newCollateralAmount = 5200000.0
+      newCollateralAmount = 5200000.0; newLoanPrice = None
 
   revaluedData <- queryContractId beneficialOwner revaluedCid
   case revaluedData of
@@ -282,7 +282,7 @@ testSecuritiesLendingDefault = script do
       startDate = now
       status = LendingActive
       correlationId = CorrelationId "CORR-SECLEND-DEF-001"
-      observers = []
+      observers = []; feeAccrual = None
 
   -- Issue recall
   recalledCid <- submit beneficialOwner do
@@ -335,7 +335,7 @@ testSecuritiesLendingNegativeCases = script do
       startDate = now
       status = LendingActive
       correlationId = CorrelationId "CORR-SECLEND-NEG-001"
-      observers = []
+      observers = []; feeAccrual = None
 
   -- Cannot recall more than borrowed quantity
   submitMustFail lender do
@@ -373,7 +373,7 @@ testSecuritiesLendingNegativeCases = script do
       startDate = now
       status = LendingClosed
       correlationId = CorrelationId "CORR-SECLEND-CLOSED-001"
-      observers = []
+      observers = []; feeAccrual = None
 
   -- Cannot recall on a closed agreement
   submitMustFail lender do
@@ -384,7 +384,7 @@ testSecuritiesLendingNegativeCases = script do
   -- Cannot revalue collateral on a closed agreement
   submitMustFail (actAs [lender, borrower]) do
     exerciseCmd closedCid RevalueCollateral with
-      newCollateralAmount = 200.0
+      newCollateralAmount = 200.0; newLoanPrice = None
 
   -- Cannot declare default on a closed agreement
   submitMustFail lender do
@@ -425,7 +425,7 @@ testSecuritiesLendingPrivacy = script do
       startDate = now
       status = LendingActive
       correlationId = CorrelationId "CORR-SECLEND-PRIV-001"
-      observers = [agent]
+      observers = [agent]; feeAccrual = None
 
   -- Agent lender can see the agreement (they're an observer)
   agentView <- queryContractId agent lendingCid

@@ -40,6 +40,9 @@ data InstrumentType
     -- ^ Covered bond (Pfandbrief, covered by ring-fenced asset pool).
   | StructuredNote
     -- ^ Structured product with embedded derivative (e.g. FRN, CLN).
+  | FundUnit
+    -- ^ Units or shares of an investment fund, issued and redeemed by its
+    --   custodian (see AryaFi.Contracts.Subscription and Redemption).
   deriving (Eq, Ord, Show)
 
 -- | Coupon type for fixed-income instruments.

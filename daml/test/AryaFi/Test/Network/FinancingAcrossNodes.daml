@@ -48,7 +48,7 @@ runFinancingAcrossNodes input = do
   let escrow = ConditionalEscrow with
         escrowId = "ESC-NODES-" <> input.runId; escrowAgent = agent; depositor = buyer; beneficiary = seller
         currency = "USD"; amount = 1000000.0; releaseCondition = "Repo rolled"; expiryTime = addRelTime now (days 30)
-        correlationId = CorrelationId ("CORR-ESC-NODES-" <> input.runId); status = EscrowHeld; disputeReason = None; observers = []
+        correlationId = CorrelationId ("CORR-ESC-NODES-" <> input.runId); status = EscrowHeld; disputeReason = None; observers = []; escrowedHoldingCid = None; beneficiaryAccountId = None
   escrowCid <- proposeOnNode buyer [buyer, agent] (CreateAgreement (EscrowTerms escrow)) >>= signLast agent
   released <- proposeOnNode agent [agent, seller] (ExerciseJointly (ReleaseEscrowAction (coerceContractId escrowCid)))
     >>= signLast seller

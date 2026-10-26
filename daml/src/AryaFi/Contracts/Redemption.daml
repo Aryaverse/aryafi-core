@@ -9,11 +9,25 @@
 --   - Liquidity gate mechanisms (e.g. fund-level capacity gates or suspension)
 --   - Custodian execution of cash redemption payout
 --   - Multi-party oversight (GP, LP, Custodian, Administrator, Regulators)
+--
+-- A redemption with the ISIN of the fund's units (unitIsin) settles on the
+-- ledger. The fund manager pays the net payout with a token-standard transfer
+-- of cash to the investor, and the custodian, which keeps the fund's units,
+-- settles it with SettleRedemption: the redeemed units are burnt from the
+-- investor's unit holdings and the investor receives the cash, in one
+-- transaction. ExecuteRedemptionSettlement records a payout made elsewhere.
 module AryaFi.Contracts.Redemption where
 
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
+import Splice.Api.Token.MetadataV1 (ExtraArgs)
+import Splice.Api.Token.TransferInstructionV2 (TransferInstruction)
 import AryaFi.Common.Types (Amount, Currency)
-import AryaFi.Common.Identifiers (ReferenceId, CorrelationId)
+import AryaFi.Common.Identifiers (ISIN(..), ReferenceId, CorrelationId)
 import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
+import AryaFi.Contracts.FinancingLegs (acceptIncoming, incomingTransfer)
+import AryaFi.Finance.TokenRegistry
+import DA.Action (when)
+import DA.Foldable (mapA_)
 import DA.Optional (fromSome)
 import qualified DA.List as List
 
@@ -72,6 +86,9 @@ template AssetRedemption
     -- ^ Cross-system correlation identifier.
     observers : [Party]
     -- ^ Authorized observers (e.g. fund administrator, transfer agent, regulators).
+    unitIsin : Optional ISIN
+    -- ^ The ISIN of the fund's units, which the custodian keeps. With it, the
+    --   redemption settles on the ledger (SettleRedemption).
   where
     signatory fundManager, investor
     observer (List.dedup (custodian :: observers))
@@ -146,6 +163,37 @@ template AssetRedemption
           settlementDate = Some now
           status = RedemptionSettled with paymentReference = paymentRef; netPayout = payout
 
+    -- | Custodian settles an approved redemption on the ledger: the investor
+    -- accepts the fund manager's pending token-standard transfer of the net
+    -- payout, and the redeemed units are burnt from the investor's unit
+    -- holdings `unitHoldingCids`, with any rest returned to the investor, in
+    -- one transaction. If the cash registry refuses the transfer on
+    -- acceptance, no units are burnt and the redemption is unchanged.
+    choice SettleRedemption : ContractId AssetRedemption
+      with
+        paymentRef : ReferenceId
+        instructionCid : ContractId TransferInstruction
+        extraArgs : ExtraArgs
+        unitHoldingCids : [ContractId HoldingV2.Holding]
+      controller custodian
+      do
+        require (isApproved status) "Redemption must be Approved to execute settlement"
+        requireNonEmpty paymentRef "paymentRef"
+        isin <- case unitIsin of
+          Some isin -> pure isin
+          None -> abort "Redemption: the redemption has no unit ISIN to burn"
+        let payout = fromSome settlementPayout
+        transfer <- incomingTransfer "Redemption payout" instructionCid fundManager investor currency
+        require (transfer.amount == payout)
+          ("Redemption payout: " <> show transfer.amount <> " is not the net payout of " <> show payout)
+        received <- acceptIncoming instructionCid investor extraArgs
+        if not received then create this else do
+          burnUnits this isin unitHoldingCids
+          now <- getTime
+          create this with
+            settlementDate = Some now
+            status = RedemptionSettled with paymentReference = paymentRef; netPayout = payout
+
     -- | Investor cancels redemption request prior to manager approval.
     choice CancelRedemption : ContractId AssetRedemption
       with
@@ -186,3 +234,25 @@ isGated : RedemptionStatus -> Bool
 isGated (RedemptionGated _) = True
 isGated _ = False
 
+
+-- | Burn the redeemed units from the investor's unit holdings at the
+-- custodian, returning any rest to the investor. Needs the authority of the
+-- custodian and the investor.
+burnUnits : AssetRedemption -> ISIN -> [ContractId HoldingV2.Holding] -> Update ()
+burnUnits r isin cids = do
+  first <- case cids of
+    cid :: _ -> positionView <$> fetchPosition cid
+    [] -> abort "Redemption: name the unit holdings to redeem"
+  require (first.account.owner == Some r.investor) "Redemption: the unit holdings are not the investor's"
+  require (first.instrumentId == HoldingV2.InstrumentId with admin = r.custodian; id = unISIN isin)
+    "Redemption: the holdings are not the fund's units at the custodian"
+  (like, rest) <- fundingPositions first.account first.instrumentId cids
+  let positions = like :: rest
+      total = sum [(positionView p).amount | p <- positions]
+  require (total >= r.unitsToRedeem)
+    ("Redemption: the unit holdings total " <> show total <> ", less than " <> show r.unitsToRedeem)
+  mapA_ archivePosition positions
+  when (total > r.unitsToRedeem) do
+    _ <- createPosition like r.investor first.account.id (total - r.unitsToRedeem) None
+      (positionObservers like)
+    pure ()

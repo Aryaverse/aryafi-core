@@ -25,7 +25,9 @@
 --
 -- By creating the factory, the registry agrees in advance to transfers between
 -- its clients' accounts. `TransferCash` and `TransferSecurity` need its
--- signature on each transfer instead.
+-- signature on each transfer instead. It also agrees to a client locking one
+-- of its own positions to another party for an agreement, such as an escrow
+-- (`LockPosition`); only that party can then unlock or deliver it.
 --
 -- A registry can also set the compliance requirements its transfers must meet
 -- (see AryaFi.Compliance.Gate). The sender then passes the KYC and sanctions
@@ -49,6 +51,7 @@ import Splice.Api.Token.TransferInstructionV2
 import AryaFi.Common.Errors (require, requirePositive)
 import AryaFi.Common.Identifiers (CorrelationId(..))
 import AryaFi.Compliance.Gate
+import AryaFi.Finance.Encumbrance
 import AryaFi.Finance.TokenRegistry
 
 -- | Lock context shown on the amount of a pending transfer.
@@ -109,6 +112,38 @@ template PositionTransferFactory
       do
         require (requirements /= compliance) "The factory already has these compliance requirements"
         create this with compliance = requirements
+
+    -- | Lock `amount` of one of the owner's positions to `holder`, for the
+    -- agreement `reference` names, such as an escrow. The owner keeps the
+    -- position; only the holder can unlock it or deliver it. The registry
+    -- agrees to this in advance by creating the factory, as it does to
+    -- transfers. Returns the locked position and, if the position held more,
+    -- the rest, unlocked.
+    nonconsuming choice LockPosition : PositionLocked
+      with
+        owner : Party
+        holdingCid : ContractId HoldingV2.Holding
+        accountId : Text
+        instrumentId : Text
+        amount : Decimal
+        holder : Party
+        reference : Text
+      controller owner
+      do
+        require (owner `elem` clients) "Lock: the owner is not a client of the registry"
+        requirePositive amount "amount"
+        (lockedCid, changeCid) <- encumber
+          Encumbrance with
+            owner; keeper = admin; accountId; instrumentId; amount; holder; reference; label = "Locked holding"
+          holdingCid
+        pure PositionLocked with lockedCid; changeCid
+
+-- | The result of locking a position through a factory.
+data PositionLocked = PositionLocked
+  with
+    lockedCid : ContractId HoldingV2.Holding
+    changeCid : Optional (ContractId HoldingV2.Holding)
+  deriving (Eq, Show)
 
 factoryView : Party -> TransferFactoryView
 factoryView admin = TransferFactoryView with admin; meta = emptyMetadata

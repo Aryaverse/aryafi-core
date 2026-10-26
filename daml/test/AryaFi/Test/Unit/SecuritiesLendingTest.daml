@@ -52,7 +52,7 @@ testSecLendingFullLifecycle = script do
       startDate = baseStartDate
       status = LendingActive
       correlationId = CorrelationId "CORR-SECLEND-001"
-      observers = []
+      observers = []; feeAccrual = None
 
   -- Check IsLendingActive query
   isActive <- submit lender do
@@ -78,7 +78,7 @@ testSecLendingFullLifecycle = script do
   -- 3. Revalue collateral following market rise (to 155M)
   secLoanCidRevalued <- submit (actAs [lender, borrower]) do
     exerciseCmd secLoanCidPaid RevalueCollateral with
-      newCollateralAmount = 155000000.0
+      newCollateralAmount = 155000000.0; newLoanPrice = None
 
   Some loanRevalued <- queryContractId borrower secLoanCidRevalued
   assertMsg "Collateral must equal 155M" (loanRevalued.collateralAmount == 155000000.0)
@@ -148,7 +148,7 @@ testSecLendingDefaultDeclaration = script do
       startDate = baseStartDate
       status = LendingActive
       correlationId = CorrelationId "CORR-DEF-001"
-      observers = []
+      observers = []; feeAccrual = None
 
   -- Lender declares default
   secLoanCidDef <- submit lender do
@@ -189,7 +189,7 @@ testUnauthorizedRecallFails = script do
       startDate = baseStartDate
       status = LendingActive
       correlationId = CorrelationId "CORR-UNAUTH-01"
-      observers = []
+      observers = []; feeAccrual = None
 
   submitMustFail borrower do
     exerciseCmd secLoanCid RecallSecurities with
@@ -219,7 +219,7 @@ testRecallExceedingBorrowedFails = script do
       startDate = baseStartDate
       status = LendingActive
       correlationId = CorrelationId "CORR-EXCEED-01"
-      observers = []
+      observers = []; feeAccrual = None
 
   submitMustFail lender do
     exerciseCmd secLoanCid RecallSecurities with
@@ -249,7 +249,7 @@ testExcessCollateralReleaseFails = script do
       startDate = baseStartDate
       status = LendingActive
       correlationId = CorrelationId "CORR-FAIL-01"
-      observers = []
+      observers = []; feeAccrual = None
 
   submitMustFail borrower do
     exerciseCmd secLoanCid ReturnSecurities with
@@ -277,7 +277,7 @@ mkAgreement lender borrower custodian fee =
       startDate = baseStartDate
       status = LendingActive
       correlationId = CorrelationId "CORR-HELPER-01"
-      observers = []
+      observers = []; feeAccrual = None
 
 -- | A full return while fees are outstanding records a true zero quantity
 -- (no phantom 0.01 units); the agreement closes once the lender confirms the fee.

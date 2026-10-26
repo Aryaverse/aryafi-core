@@ -11,11 +11,18 @@
 -- and at its bank for the cash; then the custodian settles the leg through
 -- the agreement, which checks that the DvP is the agreement's and updates the
 -- agreement in the same transaction as the assets move.
+--
+-- Payments that move cash one way (a capital call, a redemption payout, a
+-- lending fee or rebate) are token-standard transfers instead: the payer
+-- instructs the transfer, and the agreement's choice checks it and accepts it
+-- for the receiver as it records the payment (incomingTransfer,
+-- acceptIncoming).
 module AryaFi.Contracts.FinancingLegs where
 
 import qualified Splice.Api.Token.HoldingV2 as HoldingV2
-import Splice.Api.Token.MetadataV1 (emptyMetadata)
+import Splice.Api.Token.MetadataV1 (ExtraArgs, emptyMetadata)
 import Splice.Api.Token.AllocationV2 (TransferLeg(..))
+import Splice.Api.Token.TransferInstructionV2
 import AryaFi.Common.Errors (require)
 import AryaFi.Common.Identifiers (TradeId(..))
 import AryaFi.Common.Types (SettlementStatus(..))
@@ -111,3 +118,29 @@ settleExchange e dvpCid batches openRequests = do
   require (dvp.payment.leg.instrumentId == e.currency && dvp.payment.leg.amount == e.cashAmount)
     "Leg: the DvP pays another amount"
   exercise dvpCid ExecuteTokenDvp with batches; openRequests
+
+-- ---------------------------------------------------------------------------
+-- Payments by transfer
+-- ---------------------------------------------------------------------------
+
+-- | The pending token-standard transfer `instructionCid`, checked to be from
+-- `sender` to `receiver` in `currency`. `label` names the payment in errors.
+incomingTransfer : Text -> ContractId TransferInstruction -> Party -> Party -> Text -> Update Transfer
+incomingTransfer label instructionCid sender receiver currency = do
+  instruction <- view <$> fetch instructionCid
+  let transfer = instruction.transfer
+  require (transfer.sender.owner == Some sender) (label <> ": not sent by " <> partyToText sender)
+  require (transfer.receiver.owner == Some receiver) (label <> ": not sent to " <> partyToText receiver)
+  require (transfer.instrumentId.id == currency) (label <> ": not in " <> currency)
+  pure transfer
+
+-- | Accept a pending transfer as `receiver`: whether the cash was received.
+-- It is not if the registry's compliance checks refuse it on acceptance; the
+-- cash then goes back to the sender.
+acceptIncoming : ContractId TransferInstruction -> Party -> ExtraArgs -> Update Bool
+acceptIncoming instructionCid receiver extraArgs = do
+  result <- exercise instructionCid TransferInstruction_Accept with actors = [receiver]; extraArgs
+  case result.output of
+    TransferInstructionResult_Completed _ -> pure True
+    TransferInstructionResult_Failed -> pure False
+    TransferInstructionResult_Pending _ -> abort "The transfer is still pending at its registry"

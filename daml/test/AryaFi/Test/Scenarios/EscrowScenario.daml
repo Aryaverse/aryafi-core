@@ -36,7 +36,7 @@ mkEscrow agent depositor beneficiary expiry = do
       correlationId = CorrelationId "CORR-ESC-SPA-2026-001"
       status = EscrowHeld
       disputeReason = None
-      observers = []
+      observers = []; escrowedHoldingCid = None; beneficiaryAccountId = None
 
 -- ---------------------------------------------------------------------------
 -- Escrow Release Scenario
@@ -353,7 +353,7 @@ testEscrowEnsurePositiveAmount = script do
       correlationId = CorrelationId "CORR-ZERO-001"
       status = EscrowHeld
       disputeReason = None
-      observers = []
+      observers = []; escrowedHoldingCid = None; beneficiaryAccountId = None
 
 -- ---------------------------------------------------------------------------
 -- Entry Point

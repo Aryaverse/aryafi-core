@@ -73,6 +73,7 @@ Choices of AryaFi's compliance interface (`CompliancePolicy_*`, in the `aryafi-c
 |  |  |  | `RemoveObserver` | `party` | Remove an observer from this party record |
 |  |  |  | `HasRole` *(read-only)* | `operator` | Nonconsuming check: verify if this party has a specific role |
 | **`PaymentInstruction`** (Payment.daml) | `payer, payee, settlementAgent` | `observers` | `ConfirmPaymentSettlement` | `settlementAgent` | Confirm that payment has been successfully settled |
+|  |  |  | `ExecutePayment` | `settlementAgent` | Execute the payment on the ledger: a token-standard transfer of the amount from the payer's account to the payee's at `bank`, through its transfer factory, funded from the payer's holdings `inputHoldingCids` |
 |  |  |  | `RejectPaymentSettlement` | `settlementAgent` | Reject the payment instruction, providing a reason |
 |  |  |  | `CancelPayment` | `payer` | Cancel the payment instruction before it is executed |
 |  |  |  | `AttachNetworkRef` | `settlementAgent` | Attach a payment network reference after submission to a payment network |
@@ -117,6 +118,7 @@ Choices of AryaFi's compliance interface (`CompliancePolicy_*`, in the `aryafi-c
 |  |  |  | `AddTransferFactoryClient` | `admin` | Let another account owner send and receive through this factory |
 |  |  |  | `RemoveTransferFactoryClient` | `admin` | Stop an account owner sending and receiving through this factory |
 |  |  |  | `SetTransferCompliance` | `admin` | Set or clear the compliance requirements transfers must meet |
+|  |  |  | `LockPosition` *(nonconsuming)* | `owner` | Lock `amount` of one of the owner's positions to `holder`, for the agreement `reference` names, such as an escrow |
 | **`PositionTransferInstruction`** (TokenTransfer.daml) | `admin, sender` | `receiver` | `TransferInstruction_Accept` | `actors, including receiver` | Deliver the locked amount to the receiver's account, before executeBefore |
 |  |  |  | `TransferInstruction_Reject` | `actors, including receiver` | Refuse the transfer: the amount is unlocked for the sender |
 |  |  |  | `TransferInstruction_Withdraw` | `actors, including sender` | Take the transfer back: the amount is unlocked for the sender |
@@ -125,11 +127,12 @@ Choices of AryaFi's compliance interface (`CompliancePolicy_*`, in the `aryafi-c
 
 | Template | Signatories | Observers | Choice | Controller(s) | Effect |
 |:---|:---|:---|:---|:---|:---|
-| **`ConditionalEscrow`** (Escrow.daml) | `escrowAgent, depositor` | `beneficiary, observers` | `ReleaseEscrow` | `escrowAgent, beneficiary` | Release escrowed assets to beneficiary (both agent and beneficiary must agree) |
+| **`ConditionalEscrow`** (Escrow.daml) | `escrowAgent, depositor` | `beneficiary, observers` | `DepositIntoEscrow` | `depositor` | Depositor deposits the escrowed amount: `amount` of its cash position `holdingCid`, in `accountId` at the bank whose transfer factory is `factoryCid`, is locked to the escrow agent, and the escrow holds it |
+|  |  |  | `ReleaseEscrow` | `escrowAgent, beneficiary` | Release escrowed assets to beneficiary (both agent and beneficiary must agree) |
 |  |  |  | `RefundEscrow` | `escrowAgent, depositor` | Refund escrowed assets to depositor (both agent and depositor must agree) |
 |  |  |  | `ExpireEscrow` | `escrowAgent` | Expire the escrow after the expiry time has passed |
 |  |  |  | `DisputeEscrow` | `escrowAgent` | Raise a dispute on this escrow (freezes it pending agent resolution) |
-|  |  |  | `ResolveDispute` | `escrowAgent` | Escrow agent resolves an active dispute, deciding whether to release or refund |
+|  |  |  | `ResolveDispute` | `escrowAgent` | Escrow agent resolves an active dispute, deciding whether to release or refund, or dismissing it (EscrowHeld) |
 |  |  |  | `AddEscrowObserver` | `escrowAgent` | Add an observer to this escrow (e.g. regulator, auditor) |
 |  |  |  | `IsEscrowTerminal` *(read-only)* | `escrowAgent` | Nonconsuming query: has this escrow reached a terminal state? |
 | **`InstitutionalLoan`** (Loan.daml) | `lender, borrower` | `observers, agentBank (if set)` | `DrawdownPrincipal` | `borrower` | Borrower executes a drawdown against the remaining facility limit |
@@ -172,16 +175,17 @@ Choices of AryaFi's compliance interface (`CompliancePolicy_*`, in the `aryafi-c
 |  |  |  | `ReleaseLiquidityGate` | `fundManager` | Fund Manager releases liquidity gate, returning request to active evaluation |
 |  |  |  | `RejectRedemption` | `fundManager` | Fund Manager rejects redemption request |
 |  |  |  | `ExecuteRedemptionSettlement` | `custodian` | Custodian executes cash payout and finalizes redemption settlement |
+|  |  |  | `SettleRedemption` | `custodian` | Custodian settles an approved redemption on the ledger: the investor accepts the fund manager's pending token-standard transfer of the net payout, and the redeemed units are burnt from the investor's unit holdings `unitHoldingCids`, with any rest returned to the investor, in one transaction |
 |  |  |  | `CancelRedemption` | `investor` | Investor cancels redemption request prior to manager approval |
 |  |  |  | `AddRedemptionObserver` | `fundManager` | Add authorized observer (e.g. transfer agent) |
 |  |  |  | `IsRedemptionSettled` *(read-only)* | `fundManager` | Nonconsuming query to check if redemption is settled |
 | **`RepoAgreement`** (Repo.daml) | `seller, buyer, custodian` | `observers, tripartyAgent (if set)` | `ExecuteOpeningLeg` | `custodian` | Custodian confirms completion of opening leg DvP settlement |
-|  |  |  | `RequestOpeningLeg` *(read-only)* | `custodian` | Custodian asks for the opening leg as a token-standard DvP: the collateral from the seller's collateral account to the buyer, against the purchase price from the buyer to the seller at `bank` |
+|  |  |  | `RequestOpeningLeg` *(nonconsuming)* | `custodian` | Custodian asks for the opening leg as a token-standard DvP: the collateral from the seller's collateral account to the buyer, against the purchase price from the buyer to the seller at `bank` |
 |  |  |  | `SettleOpeningLeg` | `custodian` | Custodian settles the opening leg's DvP, and the repo becomes Active, in one transaction |
 |  |  |  | `SubstituteCollateral` | `seller, buyer` | Collateral substitution: replace active collateral with equivalent eligible collateral |
 |  |  |  | `InitiateClosingLeg` | `seller` | Seller initiates the closing (repurchase) leg, at maturity or as an early repurchase at the agreed repurchase price |
 |  |  |  | `ExecuteClosingLeg` | `custodian` | Custodian confirms completion of closing leg repurchase settlement |
-|  |  |  | `RequestClosingLeg` *(read-only)* | `custodian` | Custodian asks for the closing leg as a token-standard DvP: the collateral from the buyer back to the seller's collateral account, against the repurchase price from the seller to the buyer at `bank` |
+|  |  |  | `RequestClosingLeg` *(nonconsuming)* | `custodian` | Custodian asks for the closing leg as a token-standard DvP: the collateral from the buyer back to the seller's collateral account, against the repurchase price from the seller to the buyer at `bank` |
 |  |  |  | `SettleClosingLeg` | `custodian` | Custodian settles the closing leg's DvP, and the repo is Settled, in one transaction |
 |  |  |  | `RollRepo` | `seller, buyer` | Roll / extend the repo term with updated rate and maturity date |
 |  |  |  | `DeclareRepoDefault` | `declaringParty` | Declare default upon failure to settle closing repurchase or post margin |
@@ -195,10 +199,13 @@ Choices of AryaFi's compliance interface (`CompliancePolicy_*`, in the `aryafi-c
 |  |  |  | `PayLendingFee` | `lender` | Lender confirms receipt of a lending fee payment from the borrower |
 |  |  |  | `RecallSecurities` | `lender` | Lender issues a formal recall for partial or full lent securities |
 |  |  |  | `ReturnSecurities` | `borrower` | Borrower returns securities, releasing collateral |
-|  |  |  | `RequestDelivery` *(read-only)* | `custodian` | Custodian asks for the delivery as a token-standard DvP: the borrowed securities from the lender to the borrower's borrowAccountId, against the cash collateral from the borrower to the lender at `bank` |
+|  |  |  | `RequestDelivery` *(nonconsuming)* | `custodian` | Custodian asks for the delivery as a token-standard DvP: the borrowed securities from the lender to the borrower's borrowAccountId, against the cash collateral from the borrower to the lender at `bank` |
 |  |  |  | `SettleDelivery` | `custodian` | Custodian settles the delivery's DvP, and the agreement becomes Active, in one transaction |
-|  |  |  | `RequestReturn` *(read-only)* | `custodian` | Custodian asks for a return as a token-standard DvP: `returnedQuantity` of the securities from the borrower to the lender, against `collateralReleaseAmount` of cash collateral from the lender back to the borrower at `bank`, within the pro-rata cap |
+|  |  |  | `RequestReturn` *(nonconsuming)* | `custodian` | Custodian asks for a return as a token-standard DvP: `returnedQuantity` of the securities from the borrower to the lender, against `collateralReleaseAmount` of cash collateral from the lender back to the borrower at `bank`, within the pro-rata cap |
 |  |  |  | `SettleReturn` | `custodian` | Custodian settles a return's DvP, and the agreement records the return as with ReturnSecurities, in one transaction |
+|  |  |  | `AccrueFeesToDate` | `actor` | Bring fees and rebates up to date, as any of the three parties |
+|  |  |  | `ReceiveLendingFee` | `lender` | Lender accepts the borrower's pending token-standard transfer of a fee payment, up to the fees accrued to date, and records it |
+|  |  |  | `ReceiveRebate` | `borrower` | Borrower accepts the lender's pending token-standard transfer of a rebate payment, up to the rebate accrued to date, and records it |
 |  |  |  | `RevalueCollateral` | `lender, borrower` | Mark-to-market collateral adjustment agreed between counterparties |
 |  |  |  | `DeclareSecLendingDefault` | `lender` | Lender declares default upon failure to satisfy recall deadline |
 |  |  |  | `AddSecLendingObserver` | `lender, borrower` | Add authorized observer |
@@ -207,6 +214,7 @@ Choices of AryaFi's compliance interface (`CompliancePolicy_*`, in the `aryafi-c
 |  |  |  | `RejectSubscription` | `fundManager` | Fund Manager rejects subscription with stated reason |
 |  |  |  | `IssueCapitalCall` | `fundManager` | Fund Manager issues an incremental capital call against uncalled commitment |
 |  |  |  | `ConfirmCapitalFunding` | `custodian` | Custodian confirms settlement of called capital and allocates units |
+|  |  |  | `SettleCapitalCall` | `custodian` | Custodian settles a capital call payment on the ledger: it accepts the investor's pending token-standard transfer of cash to the fund manager, and issues the units the payment buys at the unit price to the investor's `unitsAccountId`, in one transaction |
 |  |  |  | `CancelSubscription` | `investor` | Investor cancels request prior to manager approval |
 |  |  |  | `CloseSubscription` | `fundManager` | Fund Manager formally closes subscription upon end of fund commitment period |
 |  |  |  | `AddSubscriptionObserver` | `fundManager` | Add authorized observer (e.g. transfer agent) |
@@ -280,9 +288,9 @@ These principles hold for the current code and are covered by the negative and a
 3. **Token-standard transfers keep the receiver's consent.** By creating a `PositionTransferFactory`, a bank or custodian agrees in advance to transfers between its clients' accounts. The sender instructs a transfer; the receiver still signs the position it receives, either by accepting the pending `PositionTransferInstruction` or by instructing the transfer together with the sender. Until then the amount stays in the sender's account, locked to the registry.
 4. **Token-standard settlement needs both sides' allocations.** A registry's `SettlementFactory_SettleBatch` settles only when the allocations authorize exactly both sides of every leg, and only for the settlement's executors; a single allocation cannot be settled on its own. Each allocation is signed by its account owner, so a receiver signs the position it receives through its own allocation. Funding stays locked to the registry until settlement, cancellation by the executors, or withdrawal by the owner (for a committed allocation, only after its settlement deadline).
 5. **Token-standard DvP moves only what both parties allocated.** A `TokenDvpInstruction` is signed by the settlement agent alone. The seller and buyer consent only through their own allocations, and each registry settles only if those allocations authorize exactly both sides of its legs, so the agent cannot move anything they did not allocate.
-6. **Locks bind to a named lock holder.** `LockCash` / `LockSecurity` / `LockAsset` are authorized by owner and bank/custodian and name a lock holder. Only the lock holder can release the lock, or deliver the position to a receiver who co-authorizes (`SettleLockedCash` / `SettleLockedSecurity`). Neither owner nor custodian can withdraw a leg from an agreed settlement.
+6. **Locks bind to a named lock holder.** `LockCash` / `LockSecurity` / `LockAsset` are authorized by owner and bank/custodian and name a lock holder; a client can also lock its own position through its registry's `PositionTransferFactory` (`LockPosition`), which the registry agreed to by creating it. Only the lock holder can release the lock, or deliver the position to a receiver who co-authorizes (`SettleLockedCash` / `SettleLockedSecurity`). Neither owner nor custodian can withdraw a leg from an agreed settlement.
 7. **Atomic DvP.** `ExecuteDvpSettlement` validates both locked legs against the instruction (owner, account, ISIN, quantity, currency, amount, lock holder, lock reference) and delivers both in one transaction. The settlement agent cannot change economic terms; the instruction is signed by seller and buyer. An instruction with compliance requirements settles only through `ExecuteScreenedDvpSettlement`, which evaluates them first.
-8. **No party reduces its own obligation.** Loan repayments and interest payments are recorded by the lender; loan interest is computed from rate, day count, and ledger time; securities-lending fees need both counterparties to accrue and the lender to confirm payment; margin fulfilment needs the caller to confirm receipt; collateral release on a securities return is capped pro rata.
+8. **No party reduces its own obligation.** Loan repayments and interest payments are recorded by the lender; loan interest is computed from rate, day count, and ledger time; securities-lending fees need both counterparties to accrue and the lender to confirm payment, or, with a fee accrual, are computed from the rates, day count, and ledger time, and fees and rebates are reduced only by the cash the receiver accepts; margin fulfilment needs the caller to confirm receipt; collateral release on a securities return is capped pro rata.
 9. **Disclosure of bilateral agreements needs both counterparties.** Adding an observer to a loan, repo, securities loan, margin call, pledge, or collateral position requires both principals.
 10. **Timestamps come from the ledger.** KYC verification, sanctions screening, pledge enforcement, redemption settlement, and report amendments record ledger time rather than a caller-supplied value.
 11. **Compliance officers cannot move value.** Their choices only approve, reject, or evaluate; they hold no controller rights over positions.

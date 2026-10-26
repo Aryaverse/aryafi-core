@@ -14,6 +14,12 @@ Usage: python3 scripts/gen_authorization_matrix.py
 import os
 import re
 
+# Calls that update the ledger: Daml's own, and AryaFi's helpers that create,
+# exercise, or archive (AryaFi.Contracts.FinancingLegs, AryaFi.Finance.Encumbrance,
+# AryaFi.Finance.TokenRegistry).
+LEDGER_UPDATES = (r"\b(create|exercise|archive|requestExchange|settleExchange|encumber|unencumber"
+                  r"|deliverLocked|releaseLocked|archivePosition|createPosition|createFromDetails)\b")
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.join(REPO, "daml", "src", "AryaFi")
 OUTPUT = os.path.join(REPO, "docs", "security", "AUTHORIZATION_MATRIX.md")
@@ -204,9 +210,10 @@ def parse(path):
                     break
             cur["choices"].append({
                 "name": m.group(2),
-                # A nonconsuming choice is read-only unless it creates or exercises anything.
+                # A nonconsuming choice is read-only unless it creates, exercises, or
+                # archives anything, itself or through a helper that does.
                 "readonly": bool(m.group(1)) and not any(
-                    re.search(r"\b(create|exercise)\b", l) for l in block(lines, i, 4)),
+                    re.search(LEDGER_UPDATES, l) for l in block(lines, i, 4)),
                 "nonconsuming": bool(m.group(1)),
                 "controller": controller,
                 "doc": first_sentence(doc),
@@ -271,9 +278,9 @@ These principles hold for the current code and are covered by the negative and a
 3. **Token-standard transfers keep the receiver's consent.** By creating a `PositionTransferFactory`, a bank or custodian agrees in advance to transfers between its clients' accounts. The sender instructs a transfer; the receiver still signs the position it receives, either by accepting the pending `PositionTransferInstruction` or by instructing the transfer together with the sender. Until then the amount stays in the sender's account, locked to the registry.
 4. **Token-standard settlement needs both sides' allocations.** A registry's `SettlementFactory_SettleBatch` settles only when the allocations authorize exactly both sides of every leg, and only for the settlement's executors; a single allocation cannot be settled on its own. Each allocation is signed by its account owner, so a receiver signs the position it receives through its own allocation. Funding stays locked to the registry until settlement, cancellation by the executors, or withdrawal by the owner (for a committed allocation, only after its settlement deadline).
 5. **Token-standard DvP moves only what both parties allocated.** A `TokenDvpInstruction` is signed by the settlement agent alone. The seller and buyer consent only through their own allocations, and each registry settles only if those allocations authorize exactly both sides of its legs, so the agent cannot move anything they did not allocate.
-6. **Locks bind to a named lock holder.** `LockCash` / `LockSecurity` / `LockAsset` are authorized by owner and bank/custodian and name a lock holder. Only the lock holder can release the lock, or deliver the position to a receiver who co-authorizes (`SettleLockedCash` / `SettleLockedSecurity`). Neither owner nor custodian can withdraw a leg from an agreed settlement.
+6. **Locks bind to a named lock holder.** `LockCash` / `LockSecurity` / `LockAsset` are authorized by owner and bank/custodian and name a lock holder; a client can also lock its own position through its registry's `PositionTransferFactory` (`LockPosition`), which the registry agreed to by creating it. Only the lock holder can release the lock, or deliver the position to a receiver who co-authorizes (`SettleLockedCash` / `SettleLockedSecurity`). Neither owner nor custodian can withdraw a leg from an agreed settlement.
 7. **Atomic DvP.** `ExecuteDvpSettlement` validates both locked legs against the instruction (owner, account, ISIN, quantity, currency, amount, lock holder, lock reference) and delivers both in one transaction. The settlement agent cannot change economic terms; the instruction is signed by seller and buyer. An instruction with compliance requirements settles only through `ExecuteScreenedDvpSettlement`, which evaluates them first.
-8. **No party reduces its own obligation.** Loan repayments and interest payments are recorded by the lender; loan interest is computed from rate, day count, and ledger time; securities-lending fees need both counterparties to accrue and the lender to confirm payment; margin fulfilment needs the caller to confirm receipt; collateral release on a securities return is capped pro rata.
+8. **No party reduces its own obligation.** Loan repayments and interest payments are recorded by the lender; loan interest is computed from rate, day count, and ledger time; securities-lending fees need both counterparties to accrue and the lender to confirm payment, or, with a fee accrual, are computed from the rates, day count, and ledger time, and fees and rebates are reduced only by the cash the receiver accepts; margin fulfilment needs the caller to confirm receipt; collateral release on a securities return is capped pro rata.
 9. **Disclosure of bilateral agreements needs both counterparties.** Adding an observer to a loan, repo, securities loan, margin call, pledge, or collateral position requires both principals.
 10. **Timestamps come from the ledger.** KYC verification, sanctions screening, pledge enforcement, redemption settlement, and report amendments record ledger time rather than a caller-supplied value.
 11. **Compliance officers cannot move value.** Their choices only approve, reject, or evaluate; they hold no controller rights over positions.

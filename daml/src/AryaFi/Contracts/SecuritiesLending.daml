@@ -22,13 +22,25 @@
 -- against the release of cash collateral, within the pro-rata cap. An
 -- agreement created Active, and ReturnSecurities, record movements settled
 -- elsewhere.
+--
+-- With a fee accrual (feeAccrual), the ledger computes fees and rebates from
+-- the rates and time: the borrow fee on the value of the securities on loan,
+-- and the rebate on cash collateral, both accruing from delivery until they
+-- are brought up to date (AccrueFeesToDate), and before every change to what
+-- they accrue on (returns, revaluation, default). The borrower pays fees, and
+-- the lender pays rebates, with token-standard transfers that the receiver
+-- accepts as the agreement records them (ReceiveLendingFee, ReceiveRebate).
 module AryaFi.Contracts.SecuritiesLending where
 
-import AryaFi.Common.Types (Amount, Currency, Rate)
+import Splice.Api.Token.MetadataV1 (ExtraArgs)
+import Splice.Api.Token.TransferInstructionV2 (TransferInstruction)
+import AryaFi.Common.Types (Amount, Currency, DayCountConvention, Rate)
 import AryaFi.Common.Identifiers (ISIN(..), AccountId(..), ReferenceId, CorrelationId, TradeId(..))
 import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
+import AryaFi.Common.Time (calcAccruedInterestBetween)
 import AryaFi.Contracts.FinancingLegs
 import AryaFi.Finance.TokenDvp (RegistryBatch, TokenDvpAllocationRequest, TokenDvpInstruction(..))
+import DA.Optional (isNone, isSome)
 import qualified DA.Text as Text
 import qualified DA.List as List
 
@@ -49,6 +61,19 @@ data SecLendingStatus
   | LendingPendingDelivery
     -- ^ Agreed; awaiting delivery of the securities against the collateral
     --   (RequestDelivery, SettleDelivery).
+  deriving (Eq, Show)
+
+-- | How the ledger accrues an agreement's fees and rebates.
+data FeeAccrual = FeeAccrual
+  with
+    accruedThrough : Time
+    -- ^ Fees and rebates are accrued up to this time. Delivery restarts it.
+    loanPrice : Amount
+    -- ^ The agreed price per unit of the securities on loan: the borrow fee
+    --   accrues on borrowedQuantity × loanPrice.
+    dayCountConvention : DayCountConvention
+    accruedRebate : Amount
+    -- ^ Unpaid rebate the lender owes the borrower on cash collateral.
   deriving (Eq, Show)
 
 -- | Institutional Securities Lending Agreement.
@@ -88,6 +113,8 @@ template SecuritiesLendingAgreement
     -- ^ Cross-system correlation identifier.
     observers : [Party]
     -- ^ Authorized observers (e.g. agent lenders, regulators).
+    feeAccrual : Optional FeeAccrual
+    -- ^ With it, the ledger accrues fees and rebates from the rates and time.
   where
     signatory lender, borrower, custodian
     observer (List.dedup observers)
@@ -100,7 +127,8 @@ template SecuritiesLendingAgreement
       lendingFeeRate >= 0.0 &&
       rebateRate >= 0.0 &&
       accruedLendingFee >= 0.0 &&
-      (not (isOpen status) || borrowedQuantity > 0.0 || accruedLendingFee > 0.0) &&
+      optional True (\accrual -> accrual.loanPrice > 0.0 && accrual.accruedRebate >= 0.0) feeAccrual &&
+      (not (isOpen status) || borrowedQuantity > 0.0 || accruedLendingFee > 0.0 || rebateOwed feeAccrual > 0.0) &&
       lendingId /= ""
 
     -- | Record borrow fees for an elapsed period. Both counterparties must agree
@@ -126,10 +154,7 @@ template SecuritiesLendingAgreement
         require (isOpen status) "Agreement must be Active or under Recall to record fee payments"
         requirePositive paymentAmount "paymentAmount"
         require (paymentAmount <= accruedLendingFee) "Payment exceeds accrued fee balance"
-        let newFee = accruedLendingFee - paymentAmount
-        create this with
-          accruedLendingFee = newFee
-          status = if borrowedQuantity == 0.0 && newFee == 0.0 then LendingClosed else status
+        create (closeIfDischarged (this with accruedLendingFee = accruedLendingFee - paymentAmount))
 
     -- | Lender issues a formal recall for partial or full lent securities.
     choice RecallSecurities : ContractId SecuritiesLendingAgreement
@@ -159,7 +184,8 @@ template SecuritiesLendingAgreement
       controller borrower
       do
         checkReturn this returnedQuantity collateralReleaseAmount
-        create (afterReturn this returnedQuantity collateralReleaseAmount)
+        now <- getTime
+        create (afterReturn (accrueTo now this) returnedQuantity collateralReleaseAmount)
 
     -- | Custodian asks for the delivery as a token-standard DvP: the borrowed
     -- securities from the lender to the borrower's borrowAccountId, against
@@ -189,7 +215,10 @@ template SecuritiesLendingAgreement
       do
         require (status == LendingPendingDelivery) "Agreement must be PendingDelivery to settle delivery"
         _ <- settleExchange (deliveryExchange this) dvpCid batches openRequests
-        create this with status = LendingActive
+        now <- getTime
+        create this with
+          status = LendingActive
+          feeAccrual = (\accrual -> accrual with accruedThrough = now) <$> feeAccrual
 
     -- | Custodian asks for a return as a token-standard DvP: `returnedQuantity`
     -- of the securities from the borrower to the lender, against
@@ -231,18 +260,87 @@ template SecuritiesLendingAgreement
         let returnRef = Text.drop (Text.length prefix) tradeId
         _ <- settleExchange (returnExchange this returnRef returnedQuantity collateralReleaseAmount)
           dvpCid batches openRequests
-        create (afterReturn this returnedQuantity collateralReleaseAmount)
+        now <- getTime
+        create (afterReturn (accrueTo now this) returnedQuantity collateralReleaseAmount)
+
+    -- | Bring fees and rebates up to date, as any of the three parties. The
+    -- amounts follow from the agreement and the time alone.
+    choice AccrueFeesToDate : ContractId SecuritiesLendingAgreement
+      with
+        actor : Party
+      controller actor
+      do
+        require (actor `elem` [lender, borrower, custodian]) "Only a party to the agreement can accrue its fees"
+        require (isOpen status) "Agreement must be Active or under Recall to accrue fees"
+        require (isSome feeAccrual) "The agreement accrues no fees on the ledger"
+        now <- getTime
+        create (accrueTo now this)
+
+    -- | Lender accepts the borrower's pending token-standard transfer of a fee
+    -- payment, up to the fees accrued to date, and records it. Closes the
+    -- agreement if nothing remains on loan or owed. If the cash registry
+    -- refuses the transfer on acceptance, the fees are only brought up to date.
+    choice ReceiveLendingFee : ContractId SecuritiesLendingAgreement
+      with
+        instructionCid : ContractId TransferInstruction
+        extraArgs : ExtraArgs
+      controller lender
+      do
+        require (isOpen status) "Agreement must be Active or under Recall to record fee payments"
+        now <- getTime
+        let accrued = accrueTo now this
+        transfer <- incomingTransfer "Fee payment" instructionCid borrower lender collateralCurrency
+        require (transfer.amount <= accrued.accruedLendingFee)
+          ("Fee payment: " <> show transfer.amount <> " exceeds the accrued fee of " <> show accrued.accruedLendingFee)
+        received <- acceptIncoming instructionCid lender extraArgs
+        if not received then create accrued
+        else create (closeIfDischarged (accrued with accruedLendingFee = accrued.accruedLendingFee - transfer.amount))
+
+    -- | Borrower accepts the lender's pending token-standard transfer of a
+    -- rebate payment, up to the rebate accrued to date, and records it.
+    -- Closes the agreement if nothing remains on loan or owed.
+    choice ReceiveRebate : ContractId SecuritiesLendingAgreement
+      with
+        instructionCid : ContractId TransferInstruction
+        extraArgs : ExtraArgs
+      controller borrower
+      do
+        require (isOpen status) "Agreement must be Active or under Recall to record rebate payments"
+        now <- getTime
+        let accrued = accrueTo now this
+        accrual <- case accrued.feeAccrual of
+          Some accrual -> pure accrual
+          None -> abort "The agreement accrues no rebate on the ledger"
+        transfer <- incomingTransfer "Rebate payment" instructionCid lender borrower collateralCurrency
+        require (transfer.amount <= accrual.accruedRebate)
+          ("Rebate payment: " <> show transfer.amount <> " exceeds the accrued rebate of " <> show accrual.accruedRebate)
+        received <- acceptIncoming instructionCid borrower extraArgs
+        if not received then create accrued
+        else create (closeIfDischarged (accrued with
+          feeAccrual = Some (accrual with accruedRebate = accrual.accruedRebate - transfer.amount)))
 
     -- | Mark-to-market collateral adjustment agreed between counterparties.
+    -- With a fee accrual, fees and rebates are accrued to date first, and
+    -- `newLoanPrice` revalues the securities on loan.
     choice RevalueCollateral : ContractId SecuritiesLendingAgreement
       with
         newCollateralAmount : Amount
+        newLoanPrice : Optional Amount
       controller lender, borrower
       do
         require (isOpen status) "Agreement must be Active or under Recall to revalue collateral"
         requirePositive newCollateralAmount "newCollateralAmount"
-        create this with
+        now <- getTime
+        let accrued = accrueTo now this
+        newAccrual <- case (accrued.feeAccrual, newLoanPrice) of
+          (accrual, None) -> pure accrual
+          (Some accrual, Some price) -> do
+            requirePositive price "newLoanPrice"
+            pure (Some (accrual with loanPrice = price))
+          (None, Some _) -> abort "The agreement accrues no fees on the ledger to revalue"
+        create accrued with
           collateralAmount = newCollateralAmount
+          feeAccrual = newAccrual
 
     -- | Lender declares default upon failure to satisfy recall deadline.
     choice DeclareSecLendingDefault : ContractId SecuritiesLendingAgreement
@@ -252,7 +350,8 @@ template SecuritiesLendingAgreement
       do
         require (isOpen status) "Can only declare default on an Active or Recalled agreement"
         requireNonEmpty reason "reason"
-        create this with
+        now <- getTime
+        create (accrueTo now this) with
           status = LendingDefaulted reason
 
     -- | Add authorized observer. Both counterparties must consent to disclosure.
@@ -281,6 +380,34 @@ isOpen : SecLendingStatus -> Bool
 isOpen s = s == LendingActive || isRecallIssued s
 
 
+-- | The rebate the lender owes, with a fee accrual.
+rebateOwed : Optional FeeAccrual -> Amount
+rebateOwed = optional 0.0 (\accrual -> accrual.accruedRebate)
+
+-- | The agreement with its fees and rebates accrued up to `now`, if the ledger
+-- accrues them and the agreement is open. The borrow fee accrues on the
+-- value of the securities on loan; the rebate accrues on cash collateral,
+-- which is collateral without a pledge (collateralPledgeRef). Each accrual
+-- is rounded to the cent.
+accrueTo : Time -> SecuritiesLendingAgreement -> SecuritiesLendingAgreement
+accrueTo now this = case this.feeAccrual of
+  Some accrual | isOpen this.status && now > accrual.accruedThrough ->
+    let accrue basis rate = roundCommercial 2
+          (calcAccruedInterestBetween accrual.dayCountConvention basis rate accrual.accruedThrough now)
+        fee = accrue (this.borrowedQuantity * accrual.loanPrice) this.lendingFeeRate
+        rebate = if isNone this.collateralPledgeRef then accrue this.collateralAmount this.rebateRate else 0.0
+    in this with
+         accruedLendingFee = this.accruedLendingFee + fee
+         feeAccrual = Some (accrual with accruedThrough = now; accruedRebate = accrual.accruedRebate + rebate)
+  _ -> this
+
+-- | The agreement, closed if nothing remains on loan and no fees or rebates are owed.
+closeIfDischarged : SecuritiesLendingAgreement -> SecuritiesLendingAgreement
+closeIfDischarged this
+  | this.borrowedQuantity == 0.0 && this.accruedLendingFee == 0.0 && rebateOwed this.feeAccrual == 0.0 =
+      this with status = LendingClosed
+  | otherwise = this
+
 -- | Check a return of `returnedQuantity` releasing `collateralReleaseAmount`:
 -- the agreement is open, the quantity is on loan, and the release is within
 -- the posted collateral and the pro-rata share of the returned securities.
@@ -298,12 +425,13 @@ checkReturn this returnedQuantity collateralReleaseAmount = do
     "Collateral release exceeds the pro-rata share of the returned securities"
 
 -- | The agreement after a return. A partial return under recall reduces the
--- outstanding recall quantity; nothing left on loan and no fees owed closes it.
+-- outstanding recall quantity; nothing left on loan and no fees or rebates
+-- owed closes it.
 afterReturn : SecuritiesLendingAgreement -> Amount -> Amount -> SecuritiesLendingAgreement
 afterReturn this returnedQuantity collateralReleaseAmount =
   let newBorrowed = this.borrowedQuantity - returnedQuantity
       newStatus = case this.status of
-        _ | newBorrowed == 0.0 && this.accruedLendingFee == 0.0 -> LendingClosed
+        _ | newBorrowed == 0.0 && this.accruedLendingFee == 0.0 && rebateOwed this.feeAccrual == 0.0 -> LendingClosed
         LendingRecallIssued{recallQuantity, recallDeadline}
           | recallQuantity > returnedQuantity && newBorrowed > 0.0 ->
               LendingRecallIssued with recallQuantity = recallQuantity - returnedQuantity; recallDeadline
