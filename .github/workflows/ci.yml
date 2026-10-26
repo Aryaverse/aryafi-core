@@ -88,9 +88,9 @@ jobs:
     name: Canton 3.5 Topology Integration
     runs-on: ubuntu-latest
     needs: build-and-test
-    # The suites on the bank participant take about 60 minutes, the cross-node
-    # scripts and the smoke test about 10 more.
-    timeout-minutes: 90
+    # The suites on the bank participant take about 65 minutes, the cross-node
+    # scripts and the smoke test about 15 more.
+    timeout-minutes: 110
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -150,7 +150,8 @@ jobs:
             AryaFi.Test.Unit.ComplianceGateTest:runComplianceGateTests \
             AryaFi.Test.Unit.PledgedHoldingTest:runPledgedHoldingTests \
             AryaFi.Test.Unit.CollateralAndMarginTest:runCollateralAndMarginTests \
-            AryaFi.Test.Unit.FinancingOnLedgerTest:runFinancingOnLedgerTests; do
+            AryaFi.Test.Unit.FinancingOnLedgerTest:runFinancingOnLedgerTests \
+            AryaFi.Test.Unit.FinancingCashTest:runFinancingCashTests; do
             echo "::group::$script"
             dpm script --dar "$DAR" --upload-dar=yes --script-name "$script" --ledger-host localhost --ledger-port 10012
             echo "::endgroup::"
@@ -178,7 +179,8 @@ jobs:
             AryaFi.Test.Network.DvpAcrossNodes:runDvpAcrossNodes \
             AryaFi.Test.Network.TokenDvpAcrossNodes:runTokenDvpAcrossNodes \
             AryaFi.Test.Network.FinancingAcrossNodes:runFinancingAcrossNodes \
-            AryaFi.Test.Network.ComplianceAcrossNodes:runComplianceAcrossNodes; do
+            AryaFi.Test.Network.ComplianceAcrossNodes:runComplianceAcrossNodes \
+            AryaFi.Test.Network.FinancingLegsAcrossNodes:runFinancingLegsAcrossNodes; do
             echo "::group::$script"
             echo '{"runId": "ci-${{ github.run_id }}-'"${script##*:}"'", "custodianNode": "custodian_node", "bankNode": "bank_node", "sellerNode": "dealer_a_node", "buyerNode": "dealer_b_node", "agentNode": "regulator_node"}' > nodes.json
             dpm script --dar "$DAR" --script-name "$script" --participant-config participants.json --input-file nodes.json

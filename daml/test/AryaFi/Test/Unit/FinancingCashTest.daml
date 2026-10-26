@@ -1,0 +1,496 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Escrows, fund subscriptions and redemptions, payment instructions, and
+-- securities lending fees that move their cash and units. An escrow holds the
+-- deposited cash, locked to the escrow agent, and releases or refunds it; the
+-- custodian settles a capital call by issuing the units its cash buys, and a
+-- redemption by burning the units as the investor receives the payout; a
+-- payment instruction executes as a token-standard transfer; and a securities
+-- loan's fees and rebates accrue on the ledger and are paid by transfer.
+module AryaFi.Test.Unit.FinancingCashTest where
+
+import DA.Text (isPrefixOf)
+import DA.Time (addRelTime, days, minutes)
+import Daml.Script
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
+import Splice.Api.Token.MetadataV1 (emptyMetadata)
+import Splice.Api.Token.TransferInstructionV2
+import AryaFi.Common.Identifiers
+import AryaFi.Common.Types (DayCountConvention(..), SettlementStatus(..))
+import AryaFi.Compliance.Gate (ComplianceRequirements(..))
+import AryaFi.Contracts.Escrow
+import AryaFi.Contracts.Redemption
+import AryaFi.Contracts.SecuritiesLending
+import AryaFi.Contracts.Subscription
+import AryaFi.Finance.Payment
+import AryaFi.Finance.Security
+import AryaFi.Finance.TokenTransfer
+import AryaFi.Test.Scenarios.DvpSettlementTest (allocateTestParty, bondIsin, setupCashPosition)
+import AryaFi.Test.Scenarios.TokenDvpTest (noExtraArgs)
+import AryaFi.Test.Unit.PledgedHoldingTest (holdingsOf)
+import AryaFi.Test.Unit.TokenTransferTest (submitFailsWith)
+
+-- | `sender` instructs a token-standard transfer of `amount` USD at `bank` to
+-- `receiver`, from its unlocked holdings in `fromAccount`.
+instructCash
+  : Party -> ContractId PositionTransferFactory -> Party -> Text -> Party -> Text -> Decimal
+  -> Script (ContractId TransferInstruction)
+instructCash bank factoryCid sender fromAccount receiver toAccount amount = do
+  inputs <- cashIn bank sender fromAccount
+  now <- getTime
+  result <- submit sender do
+    exerciseCmd (toInterfaceContractId @TransferFactory factoryCid) TransferFactory_Transfer with
+      transfer = Transfer with
+        sender = HoldingV2.Account with owner = Some sender; provider = Some bank; id = fromAccount
+        receiver = HoldingV2.Account with owner = Some receiver; provider = Some bank; id = toAccount
+        amount
+        instrumentId = HoldingV2.InstrumentId with admin = bank; id = "USD"
+        requestedAt = addRelTime now (minutes (-1))
+        executeBefore = addRelTime now (days 1)
+        inputHoldingCids = inputs
+        meta = emptyMetadata
+      actors = [sender]
+      extraArgs = noExtraArgs
+  case result.output of
+    TransferInstructionResult_Pending cid -> pure cid
+    other -> abort ("Expected a pending transfer, got " <> show other)
+
+-- | `owner`'s unlocked USD holdings at `bank` in `account`.
+cashIn : Party -> Party -> Text -> Script [ContractId HoldingV2.Holding]
+cashIn bank owner account = do
+  holdings <- queryInterface @HoldingV2.Holding owner
+  pure [ cid | (cid, Some v) <- holdings, v.account.owner == Some owner, v.account.id == account
+             , v.instrumentId == (HoldingV2.InstrumentId with admin = bank; id = "USD"), v.lock == None ]
+
+-- ---------------------------------------------------------------------------
+-- Escrows
+-- ---------------------------------------------------------------------------
+
+data EscrowFixture = EscrowFixture
+  with
+    bank : Party
+    agent : Party
+    depositor : Party
+    beneficiary : Party
+    factoryCid : ContractId PositionTransferFactory
+    escrowCid : ContractId ConditionalEscrow
+
+setupEscrow : Text -> Script EscrowFixture
+setupEscrow test = do
+  bank <- allocateTestParty "Bank" test
+  agent <- allocateTestParty "Agent" test
+  depositor <- allocateTestParty "Depositor" test
+  beneficiary <- allocateTestParty "Beneficiary" test
+  factoryCid <- submit bank do
+    createCmd PositionTransferFactory with admin = bank; clients = [agent, depositor, beneficiary]; compliance = None
+  _ <- setupCashPosition bank depositor (AccountId "ACC-DEPOSITOR") 1500000.0
+  now <- getTime
+  escrowCid <- submit (actAs [agent, depositor]) do
+    createCmd ConditionalEscrow with
+      escrowId = "ESC-" <> test; escrowAgent = agent; depositor; beneficiary; currency = "USD"
+      amount = 1000000.0; releaseCondition = "Title registered"; expiryTime = addRelTime now (days 30)
+      correlationId = CorrelationId ("CORR-" <> test); status = EscrowAwaitingDeposit; disputeReason = None
+      observers = []; escrowedHoldingCid = None; beneficiaryAccountId = Some (AccountId "ACC-BENEFICIARY")
+  pure EscrowFixture with ..
+
+-- | `owner`'s unlocked USD holding of exactly `amount` at `bank` in `account`.
+cashOf : Party -> Party -> Text -> Decimal -> Script (ContractId HoldingV2.Holding)
+cashOf bank owner account amount = do
+  holdings <- queryInterface @HoldingV2.Holding owner
+  case [ cid | (cid, Some v) <- holdings, v.account.owner == Some owner, v.account.id == account
+             , v.instrumentId.admin == bank, v.amount == amount, v.lock == None ] of
+    cid :: _ -> pure cid
+    [] -> abort ("No unlocked holding of " <> show amount <> " in " <> account)
+
+-- | The depositor deposits from its cash position of 1,500,000.
+depositFrom : EscrowFixture -> ContractId ConditionalEscrow -> Script EscrowDeposited
+depositFrom e escrowCid = do
+  holdingCid <- cashOf e.bank e.depositor "ACC-DEPOSITOR" 1500000.0
+  submit e.depositor do
+    exerciseCmd escrowCid DepositIntoEscrow with
+      factoryCid = e.factoryCid; holdingCid; accountId = AccountId "ACC-DEPOSITOR"
+
+-- The deposit stays the depositor's, locked to the agent, until the agent and
+-- the beneficiary release it to the beneficiary's account.
+testEscrowReleasesDeposit : Script ()
+testEscrowReleasesDeposit = script do
+  e <- setupEscrow "ESC-RELEASE"
+  deposited <- depositFrom e e.escrowCid
+  Some held <- queryContractId e.agent deposited.escrowCid
+  assertMsg "The escrow holds the deposit" (held.status == EscrowHeld && held.escrowedHoldingCid /= None)
+  depositorHoldings <- holdingsOf e.depositor
+  assertMsg ("Expected the deposit locked to the agent and the rest free, got " <> show depositorHoldings)
+    (depositorHoldings == [("ACC-DEPOSITOR", 500000.0, None), ("ACC-DEPOSITOR", 1000000.0, Some [e.agent])])
+  -- The depositor cannot send the locked deposit elsewhere
+  Some lockedCid <- pure held.escrowedHoldingCid
+  now <- getTime
+  submitFailsWith "Input holding is locked" [e.depositor] do
+    exerciseCmd (toInterfaceContractId @TransferFactory e.factoryCid) TransferFactory_Transfer with
+      transfer = Transfer with
+        sender = HoldingV2.Account with owner = Some e.depositor; provider = Some e.bank; id = "ACC-DEPOSITOR"
+        receiver = HoldingV2.Account with owner = Some e.beneficiary; provider = Some e.bank; id = "ACC-BENEFICIARY"
+        amount = 1000000.0
+        instrumentId = HoldingV2.InstrumentId with admin = e.bank; id = "USD"
+        requestedAt = addRelTime now (minutes (-1))
+        executeBefore = addRelTime now (days 1)
+        inputHoldingCids = [lockedCid]
+        meta = emptyMetadata
+      actors = [e.depositor]
+      extraArgs = noExtraArgs
+
+  released <- submit (actAs [e.agent, e.beneficiary]) do exerciseCmd deposited.escrowCid ReleaseEscrow
+  Some done <- queryContractId e.agent released
+  assertMsg "The escrow is released" (done.status == EscrowReleased && done.escrowedHoldingCid == None)
+  beneficiaryHoldings <- holdingsOf e.beneficiary
+  assertMsg ("Expected the beneficiary to hold the deposit, got " <> show beneficiaryHoldings)
+    (beneficiaryHoldings == [("ACC-BENEFICIARY", 1000000.0, None)])
+  depositorAfter <- holdingsOf e.depositor
+  assertMsg ("Expected the depositor to keep the rest, got " <> show depositorAfter)
+    (depositorAfter == [("ACC-DEPOSITOR", 500000.0, None)])
+
+-- A disputed deposit is refunded by the agent alone, but released only with
+-- the beneficiary: the agent dismisses the dispute, and they release it.
+testEscrowDisputeAndRefund : Script ()
+testEscrowDisputeAndRefund = script do
+  e <- setupEscrow "ESC-REFUND"
+  Some terms <- queryContractId e.agent e.escrowCid
+  deposited <- depositFrom e e.escrowCid
+  disputed <- submit e.agent do exerciseCmd deposited.escrowCid DisputeEscrow with reason = "Title contested"
+  submitFailsWith "a deposit is released with the beneficiary" [e.agent] do
+    exerciseCmd disputed ResolveDispute with resolutionStatus = EscrowReleased
+  refunded <- submit e.agent do exerciseCmd disputed ResolveDispute with resolutionStatus = EscrowRefunded
+  Some done <- queryContractId e.depositor refunded
+  assertMsg "The escrow is refunded" (done.status == EscrowRefunded && done.escrowedHoldingCid == None)
+  depositorHoldings <- holdingsOf e.depositor
+  assertMsg ("Expected the depositor to have its deposit back, unlocked, got " <> show depositorHoldings)
+    (depositorHoldings == [("ACC-DEPOSITOR", 500000.0, None), ("ACC-DEPOSITOR", 1000000.0, None)])
+
+  -- A second escrow: the dispute is dismissed and the deposit released
+  second <- submit (actAs [e.agent, e.depositor]) do createCmd terms with escrowId = "ESC-REFUND-2"
+  deposit <- cashOf e.bank e.depositor "ACC-DEPOSITOR" 1000000.0
+  heldAgain <- submit e.depositor do
+    exerciseCmd second DepositIntoEscrow with
+      factoryCid = e.factoryCid; holdingCid = deposit; accountId = AccountId "ACC-DEPOSITOR"
+  disputedAgain <- submit e.agent do
+    exerciseCmd heldAgain.escrowCid DisputeEscrow with reason = "Title contested"
+  dismissed <- submit e.agent do exerciseCmd disputedAgain ResolveDispute with resolutionStatus = EscrowHeld
+  released <- submit (actAs [e.agent, e.beneficiary]) do exerciseCmd dismissed ReleaseEscrow
+  Some final <- queryContractId e.agent released
+  assertMsg "The second escrow is released" (final.status == EscrowReleased)
+  beneficiaryHoldings <- holdingsOf e.beneficiary
+  assertMsg ("Expected the beneficiary to hold the second deposit, got " <> show beneficiaryHoldings)
+    (beneficiaryHoldings == [("ACC-BENEFICIARY", 1000000.0, None)])
+
+-- A deposit needs the beneficiary's account, a large enough position, and an
+-- escrow awaiting it.
+testEscrowDepositChecks : Script ()
+testEscrowDepositChecks = script do
+  e <- setupEscrow "ESC-CHECKS"
+  Some terms <- queryContractId e.agent e.escrowCid
+  noAccount <- submit (actAs [e.agent, e.depositor]) do
+    createCmd terms with escrowId = "ESC-CHECKS-2"; beneficiaryAccountId = None
+  holdingCid <- cashOf e.bank e.depositor "ACC-DEPOSITOR" 1500000.0
+  submitFailsWith "name the beneficiary's account" [e.depositor] do
+    exerciseCmd noAccount DepositIntoEscrow with
+      factoryCid = e.factoryCid; holdingCid; accountId = AccountId "ACC-DEPOSITOR"
+  small <- setupCashPosition e.bank e.depositor (AccountId "ACC-SMALL") 100000.0
+  submitFailsWith "Locked holding: 100000.0 is less than 1000000.0" [e.depositor] do
+    exerciseCmd e.escrowCid DepositIntoEscrow with
+      factoryCid = e.factoryCid; holdingCid = toInterfaceContractId small; accountId = AccountId "ACC-SMALL"
+  deposited <- submit e.depositor do
+    exerciseCmd e.escrowCid DepositIntoEscrow with
+      factoryCid = e.factoryCid; holdingCid; accountId = AccountId "ACC-DEPOSITOR"
+  Some change <- pure deposited.changeCid
+  submitFailsWith "Escrow must be AwaitingDeposit to deposit" [e.depositor] do
+    exerciseCmd deposited.escrowCid DepositIntoEscrow with
+      factoryCid = e.factoryCid; holdingCid = change; accountId = AccountId "ACC-DEPOSITOR"
+  -- Neither the depositor nor the beneficiary can take the deposit alone
+  submitMustFail e.depositor do exerciseCmd deposited.escrowCid RefundEscrow
+  submitMustFail e.beneficiary do exerciseCmd deposited.escrowCid ReleaseEscrow
+
+-- ---------------------------------------------------------------------------
+-- Fund subscriptions and redemptions
+-- ---------------------------------------------------------------------------
+
+data FundFixture = FundFixture
+  with
+    custodian : Party
+    -- ^ The fund's custodian: it keeps the units, and is the depositary bank for the cash.
+    fundManager : Party
+    investor : Party
+    feeder : Party
+    -- ^ Another of the custodian's clients.
+    factoryCid : ContractId PositionTransferFactory
+
+fundIsin : ISIN
+fundIsin = ISIN "LU2600000001"
+
+fundTitle : Text
+fundTitle = "AryaFi Private Credit Fund I"
+
+setupFund : Text -> Script FundFixture
+setupFund test = do
+  custodian <- allocateTestParty "Custodian" test
+  fundManager <- allocateTestParty "FundManager" test
+  investor <- allocateTestParty "Investor" test
+  feeder <- allocateTestParty "Feeder" test
+  factoryCid <- submit custodian do
+    createCmd PositionTransferFactory with
+      admin = custodian; clients = [fundManager, investor, feeder]; compliance = None
+  pure FundFixture with ..
+
+-- The investor's payment of a capital call reaches the fund as the custodian
+-- issues the units it buys, in one transaction.
+testCapitalCallIssuesUnits : Script ()
+testCapitalCallIssuesUnits = script do
+  f <- setupFund "FUND-SUB"
+  _ <- setupCashPosition f.custodian f.investor (AccountId "ACC-INVESTOR-CASH") 3000000.0
+  subscriptionCid <- submit (actAs [f.fundManager, f.investor]) do
+    createCmd FundSubscription with
+      subscriptionId = "SUB-FUND-SUB"; fundManager = f.fundManager; investor = f.investor; custodian = f.custodian
+      fundId = "FUND-1"; fundName = fundTitle; currency = "USD"; committedAmount = 2000000.0; calledAmount = 0.0
+      fundedAmount = 0.0; unitsIssued = 0.0; unitPrice = 100.0; status = SubscriptionApproved
+      rejectionReason = None; correlationId = CorrelationId "CORR-FUND-SUB"; observers = []
+      unitIsin = Some fundIsin
+  called <- submit f.fundManager do exerciseCmd subscriptionCid IssueCapitalCall with callAmount = 1000000.0
+
+  -- More than the call does not settle, and neither does a payment to someone else
+  tooMuch <- instructCash f.custodian f.factoryCid f.investor "ACC-INVESTOR-CASH" f.fundManager "ACC-FUND-CASH" 1500000.0
+  submitFailsWith "Funded amount cannot exceed called capital" [f.custodian] do
+    exerciseCmd called SettleCapitalCall with
+      instructionCid = tooMuch; extraArgs = noExtraArgs; unitsAccountId = AccountId "ACC-INVESTOR-UNITS"
+  _ <- submit f.investor do
+    exerciseCmd tooMuch TransferInstruction_Withdraw with actors = [f.investor]; extraArgs = noExtraArgs
+  elsewhere <- instructCash f.custodian f.factoryCid f.investor "ACC-INVESTOR-CASH" f.feeder "ACC-FEEDER" 1000000.0
+  submitFailsWith "Capital call payment: not sent to" [f.custodian] do
+    exerciseCmd called SettleCapitalCall with
+      instructionCid = elsewhere; extraArgs = noExtraArgs; unitsAccountId = AccountId "ACC-INVESTOR-UNITS"
+  _ <- submit f.investor do
+    exerciseCmd elsewhere TransferInstruction_Withdraw with actors = [f.investor]; extraArgs = noExtraArgs
+
+  payment <- instructCash f.custodian f.factoryCid f.investor "ACC-INVESTOR-CASH" f.fundManager "ACC-FUND-CASH" 1000000.0
+  funded <- submit f.custodian do
+    exerciseCmd called SettleCapitalCall with
+      instructionCid = payment; extraArgs = noExtraArgs; unitsAccountId = AccountId "ACC-INVESTOR-UNITS"
+  Some subscription <- queryContractId f.investor funded
+  assertMsg ("Expected 1,000,000 funded for 10,000 units, got " <> show (subscription.fundedAmount, subscription.unitsIssued))
+    (subscription.fundedAmount == 1000000.0 && subscription.unitsIssued == 10000.0
+      && subscription.status == SubscriptionPartiallyFunded)
+  investorHoldings <- holdingsOf f.investor
+  assertMsg ("Expected the investor to hold the units and the rest of its cash, got " <> show investorHoldings)
+    (investorHoldings == [("ACC-INVESTOR-CASH", 2000000.0, None), ("ACC-INVESTOR-UNITS", 10000.0, None)])
+  managerHoldings <- holdingsOf f.fundManager
+  assertMsg ("Expected the fund to hold the cash, got " <> show managerHoldings)
+    (managerHoldings == [("ACC-FUND-CASH", 1000000.0, None)])
+  [(_, units)] <- query @SecurityPosition f.investor
+  assertMsg "The units are the fund's, kept by the custodian"
+    (units.isin == fundIsin && units.instrumentType == FundUnit && units.custodian == f.custodian
+      && units.instrumentName == fundTitle)
+
+-- The fund manager's payout reaches the investor as the redeemed units are
+-- burnt, in one transaction.
+testRedemptionBurnsUnits : Script ()
+testRedemptionBurnsUnits = script do
+  f <- setupFund "FUND-RED"
+  _ <- setupCashPosition f.custodian f.fundManager (AccountId "ACC-FUND-CASH") 2000000.0
+  unitsCid <- submit (actAs [f.custodian, f.investor]) do
+    createCmd SecurityPosition with
+      custodian = f.custodian; owner = f.investor; accountId = AccountId "ACC-INVESTOR-UNITS"; isin = fundIsin
+      cusip = None; instrumentName = fundTitle; instrumentType = FundUnit; quantity = 10000.0; couponRate = None
+      couponType = None; dayCountConvention = None; maturityDate = None; seniority = None; isLocked = False
+      lockReference = None; lockHolder = None; csdRef = None; observers = []
+  now <- getTime
+  requested <- submit (actAs [f.fundManager, f.investor]) do
+    createCmd AssetRedemption with
+      redemptionId = "RED-FUND-RED"; fundManager = f.fundManager; investor = f.investor; custodian = f.custodian
+      fundId = "FUND-1"; fundName = fundTitle; unitsToRedeem = 4000.0; currency = "USD"; struckNavPerUnit = None
+      settlementPayout = None; redemptionFeeRate = 0.01; requestDate = now; settlementDate = None
+      status = RedemptionRequested; correlationId = CorrelationId "CORR-FUND-RED"; observers = []
+      unitIsin = Some fundIsin
+  approved <- submit f.fundManager do exerciseCmd requested ApproveRedemption with officialNav = 105.0
+
+  -- The payout must be the net payout, and only the investor's units are burnt
+  short <- instructCash f.custodian f.factoryCid f.fundManager "ACC-FUND-CASH" f.investor "ACC-INVESTOR-CASH" 400000.0
+  submitFailsWith "Redemption payout: 400000.0 is not the net payout of 415800.0" [f.custodian] do
+    exerciseCmd approved SettleRedemption with
+      paymentRef = "PAY-RED-1"; instructionCid = short; extraArgs = noExtraArgs
+      unitHoldingCids = [toInterfaceContractId unitsCid]
+  _ <- submit f.fundManager do
+    exerciseCmd short TransferInstruction_Withdraw with actors = [f.fundManager]; extraArgs = noExtraArgs
+  payout <- instructCash f.custodian f.factoryCid f.fundManager "ACC-FUND-CASH" f.investor "ACC-INVESTOR-CASH" 415800.0
+  managerCash <- cashIn f.custodian f.fundManager "ACC-FUND-CASH"
+  submitFailsWith "Redemption: the unit holdings are not the investor's" [f.custodian] do
+    exerciseCmd approved SettleRedemption with
+      paymentRef = "PAY-RED-1"; instructionCid = payout; extraArgs = noExtraArgs; unitHoldingCids = managerCash
+
+  settled <- submit f.custodian do
+    exerciseCmd approved SettleRedemption with
+      paymentRef = "PAY-RED-1"; instructionCid = payout; extraArgs = noExtraArgs
+      unitHoldingCids = [toInterfaceContractId unitsCid]
+  Some redemption <- queryContractId f.investor settled
+  assertMsg ("Expected the redemption settled, got " <> show redemption.status)
+    (redemption.status == RedemptionSettled with paymentReference = "PAY-RED-1"; netPayout = 415800.0)
+  investorHoldings <- holdingsOf f.investor
+  assertMsg ("Expected the investor to hold the payout and its remaining units, got " <> show investorHoldings)
+    (investorHoldings == [("ACC-INVESTOR-CASH", 415800.0, None), ("ACC-INVESTOR-UNITS", 6000.0, None)])
+  managerHoldings <- holdingsOf f.fundManager
+  assertMsg ("Expected the fund to have paid the payout, got " <> show managerHoldings)
+    (sum [amount | (_, amount, _) <- managerHoldings] == 1584200.0)
+
+-- ---------------------------------------------------------------------------
+-- Payment instructions
+-- ---------------------------------------------------------------------------
+
+-- The bank executes a payment instruction as a token-standard transfer, which
+-- completes at once; one its compliance checks refuse fails with the reason
+-- and moves nothing.
+testPaymentInstructionMovesCash : Script ()
+testPaymentInstructionMovesCash = script do
+  bank <- allocateTestParty "Bank" "PAY-EXEC"
+  payer <- allocateTestParty "Payer" "PAY-EXEC"
+  payee <- allocateTestParty "Payee" "PAY-EXEC"
+  factoryCid <- submit bank do
+    createCmd PositionTransferFactory with admin = bank; clients = [payer, payee]; compliance = None
+  screened <- submit bank do
+    createCmd PositionTransferFactory with
+      admin = bank; clients = [payer, payee]
+      compliance = Some ComplianceRequirements with
+        kycAuthorities = [bank]; sanctionsAuthorities = []; transferRuleOfficers = []
+        ownershipRegulators = []; restrictedInstruments = []
+  _ <- setupCashPosition bank payer (AccountId "ACC-PAYER") 1000000.0
+  let instruction idempotency = PaymentInstruction with
+        payer; payee; settlementAgent = bank; payerAccountId = AccountId "ACC-PAYER"
+        payeeAccountId = AccountId "ACC-PAYEE"; currency = "USD"; amount = 250000.0; purpose = FeePayment
+        obligationRef = None; correlationId = CorrelationId "CORR-PAY-EXEC"; idempotencyKey = IdempotencyKey idempotency
+        networkRef = None; status = PendingSettlement; observers = []
+  paymentCid <- submit (actAs [payer, payee, bank]) do createCmd (instruction "PAY-EXEC-1")
+  inputs <- cashIn bank payer "ACC-PAYER"
+  settled <- submit bank do
+    exerciseCmd paymentCid ExecutePayment with
+      factoryCid = toInterfaceContractId screened; bank; inputHoldingCids = inputs; extraArgs = noExtraArgs
+  Some refused <- queryContractId payer settled
+  case refused.status of
+    Failed reason -> assertMsg ("Expected the KYC refusal, got " <> reason) ("NO_KYC_ATTESTATION" `isPrefixOf` reason)
+    other -> abort ("Expected the payment to fail, got " <> show other)
+  payerHoldings <- holdingsOf payer
+  assertMsg ("Expected nothing to move, got " <> show payerHoldings) (payerHoldings == [("ACC-PAYER", 1000000.0, None)])
+
+  secondCid <- submit (actAs [payer, payee, bank]) do createCmd (instruction "PAY-EXEC-2")
+  done <- submit bank do
+    exerciseCmd secondCid ExecutePayment with
+      factoryCid = toInterfaceContractId factoryCid; bank; inputHoldingCids = inputs; extraArgs = noExtraArgs
+  Some payment <- queryContractId payee done
+  assertMsg "The payment is settled" (payment.status == Settled)
+  payeeHoldings <- holdingsOf payee
+  assertMsg ("Expected the payee to hold the payment, got " <> show payeeHoldings)
+    (payeeHoldings == [("ACC-PAYEE", 250000.0, None)])
+  payerAfter <- holdingsOf payer
+  assertMsg ("Expected the payer to keep the rest, got " <> show payerAfter) (payerAfter == [("ACC-PAYER", 750000.0, None)])
+  submitFailsWith "Can only settle a Pending payment" [bank] do
+    exerciseCmd done ExecutePayment with
+      factoryCid = toInterfaceContractId factoryCid; bank; inputHoldingCids = []; extraArgs = noExtraArgs
+
+-- ---------------------------------------------------------------------------
+-- Securities lending fees and rebates
+-- ---------------------------------------------------------------------------
+
+data FeeFixture = FeeFixture
+  with
+    bank : Party
+    lender : Party
+    borrower : Party
+    custodian : Party
+    factoryCid : ContractId PositionTransferFactory
+
+setupFees : Text -> Script FeeFixture
+setupFees test = do
+  bank <- allocateTestParty "Bank" test
+  lender <- allocateTestParty "Lender" test
+  borrower <- allocateTestParty "Borrower" test
+  custodian <- allocateTestParty "Custodian" test
+  factoryCid <- submit bank do
+    createCmd PositionTransferFactory with admin = bank; clients = [lender, borrower]; compliance = None
+  _ <- setupCashPosition bank lender (AccountId "ACC-LENDER-CASH") 10000.0
+  _ <- setupCashPosition bank borrower (AccountId "ACC-BORROWER-CASH") 10000.0
+  pure FeeFixture with ..
+
+-- | A securities loan of `quantity` against as much cash collateral, at 3.6%
+-- borrow fee and 1.8% rebate, accruing on the ledger from now.
+lendingWithFees : FeeFixture -> Text -> Decimal -> Decimal -> Decimal -> Script (ContractId SecuritiesLendingAgreement)
+lendingWithFees f lendingId quantity fee rebate = do
+  now <- getTime
+  submit (actAs [f.lender, f.borrower, f.custodian]) do
+    createCmd SecuritiesLendingAgreement with
+      lendingId; lender = f.lender; borrower = f.borrower; custodian = f.custodian; isin = bondIsin
+      borrowedQuantity = quantity; borrowAccountId = AccountId "ACC-BORROWER-SEC"; lendingFeeRate = 0.036
+      rebateRate = 0.018; collateralCurrency = "USD"; collateralAmount = quantity; collateralPledgeRef = None
+      accruedLendingFee = fee; startDate = now; status = LendingActive
+      correlationId = CorrelationId ("CORR-" <> lendingId); observers = []
+      feeAccrual = Some FeeAccrual with
+        accruedThrough = now; loanPrice = 1.0; dayCountConvention = Act360; accruedRebate = rebate
+
+-- Fees accrue on the value on loan and rebates on the cash collateral, from
+-- the rates and the days elapsed, and are brought up to date before a return.
+testLendingFeesAccrue : Script ()
+testLendingFeesAccrue = script do
+  f <- setupFees "SL-FEES-ACCRUE"
+  lendingCid <- lendingWithFees f "SL-FEES-ACCRUE" 1000000.0 0.0 0.0
+  passTime (days 10)
+  accrued <- submit f.custodian do exerciseCmd lendingCid AccrueFeesToDate with actor = f.custodian
+  Some afterTen <- queryContractId f.lender accrued
+  -- 1,000,000 × 3.6% × 10/360 = 1,000; 1,000,000 × 1.8% × 10/360 = 500
+  assertMsg ("Expected 1,000 of fees and 500 of rebate, got " <> show (afterTen.accruedLendingFee, rebateOwed afterTen.feeAccrual))
+    (afterTen.accruedLendingFee == 1000.0 && rebateOwed afterTen.feeAccrual == 500.0)
+  passTime (days 10)
+  returned <- submit f.borrower do
+    exerciseCmd accrued ReturnSecurities with returnedQuantity = 500000.0; collateralReleaseAmount = 500000.0
+  passTime (days 10)
+  later <- submit f.lender do exerciseCmd returned AccrueFeesToDate with actor = f.lender
+  Some afterThirty <- queryContractId f.lender later
+  -- Ten more days on the full loan before the return, then ten on half of it
+  assertMsg ("Expected 2,500 of fees and 1,250 of rebate, got " <> show (afterThirty.accruedLendingFee, rebateOwed afterThirty.feeAccrual))
+    (afterThirty.accruedLendingFee == 2500.0 && rebateOwed afterThirty.feeAccrual == 1250.0)
+  submitMustFail f.bank do exerciseCmd later AccrueFeesToDate with actor = f.bank
+
+-- The borrower pays fees and the lender pays rebates by transfer, each up to
+-- what is owed; the agreement closes once nothing is on loan or owed.
+testLendingFeePayments : Script ()
+testLendingFeePayments = script do
+  f <- setupFees "SL-FEES-PAY"
+  -- Fully returned, with fees and rebates outstanding, so nothing more accrues
+  lendingCid <- lendingWithFees f "SL-FEES-PAY" 0.0 2500.0 1250.0
+  overpay <- instructCash f.bank f.factoryCid f.borrower "ACC-BORROWER-CASH" f.lender "ACC-LENDER-CASH" 3000.0
+  submitFailsWith "Fee payment: 3000.0 exceeds the accrued fee of 2500.0" [f.lender] do
+    exerciseCmd lendingCid ReceiveLendingFee with instructionCid = overpay; extraArgs = noExtraArgs
+  _ <- submit f.borrower do
+    exerciseCmd overpay TransferInstruction_Withdraw with actors = [f.borrower]; extraArgs = noExtraArgs
+  feeCid <- instructCash f.bank f.factoryCid f.borrower "ACC-BORROWER-CASH" f.lender "ACC-LENDER-CASH" 2500.0
+  feesPaid <- submit f.lender do
+    exerciseCmd lendingCid ReceiveLendingFee with instructionCid = feeCid; extraArgs = noExtraArgs
+  Some afterFees <- queryContractId f.lender feesPaid
+  assertMsg "The fees are paid, and the rebate is still owed"
+    (afterFees.accruedLendingFee == 0.0 && rebateOwed afterFees.feeAccrual == 1250.0 && afterFees.status == LendingActive)
+
+  wrongWay <- instructCash f.bank f.factoryCid f.borrower "ACC-BORROWER-CASH" f.lender "ACC-LENDER-CASH" 1250.0
+  submitFailsWith "Rebate payment: not sent by" [f.borrower] do
+    exerciseCmd feesPaid ReceiveRebate with instructionCid = wrongWay; extraArgs = noExtraArgs
+  rebateCid <- instructCash f.bank f.factoryCid f.lender "ACC-LENDER-CASH" f.borrower "ACC-BORROWER-CASH" 1250.0
+  closed <- submit f.borrower do
+    exerciseCmd feesPaid ReceiveRebate with instructionCid = rebateCid; extraArgs = noExtraArgs
+  Some done <- queryContractId f.lender closed
+  assertMsg "The agreement is closed" (done.status == LendingClosed && rebateOwed done.feeAccrual == 0.0)
+  lenderHoldings <- holdingsOf f.lender
+  assertMsg ("Expected the lender to have received the fees and paid the rebate, got " <> show lenderHoldings)
+    (sum [amount | (_, amount, _) <- lenderHoldings] == 11250.0)
+
+-- | Every test in this module that runs against a participant: none sets time.
+runFinancingCashTests : Script ()
+runFinancingCashTests = script do
+  testEscrowReleasesDeposit
+  testEscrowDisputeAndRefund
+  testEscrowDepositChecks
+  testCapitalCallIssuesUnits
+  testRedemptionBurnsUnits
+  testPaymentInstructionMovesCash
+  testLendingFeePayments

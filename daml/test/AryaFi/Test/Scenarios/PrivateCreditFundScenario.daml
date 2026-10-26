@@ -116,7 +116,7 @@ testPrivateCreditFundLifecycle = script do
       status = SubscriptionRequested
       rejectionReason = None
       correlationId = CorrelationId "CORR-FUND-APOLLO-001"
-      observers = [regulator]
+      observers = [regulator]; unitIsin = None
 
   -- GP approves subscription
   subCidApproved <- submit gp do
@@ -186,7 +186,7 @@ testPrivateCreditFundLifecycle = script do
       settlementDate = None
       status = RedemptionRequested
       correlationId = CorrelationId "CORR-RED-APOLLO-001"
-      observers = [regulator]
+      observers = [regulator]; unitIsin = None
 
   -- GP strikes official NAV at 1,120.00 USD/unit
   -- Gross = 10,000 * 1,120 = 11,200,000 USD
@@ -240,7 +240,7 @@ testLiquidityGatingScenario = script do
       settlementDate = None
       status = RedemptionRequested
       correlationId = CorrelationId "CORR-GATE-01"
-      observers = []
+      observers = []; unitIsin = None
 
   -- GP applies liquidity gate
   redCidGated <- submit gp do

@@ -95,7 +95,7 @@ testSecuritiesLendingJointly = script do
   regulator <- allocateTestParty "Regulator" "FP-SECLEND"
   agreementCid <- mkAgreement lender borrower custodian 0.0
   accrued <- jointly lender [borrower] (AccrueLendingFeeAction agreementCid (AccrueLendingFee with additionalFee = 2500.0))
-  revalued <- jointly borrower [lender] (RevalueLendingCollateralAction accrued (SecLending.RevalueCollateral with newCollateralAmount = 15500000.0))
+  revalued <- jointly borrower [lender] (RevalueLendingCollateralAction accrued (SecLending.RevalueCollateral with newCollateralAmount = 15500000.0; newLoanPrice = None))
   observed <- jointly lender [borrower] (AddSecLendingObserverAction revalued (AddSecLendingObserver with newObserver = regulator))
   Some lending <- queryContractId regulator (observed : ContractId SecuritiesLendingAgreement)
   assertMsg "Fee accrued, collateral revalued, and the regulator added"
@@ -178,7 +178,7 @@ testEscrowJointly = script do
   let escrow id = ConditionalEscrow with
         escrowId = id; escrowAgent = agent; depositor; beneficiary; currency = "USD"; amount = 10000000.0
         releaseCondition = "Regulatory approval obtained"; expiryTime = addRelTime now (days 30)
-        correlationId = CorrelationId ("CORR-" <> id); status = EscrowHeld; disputeReason = None; observers = []
+        correlationId = CorrelationId ("CORR-" <> id); status = EscrowHeld; disputeReason = None; observers = []; escrowedHoldingCid = None; beneficiaryAccountId = None
   toRelease <- submit (actAs [agent, depositor]) do createCmd (escrow "ESC-FP-1")
   released <- jointly agent [beneficiary] (ReleaseEscrowAction toRelease)
   Some r <- queryContractId beneficiary (released : ContractId ConditionalEscrow)

@@ -11,12 +11,27 @@
 --              | EscrowExpired   (post-deadline, agent triggers)
 --              | EscrowDisputed  (agent freezes pending resolution)
 -- EscrowExpired → EscrowRefunded (depositor claims refund after expiry)
--- EscrowDisputed → EscrowReleased | EscrowRefunded (agent resolves dispute)
+-- EscrowDisputed → EscrowReleased | EscrowRefunded | EscrowHeld (agent resolves dispute)
+--
+-- An escrow can hold the deposited cash itself. It is created
+-- EscrowAwaitingDeposit, and the depositor deposits with DepositIntoEscrow:
+-- the amount of one of its cash positions is locked to the escrow agent
+-- through the bank's transfer factory, and the escrow holds the locked
+-- position. Releasing it delivers the position to the beneficiary's account;
+-- refunding it unlocks it for the depositor. Until then neither the depositor
+-- nor the beneficiary can move it; the agent, as the lock holder, releases it
+-- together with the beneficiary, or refunds it.
 module AryaFi.Contracts.Escrow where
 
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
 import AryaFi.Common.Types (Amount, Currency)
-import AryaFi.Common.Identifiers (ReferenceId, CorrelationId)
+import AryaFi.Common.Identifiers (AccountId(..), ReferenceId, CorrelationId)
 import AryaFi.Common.Errors (require, requireNonEmpty)
+import DA.Action (when)
+import DA.Optional (isSome)
+import AryaFi.Finance.Encumbrance (unencumber)
+import AryaFi.Finance.TokenRegistry (deliverLocked)
+import AryaFi.Finance.TokenTransfer (PositionTransferFactory, LockPosition(..))
 
 -- ---------------------------------------------------------------------------
 -- Escrow Status
@@ -34,6 +49,16 @@ data EscrowStatus
     -- ^ Escrow expiry time has passed without release; eligible for refund.
   | EscrowDisputed
     -- ^ A dispute has been raised; escrow is frozen pending resolution.
+  | EscrowAwaitingDeposit
+    -- ^ Agreed; awaiting the depositor's deposit (DepositIntoEscrow).
+  deriving (Eq, Show)
+
+-- | The result of a deposit: the escrow, and the rest of the depositor's
+-- position, unlocked, if it held more than the escrowed amount.
+data EscrowDeposited = EscrowDeposited
+  with
+    escrowCid : ContractId ConditionalEscrow
+    changeCid : Optional (ContractId HoldingV2.Holding)
   deriving (Eq, Show)
 
 -- ---------------------------------------------------------------------------
@@ -74,36 +99,71 @@ template ConditionalEscrow
     -- ^ Populated when status = EscrowDisputed.
     observers : [Party]
     -- ^ Additional observers (e.g. regulator, auditor).
+    escrowedHoldingCid : Optional (ContractId HoldingV2.Holding)
+    -- ^ The deposit, while the escrow holds it: the depositor's cash
+    --   position, locked to the escrow agent.
+    beneficiaryAccountId : Optional AccountId
+    -- ^ The beneficiary's account at the bank, where a released deposit is
+    --   delivered. Needed before the depositor can deposit.
   where
     signatory escrowAgent, depositor
     observer beneficiary :: observers
 
     ensure amount > 0.0
 
+    -- | Depositor deposits the escrowed amount: `amount` of its cash position
+    -- `holdingCid`, in `accountId` at the bank whose transfer factory is
+    -- `factoryCid`, is locked to the escrow agent, and the escrow holds it.
+    choice DepositIntoEscrow : EscrowDeposited
+      with
+        factoryCid : ContractId PositionTransferFactory
+        holdingCid : ContractId HoldingV2.Holding
+        accountId : AccountId
+      controller depositor
+      do
+        require (status == EscrowAwaitingDeposit) "Escrow must be AwaitingDeposit to deposit"
+        require (isSome beneficiaryAccountId)
+          "Escrow deposit: name the beneficiary's account (beneficiaryAccountId) first"
+        locked <- exercise factoryCid LockPosition with
+          owner = depositor; holdingCid; accountId = unAccountId accountId; instrumentId = currency
+          amount; holder = escrowAgent; reference = "Escrow " <> escrowId
+        escrowCid <- create this with status = EscrowHeld; escrowedHoldingCid = Some locked.lockedCid
+        pure EscrowDeposited with escrowCid; changeCid = locked.changeCid
+
     -- | Release escrowed assets to beneficiary (both agent and beneficiary must agree).
+    -- A deposit the escrow holds is delivered to the beneficiary's account.
     choice ReleaseEscrow : ContractId ConditionalEscrow
       controller escrowAgent, beneficiary
       do
         require (status == EscrowHeld)
           "Escrow must be Held to release"
-        create this with status = EscrowReleased
+        case (escrowedHoldingCid, beneficiaryAccountId) of
+          (Some cid, Some (AccountId account)) -> do
+            _ <- deliverLocked cid beneficiary account
+            pure ()
+          (Some _, None) -> abort "Escrow release: the beneficiary's account is not named"
+          (None, _) -> pure ()
+        create this with status = EscrowReleased; escrowedHoldingCid = None
 
     -- | Refund escrowed assets to depositor (both agent and depositor must agree).
-    -- Also valid when escrow is in Expired state.
+    -- Also valid when escrow is in Expired state. A deposit the escrow holds
+    -- is unlocked for the depositor.
     choice RefundEscrow : ContractId ConditionalEscrow
       controller escrowAgent, depositor
       do
         require (status == EscrowHeld || status == EscrowExpired)
           "Escrow must be Held or Expired to refund"
-        create this with status = EscrowRefunded
+        refundDeposit escrowedHoldingCid
+        create this with status = EscrowRefunded; escrowedHoldingCid = None
 
     -- | Expire the escrow after the expiry time has passed.
     -- Can only be triggered by the escrow agent once ledger time exceeds expiryTime.
+    -- An escrow still awaiting its deposit can expire too.
     choice ExpireEscrow : ContractId ConditionalEscrow
       controller escrowAgent
       do
-        require (status == EscrowHeld)
-          "Escrow must be Held to expire"
+        require (status == EscrowHeld || status == EscrowAwaitingDeposit)
+          "Escrow must be Held or AwaitingDeposit to expire"
         now <- getTime
         require (now >= expiryTime)
           "Escrow expiry time has not yet passed"
@@ -123,7 +183,11 @@ template ConditionalEscrow
           status = EscrowDisputed
           disputeReason = Some reason
 
-    -- | Escrow agent resolves an active dispute, deciding whether to release or refund.
+    -- | Escrow agent resolves an active dispute, deciding whether to release
+    -- or refund, or dismissing it (EscrowHeld). A deposit the escrow holds is
+    -- unlocked for the depositor on a refund; it can only be released with the
+    -- beneficiary, so the agent dismisses the dispute and releases it with
+    -- ReleaseEscrow.
     choice ResolveDispute : ContractId ConditionalEscrow
       with
         resolutionStatus : EscrowStatus
@@ -132,11 +196,15 @@ template ConditionalEscrow
         require (status == EscrowDisputed)
           "Escrow must be Disputed to resolve"
         require
-          (resolutionStatus == EscrowReleased || resolutionStatus == EscrowRefunded)
-          "Resolution must be Released or Refunded"
+          (resolutionStatus `elem` [EscrowReleased, EscrowRefunded, EscrowHeld])
+          "Resolution must be Released, Refunded, or Held"
+        require (not (resolutionStatus == EscrowReleased && isSome escrowedHoldingCid))
+          "Escrow release: a deposit is released with the beneficiary; resolve the dispute to Held, then ReleaseEscrow"
+        when (resolutionStatus == EscrowRefunded) (refundDeposit escrowedHoldingCid)
         create this with
           status = resolutionStatus
           disputeReason = None
+          escrowedHoldingCid = if resolutionStatus == EscrowHeld then escrowedHoldingCid else None
 
     -- | Add an observer to this escrow (e.g. regulator, auditor).
     choice AddEscrowObserver : ContractId ConditionalEscrow
@@ -151,5 +219,13 @@ template ConditionalEscrow
     nonconsuming choice IsEscrowTerminal : Bool
       controller escrowAgent
       do
-        pure (status /= EscrowHeld && status /= EscrowDisputed)
+        pure (status `notElem` [EscrowHeld, EscrowDisputed, EscrowAwaitingDeposit])
+
+-- | Unlock a deposit the escrow holds for the depositor. Needs the escrow
+-- agent's authority, as the lock holder.
+refundDeposit : Optional (ContractId HoldingV2.Holding) -> Update ()
+refundDeposit None = pure ()
+refundDeposit (Some cid) = do
+  _ <- unencumber cid
+  pure ()
 

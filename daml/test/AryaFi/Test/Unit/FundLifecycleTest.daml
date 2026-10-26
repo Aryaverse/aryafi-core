@@ -51,7 +51,7 @@ testSubscriptionFullLifecycle = script do
       status = SubscriptionRequested
       rejectionReason = None
       correlationId = CorrelationId "CORR-SUB-001"
-      observers = []
+      observers = []; unitIsin = None
 
   -- 1. GP approves subscription
   subCidApproved <- submit gp do
@@ -138,7 +138,7 @@ testSubscriptionRejectionAndCancellation = script do
       status = SubscriptionRequested
       rejectionReason = None
       correlationId = CorrelationId "CORR-REJ-01"
-      observers = []
+      observers = []; unitIsin = None
 
   subCidRejected <- submit gp do
     exerciseCmd subCid1 RejectSubscription with
@@ -165,7 +165,7 @@ testSubscriptionRejectionAndCancellation = script do
       status = SubscriptionRequested
       rejectionReason = None
       correlationId = CorrelationId "CORR-CAN-01"
-      observers = []
+      observers = []; unitIsin = None
 
   subCidCancelled <- submit lp do
     exerciseCmd subCid2 CancelSubscription with
@@ -201,7 +201,7 @@ testRedemptionFullLifecycle = script do
       settlementDate = None
       status = RedemptionRequested
       correlationId = CorrelationId "CORR-RED-001"
-      observers = [regulator]
+      observers = [regulator]; unitIsin = None
 
   -- 1. GP approves at official NAV of 1,050.00 USD/unit
   -- Gross = 5000 * 1050 = 5,250,000 USD; Fee = 52,500; Net = 5,197,500 USD
@@ -252,7 +252,7 @@ testRedemptionLiquidityGate = script do
       settlementDate = None
       status = RedemptionRequested
       correlationId = CorrelationId "CORR-GATE-01"
-      observers = []
+      observers = []; unitIsin = None
 
   -- GP applies liquidity gate
   redCidGated <- submit gp do
@@ -296,7 +296,7 @@ testCapitalCallExceedingCommitmentFails = script do
       status = SubscriptionApproved
       rejectionReason = None
       correlationId = CorrelationId "CORR-EXC-01"
-      observers = []
+      observers = []; unitIsin = None
 
   submitMustFail gp do
     exerciseCmd subCid IssueCapitalCall with
@@ -324,7 +324,7 @@ testSettleUnapprovedRedemptionFails = script do
       settlementDate = None
       status = RedemptionRequested
       correlationId = CorrelationId "CORR-FAIL-01"
-      observers = []
+      observers = []; unitIsin = None
 
   submitMustFail custodian do
     exerciseCmd redCid ExecuteRedemptionSettlement with

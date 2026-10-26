@@ -1,0 +1,163 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Financing contracts that move their assets, with every institution on its
+-- own participant node: a repo's opening and closing legs settle as
+-- token-standard DvPs, with seller and buyer allocating from their own nodes
+-- and the custodian settling from its node through the repo; and an escrow
+-- holds the buyer's deposit, locked to the agent, until the agent and the
+-- seller release it to the seller.
+--
+-- Run it like runTokenDvpAcrossNodes, with a participant config that names the nodes.
+module AryaFi.Test.Network.FinancingLegsAcrossNodes where
+
+import DA.Foldable (forA_)
+import DA.Time (addRelTime, days)
+import Daml.Script
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
+import Splice.Api.Token.AllocationV2 (Allocation)
+import Splice.Api.Token.AllocationRequestV2 (AllocationRequest)
+import AryaFi.Common.Identifiers
+import AryaFi.Common.Types (DayCountConvention(..))
+import AryaFi.Contracts.Escrow
+import AryaFi.Contracts.FinancingLegs
+import AryaFi.Contracts.Proposal
+import AryaFi.Contracts.Repo
+import AryaFi.Finance.Cash
+import AryaFi.Finance.Security
+import AryaFi.Finance.TokenTransfer
+import AryaFi.Test.Network.DvpAcrossNodes (proposeOnNode, signAndPass, signLast)
+import AryaFi.Test.Network.Nodes
+import AryaFi.Test.Network.TokenDvpAcrossNodes (holdingsAre, issue)
+import AryaFi.Test.Scenarios.DvpSettlementTest (bondIsin)
+import AryaFi.Test.Scenarios.TokenDvpTest (Fixture(..), Registry, aryafiRegistry, allocateAsRequested, batchesFor)
+
+-- | Seller and buyer allocate their sides of a requested leg from their own
+-- nodes; the custodian, as settlement agent, then sees all four allocations.
+allocateAcrossNodes : Registry -> Registry -> Party -> Party -> Party -> LegRequested -> Script Fixture
+allocateAcrossNodes securities cash custodian deliverer receiver requested = do
+  let f = Fixture with
+        custodian = securities; payments = cash; seller = deliverer; buyer = receiver; agent = custodian
+        dvpCid = requested.dvpCid; requests = requested.requests
+  forA_ [deliverer, receiver] \party -> do
+    _ <- eventually ("the allocation request on the node of " <> show party) do
+      found <- queryInterface @AllocationRequest party
+      pure (if length found == 1 then Some () else None)
+    allocateAsRequested f party
+  _ <- eventually "all four allocations on the custodian's node" do
+    found <- queryInterface @Allocation custodian
+    pure (if length found == 4 then Some () else None)
+  pure f
+
+runFinancingLegsAcrossNodes : NodesInput -> Script ()
+runFinancingLegsAcrossNodes input = do
+  Institutions{..} <- allocateInstitutions input
+  let bond = unISIN bondIsin
+
+  -- Each registry issues to its clients from its own node
+  let clients = [seller, buyer, agent]
+  custodianTransfers <- submit custodian do
+    createCmd PositionTransferFactory with admin = custodian; clients = custodian :: clients; compliance = None
+  bankTransfers <- submit bank do
+    createCmd PositionTransferFactory with admin = bank; clients = bank :: clients; compliance = None
+  bondInventory <- submit custodian do
+    createCmd SecurityPosition with
+      custodian; owner = custodian; accountId = AccountId "INVENTORY"; isin = bondIsin
+      cusip = Some (CUSIP "912828ZM5"); instrumentName = "US Treasury 4.25% Nov 2026"
+      instrumentType = GovernmentBond; quantity = 5000000.0; couponRate = Some 0.0425
+      couponType = Some FixedCoupon; dayCountConvention = None; maturityDate = None
+      seniority = Some Senior; isLocked = False; lockReference = None; lockHolder = None
+      csdRef = None; observers = []
+  buyerCash <- submit bank do
+    createCmd CashPosition with
+      bank; owner = bank; accountId = AccountId "INVENTORY"; currency = "USD"; amount = 5000000.0
+      isLocked = False; lockReference = None; lockHolder = None; observers = []
+  sellerCash <- submit bank do
+    createCmd CashPosition with
+      bank; owner = bank; accountId = AccountId "INVENTORY-2"; currency = "USD"; amount = 100000.0
+      isLocked = False; lockReference = None; lockHolder = None; observers = []
+  issue custodian seller (toInterfaceContractId bondInventory) "ACC-SELLER-SEC" 5000000.0 custodianTransfers
+  issue bank buyer (toInterfaceContractId buyerCash) "ACC-BUYER-CASH" 5000000.0 bankTransfers
+  issue bank seller (toInterfaceContractId sellerCash) "ACC-SELLER-CASH" 100000.0 bankTransfers
+  holdingsAre seller [(bond, 5000000.0, False), ("USD", 100000.0, False)]
+  holdingsAre buyer [("USD", 5000000.0, False)]
+  securities <- aryafiRegistry custodian (custodian :: clients)
+  cash <- aryafiRegistry bank (custodian :: clients)
+
+  -- Seller, buyer and custodian agree the repo, one signature per node
+  now <- getTime
+  let repoId = "REPO-LEGS-NODES-" <> input.runId
+      terms = RepoAgreement with
+        repoId; seller; buyer; tripartyAgent = None; custodian
+        isin = bondIsin; collateralQuantity = 5000000.0; collateralAccountId = AccountId "ACC-SELLER-SEC"
+        haircut = 0.02; currency = "USD"; purchasePrice = 4900000.0; repurchasePrice = 4920000.0
+        repoRate = 0.05; dayCountConvention = Act360; startDate = now; endDate = addRelTime now (days 30)
+        status = RepoPendingOpening; openingSettlementRef = None; closingSettlementRef = None
+        correlationId = CorrelationId ("CORR-" <> repoId); observers = []
+  agreed <- proposeOnNode seller [seller, buyer, custodian] (CreateAgreement (RepoTerms terms))
+    >>= signAndPass buyer >>= signLast custodian
+  let repoCid = coerceContractId @_ @RepoAgreement agreed
+      settleBefore = addRelTime now (days 1)
+
+  -- Opening leg: the collateral against the purchase price
+  opening <- submit custodian do
+    exerciseCmd repoCid RequestOpeningLeg with
+      bank
+      accounts = ExchangeAccounts with
+        delivererSecurities = "ACC-SELLER-SEC"; receiverSecurities = "ACC-BUYER-SEC"
+        receiverCash = "ACC-BUYER-CASH"; delivererCash = "ACC-SELLER-CASH"
+      settleBefore
+  f <- allocateAcrossNodes securities cash custodian seller buyer opening
+  (batches, disclosures) <- batchesFor f
+  active <- submit (actAs custodian <> discloseMany disclosures) do
+    exerciseCmd repoCid SettleOpeningLeg with dvpCid = opening.dvpCid; batches; openRequests = []
+  holdingsAre seller [("USD", 100000.0, False), ("USD", 4900000.0, False)]
+  holdingsAre buyer [(bond, 5000000.0, False), ("USD", 100000.0, False)]
+
+  -- Closing leg, once the seller initiates it from its node
+  _ <- eventually "the active repo on the seller's node" (queryContractId seller active)
+  closingCid <- submit seller do exerciseCmd active InitiateClosingLeg
+  _ <- eventually "the repo pending closing on the custodian's node" (queryContractId custodian closingCid)
+  closing <- submit custodian do
+    exerciseCmd closingCid RequestClosingLeg with
+      bank
+      accounts = ExchangeAccounts with
+        delivererSecurities = "ACC-BUYER-SEC"; receiverSecurities = "ACC-SELLER-SEC"
+        receiverCash = "ACC-SELLER-CASH"; delivererCash = "ACC-BUYER-CASH"
+      settleBefore
+  g <- allocateAcrossNodes securities cash custodian buyer seller closing
+  (closingBatches, closingDisclosures) <- batchesFor g
+  settled <- submit (actAs custodian <> discloseMany closingDisclosures) do
+    exerciseCmd closingCid SettleClosingLeg with dvpCid = closing.dvpCid; batches = closingBatches; openRequests = []
+  repo <- eventually "the settled repo on the buyer's node" (queryContractId buyer settled)
+  assertMsg "The repo is settled through both legs"
+    (repo.status == RepoSettled && repo.closingSettlementRef == Some (repoId <> "-CLOSING"))
+  holdingsAre seller [(bond, 5000000.0, False), ("USD", 80000.0, False)]
+  holdingsAre buyer [("USD", 100000.0, False), ("USD", 4920000.0, False)]
+
+  -- The buyer and the agent agree an escrow for the seller, which the buyer funds
+  let escrowTerms = ConditionalEscrow with
+        escrowId = "ESC-LEGS-NODES-" <> input.runId; escrowAgent = agent; depositor = buyer; beneficiary = seller
+        currency = "USD"; amount = 100000.0; releaseCondition = "Repo settled"; expiryTime = addRelTime now (days 30)
+        correlationId = CorrelationId ("CORR-ESC-LEGS-NODES-" <> input.runId); status = EscrowAwaitingDeposit
+        disputeReason = None; observers = []; escrowedHoldingCid = None
+        beneficiaryAccountId = Some (AccountId "ACC-SELLER-CASH")
+  escrowCid <- coerceContractId @_ @ConditionalEscrow <$>
+    (proposeOnNode buyer [buyer, agent] (CreateAgreement (EscrowTerms escrowTerms)) >>= signLast agent)
+  _ <- eventually "the escrow on the buyer's node" (queryContractId buyer escrowCid)
+  holdings <- queryInterface @HoldingV2.Holding buyer
+  [deposit] <- pure [cid | (cid, Some v) <- holdings, v.instrumentId.id == "USD", v.amount == 100000.0]
+  deposited <- submit buyer do
+    exerciseCmd escrowCid DepositIntoEscrow with
+      factoryCid = bankTransfers; holdingCid = deposit; accountId = AccountId "ACC-BUYER-CASH"
+  holdingsAre buyer [("USD", 100000.0, True), ("USD", 4920000.0, False)]
+
+  -- The seller proposes the release; the agent, which holds the lock, signs last
+  _ <- eventually "the funded escrow on the seller's node" (queryContractId seller deposited.escrowCid)
+  released <- proposeOnNode seller [agent, seller] (ExerciseJointly (ReleaseEscrowAction deposited.escrowCid))
+    >>= signLast agent
+  final <- eventually "the released escrow on the seller's node"
+    (queryContractId seller (coerceContractId @_ @ConditionalEscrow released))
+  assertMsg "The escrow is released" (final.status == EscrowReleased)
+  holdingsAre seller [(bond, 5000000.0, False), ("USD", 80000.0, False), ("USD", 100000.0, False)]
+  holdingsAre buyer [("USD", 4920000.0, False)]

@@ -13,11 +13,24 @@
 --
 -- Payment network references (SWIFT UETR, Fedwire IMAD) can be attached
 -- after a payment is submitted to the network, enabling end-to-end tracing.
+--
+-- The settlement agent can also execute an instruction on the ledger
+-- (ExecutePayment): the cash moves from the payer's account to the payee's
+-- with a token-standard transfer through the bank's transfer factory. It
+-- completes in one step, because the instruction carries the signatures of
+-- both. A transfer the bank's compliance checks refuse fails the instruction
+-- with the reason, and moves nothing.
 module AryaFi.Finance.Payment where
 
+import DA.Time (addRelTime, hours)
+import qualified DA.TextMap as TextMap
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
+import Splice.Api.Token.MetadataV1 (ExtraArgs, Metadata(..))
+import Splice.Api.Token.TransferInstructionV2
 import AryaFi.Common.Types (Amount, Currency, SettlementStatus(..))
-import AryaFi.Common.Identifiers (AccountId, CorrelationId, IdempotencyKey, PaymentNetworkRef)
+import AryaFi.Common.Identifiers (AccountId(..), CorrelationId(..), IdempotencyKey(..), PaymentNetworkRef)
 import AryaFi.Common.Errors (require, requireNonEmpty)
+import AryaFi.Compliance.Gate (complianceRefusalKey)
 
 -- ---------------------------------------------------------------------------
 -- Payment Purpose
@@ -106,6 +119,42 @@ template PaymentInstruction
         require (status == PendingSettlement) "Can only settle a Pending payment"
         create this with status = Settled
 
+    -- | Execute the payment on the ledger: a token-standard transfer of the
+    -- amount from the payer's account to the payee's at `bank`, through its
+    -- transfer factory, funded from the payer's holdings `inputHoldingCids`.
+    -- The payer and payee signed the instruction, so the transfer completes
+    -- at once and the instruction is Settled. If the bank's compliance checks
+    -- refuse it, nothing moves and the instruction is Failed with the reason.
+    -- The transfer's metadata carries the idempotency key and correlation ID.
+    choice ExecutePayment : ContractId PaymentInstruction
+      with
+        factoryCid : ContractId TransferFactory
+        bank : Party
+        inputHoldingCids : [ContractId HoldingV2.Holding]
+        extraArgs : ExtraArgs
+      controller settlementAgent
+      do
+        require (status == PendingSettlement) "Can only settle a Pending payment"
+        now <- getTime
+        let account owner (AccountId id) = HoldingV2.Account with owner = Some owner; provider = Some bank; id
+        result <- exercise factoryCid TransferFactory_Transfer with
+          transfer = Transfer with
+            sender = account payer payerAccountId
+            receiver = account payee payeeAccountId
+            amount
+            instrumentId = HoldingV2.InstrumentId with admin = bank; id = currency
+            requestedAt = now
+            executeBefore = addRelTime now (hours 1)
+            inputHoldingCids
+            meta = paymentMeta idempotencyKey correlationId
+          actors = [payer, payee]
+          extraArgs
+        case result.output of
+          TransferInstructionResult_Completed _ -> create this with status = Settled
+          TransferInstructionResult_Failed ->
+            create this with status = Failed (refusal result.meta)
+          TransferInstructionResult_Pending _ -> abort "The payment is still pending at the bank"
+
     -- | Reject the payment instruction, providing a reason.
     -- Used when the payment cannot be executed (e.g. insufficient funds,
     -- sanctions hit on beneficiary, invalid account).
@@ -155,3 +204,23 @@ template PaymentInstruction
       controller settlementAgent
       do
         pure (status /= PendingSettlement)
+
+-- | The transfer metadata key that carries a payment's idempotency key.
+idempotencyKeyMetaKey : Text
+idempotencyKeyMetaKey = "aryafi.io/idempotency-key"
+
+-- | The transfer metadata key that carries a payment's correlation ID.
+correlationIdMetaKey : Text
+correlationIdMetaKey = "aryafi.io/correlation-id"
+
+-- | The metadata of a payment's transfer: its idempotency key and correlation ID.
+paymentMeta : IdempotencyKey -> CorrelationId -> Metadata
+paymentMeta idempotency correlation = Metadata with
+  values = TextMap.fromList
+    [(idempotencyKeyMetaKey, unIdempotencyKey idempotency), (correlationIdMetaKey, unCorrelationId correlation)]
+
+-- | Why the bank refused a payment's transfer.
+refusal : Metadata -> Text
+refusal meta = case TextMap.lookup complianceRefusalKey meta.values of
+  Some reason -> reason
+  None -> "Refused by the bank"

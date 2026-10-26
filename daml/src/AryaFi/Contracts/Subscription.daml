@@ -8,11 +8,23 @@
 --   - Incremental capital calls issued by the General Partner (Fund Manager)
 --   - Custodian-verified capital funding settlement and LP unit allocation
 --   - Multi-party oversight (GP, LP, Custodian, Administrator, Regulator)
+--
+-- A subscription with the ISIN of the fund's units (unitIsin) settles its
+-- capital calls on the ledger. The investor pays a call with a token-standard
+-- transfer of cash to the fund manager, and the custodian, which keeps the
+-- fund's units, settles it with SettleCapitalCall: the fund manager receives
+-- the cash and the investor receives the units it buys at the unit price, in
+-- one transaction. ConfirmCapitalFunding records a payment made elsewhere.
 module AryaFi.Contracts.Subscription where
 
+import Splice.Api.Token.MetadataV1 (ExtraArgs)
+import Splice.Api.Token.TransferInstructionV2 (TransferInstruction)
 import AryaFi.Common.Types (Amount, Currency)
-import AryaFi.Common.Identifiers (ReferenceId, CorrelationId)
+import AryaFi.Common.Identifiers (AccountId(..), ISIN, ReferenceId, CorrelationId)
 import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
+import AryaFi.Contracts.FinancingLegs (acceptIncoming, incomingTransfer)
+import AryaFi.Finance.Security (InstrumentType(..))
+import AryaFi.Finance.TokenRegistry (InstrumentDetails(..), createFromDetails)
 import qualified DA.List as List
 
 -- | Lifecycle states of a fund / private credit subscription.
@@ -68,6 +80,9 @@ template FundSubscription
     -- ^ Master correlation identifier across booking systems.
     observers : [Party]
     -- ^ Authorized observers (e.g. fund administrator, transfer agent, regulators).
+    unitIsin : Optional ISIN
+    -- ^ The ISIN of the fund's units, which the custodian keeps. With it,
+    --   capital calls settle on the ledger (SettleCapitalCall).
   where
     signatory fundManager, investor
     observer (List.dedup (custodian :: observers))
@@ -140,6 +155,37 @@ template FundSubscription
           unitsIssued = newUnits
           status = newStatus
 
+    -- | Custodian settles a capital call payment on the ledger: it accepts the
+    -- investor's pending token-standard transfer of cash to the fund manager,
+    -- and issues the units the payment buys at the unit price to the
+    -- investor's `unitsAccountId`, in one transaction. If the cash registry
+    -- refuses the transfer on acceptance, nothing is issued and the
+    -- subscription is unchanged.
+    choice SettleCapitalCall : ContractId FundSubscription
+      with
+        instructionCid : ContractId TransferInstruction
+        extraArgs : ExtraArgs
+        unitsAccountId : AccountId
+      controller custodian
+      do
+        require (status == SubscriptionApproved || status == SubscriptionPartiallyFunded)
+          "Subscription must be in callable state to confirm funding"
+        isin <- case unitIsin of
+          Some isin -> pure isin
+          None -> abort "Capital call: the subscription has no unit ISIN to issue"
+        transfer <- incomingTransfer "Capital call payment" instructionCid investor fundManager currency
+        require (fundedAmount + transfer.amount <= calledAmount)
+          "Funded amount cannot exceed called capital"
+        received <- acceptIncoming instructionCid fundManager extraArgs
+        if not received then create this else do
+          let units = transfer.amount / unitPrice
+              newFunded = fundedAmount + transfer.amount
+          _ <- createFromDetails custodian (fundUnits isin fundName) investor (unAccountId unitsAccountId) units
+          create this with
+            fundedAmount = newFunded
+            unitsIssued = unitsIssued + units
+            status = if newFunded == committedAmount then SubscriptionFullyFunded else SubscriptionPartiallyFunded
+
     -- | Investor cancels request prior to manager approval.
     choice CancelSubscription : ContractId FundSubscription
       with
@@ -176,3 +222,16 @@ template FundSubscription
       do
         return (status == SubscriptionApproved || status == SubscriptionPartiallyFunded || status == SubscriptionFullyFunded)
 
+
+-- | The instrument details of a fund's units, kept by its custodian.
+fundUnits : ISIN -> Text -> InstrumentDetails
+fundUnits isin fundName = SecurityDetails with
+  isin
+  cusip = None
+  instrumentName = fundName
+  instrumentType = FundUnit
+  couponRate = None
+  couponType = None
+  dayCountConvention = None
+  maturityDate = None
+  seniority = None
