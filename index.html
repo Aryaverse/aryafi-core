@@ -123,11 +123,11 @@
             <ul class="check-list">
               <li>Bond-for-cash settlement that moves both sides in one transaction</li>
               <li>Runs on Canton 3.5, the version the Canton Network TestNet runs</li>
-              <li>385 automated tests; every change is also tested on a five-institution Canton network</li>
+              <li>394 automated tests; every change is also tested on a five-institution Canton network</li>
               <li>ISO 20022 payment and securities messages mapped to ledger requests</li>
               <li>Cash and bond positions follow the Canton Network token standard: wallets can list and send them, and settlement apps can settle them</li>
               <li>Delivery versus payment through the token standard, against AryaFi cash or another registry's token</li>
-              <li>Institutions on different nodes agree contracts, and change them together, one signature at a time; delivery versus payment, repos and escrows run with each institution on its own node</li>
+              <li>Institutions on different nodes agree contracts, and change them together, one signature at a time; delivery versus payment, repo legs and funded escrows run with each institution on its own node</li>
               <li>KYC, sanctions, transfer rules and ownership limits checked inside the transfers, settlements and delivery versus payment that move assets, with every decision and its reasons recorded</li>
             </ul>
           </article>
@@ -135,8 +135,7 @@
             <h3>Not yet</h3>
             <ul class="todo-list">
               <li>An independent security audit</li>
-              <li>Escrow and fund subscriptions moving real assets (today they track the agreement only)</li>
-              <li>Eligibility rules and the financing contracts checked inside the workflows too (today: transfers, settlements, delivery versus payment and transfer requests)</li>
+              <li>Eligibility rules checked inside the workflows too, and the moves that skip the bank's transfers, such as a pledge's enforcement or an escrow's release (today: transfers, settlements, delivery versus payment and transfer requests)</li>
               <li>Settling against Canton Coin itself, which needs a Canton Network (tested so far against Splice's reference token)</li>
             </ul>
           </article>
@@ -212,7 +211,7 @@
         </div>
         <p class="area-lead">Moves real assets on the ledger today.</p>
         <div class="grid grid-3">
-          <article class="card"><h3>Cash</h3><p>Tokenized deposits at a bank: split, merge, transfer with the receiver's consent, and lock for settlement. Wallets and settlement apps can list, send and settle it through the token standard.</p><code class="tech">CashPosition</code></article>
+          <article class="card"><h3>Cash</h3><p>Tokenized deposits at a bank: split, merge, transfer with the receiver's consent, and lock for settlement. Wallets and settlement apps can list, send and settle it through the token standard, and a payment instruction agreed by payer and payee moves it when the bank executes it.</p><code class="tech">CashPosition · PaymentInstruction</code></article>
           <article class="card"><h3>Securities</h3><p>Bonds and equities kept by a custodian, with the same locking and consent rules, and the same token-standard support.</p><code class="tech">SecurityPosition</code></article>
           <article class="card"><h3>Delivery versus payment</h3><p>Swaps a locked security for locked cash in one transaction, after checking both against the signed terms. Through the token standard, the cash can be any registry's token.</p><code class="tech">DvpInstruction · TokenDvpInstruction</code></article>
         </div>
@@ -223,14 +222,14 @@
           <h2 id="area-financing">Financing</h2>
           <span class="badge badge-warn">Experimental</span>
         </div>
-        <p class="area-lead">Tracks each agreement and who may change it. Loans, repos, securities lending, margin calls, pledges and collateral can move the actual cash and securities on the ledger; funds and escrow track the agreement only.</p>
+        <p class="area-lead">Tracks each agreement and who may change it. Every financing contract can move the actual cash, securities or fund units on the ledger, in the same transaction as it records the move; each can also record a move made elsewhere.</p>
         <div class="grid grid-3">
           <article class="card"><h3>Loans</h3><p>Credit facilities. Drawdowns and repayments can move the cash, recorded as the receiver accepts it; interest is calculated by the contract from the rate and the date.</p><code class="tech">InstitutionalLoan</code></article>
           <article class="card"><h3>Repos</h3><p>Sale and repurchase of securities. The opening and closing legs can settle as delivery versus payment through the repo itself; rolls and substitution are agreed by both sides.</p><code class="tech">RepoAgreement</code></article>
-          <article class="card"><h3>Securities lending</h3><p>Stock loans delivered against collateral, and returned against its release in proportion; agreed fees, and recalls that stay open until met.</p><code class="tech">SecuritiesLendingAgreement</code></article>
+          <article class="card"><h3>Securities lending</h3><p>Stock loans delivered against collateral, and returned against its release in proportion. Fees and rebates are calculated by the contract from the rates and the days on loan, and paid in cash; recalls stay open until met.</p><code class="tech">SecuritiesLendingAgreement</code></article>
           <article class="card"><h3>Margin calls</h3><p>The payer can send the cash, which the caller accepts as the call is met. Default can only be declared after the deadline.</p><code class="tech">MarginCall</code></article>
           <article class="card"><h3>Pledges and collateral</h3><p>The pledged securities or cash are locked to the lender until released, enforced or substituted, so they cannot be pledged twice. Collateral is valued at market price minus a haircut.</p><code class="tech">AssetPledge · CollateralPosition</code></article>
-          <article class="card"><h3>Funds and escrow</h3><p>Fund subscriptions and redemptions, and conditional escrow released on agreed conditions.</p><code class="tech">FundSubscription · AssetRedemption · ConditionalEscrow</code></article>
+          <article class="card"><h3>Funds and escrow</h3><p>A subscription issues fund units as the investor's cash reaches the fund, and a redemption burns them as the payout reaches the investor. An escrow holds the deposited cash, locked, until it is released to the beneficiary or refunded.</p><code class="tech">FundSubscription · AssetRedemption · ConditionalEscrow</code></article>
         </div>
 
         <article class="card calc" aria-labelledby="calc-title">
@@ -279,9 +278,9 @@
           <span class="badge">Planned</span>
         </div>
         <ul class="todo-list todo-list-plain">
-          <li><strong>Compliance in every workflow.</strong> Eligibility rules and the financing contracts checked inside their own transactions, as transfers and settlements are today.</li>
+          <li><strong>Compliance in every workflow.</strong> Eligibility rules checked inside the transactions that move assets, and the moves that skip the bank's transfers, such as a pledge's enforcement or an escrow's release, checked too.</li>
           <li><strong>Settling against Canton Coin.</strong> AryaFi's delivery versus payment already settles through the token standard against other registries' tokens. Next, it settles a bond against Canton Coin on a Canton Network.</li>
-          <li><strong>Funds and escrow on real assets.</strong> Fund units issued and redeemed against cash, and escrow that holds the deposited asset.</li>
+          <li><strong>Lifecycle events and reporting.</strong> Every change to an agreement recorded as an audit event, and regulatory report drafts produced from settlements.</li>
           <li><strong>An independent security audit</strong> of the finished core.</li>
         </ul>
         <p class="section-foot"><a href="#docs/improvement-plan">Read the improvement plan</a></p>
@@ -306,7 +305,7 @@ git clone https://github.com/Aryaverse/aryafi-core.git
 cd aryafi-core
 dpm build --all
 
-# Run the 385 tests
+# Run the 394 tests
 cd daml/test
 dpm test --all</code></pre>
           <button class="btn btn-small" type="button" data-copy="quickstart-code">Copy</button>

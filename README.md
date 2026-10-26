@@ -3,7 +3,7 @@
 [![Daml](https://img.shields.io/badge/Daml_SDK-3.5.12-blue.svg)](https://docs.digitalasset.com)
 [![Canton](https://img.shields.io/badge/Canton-3.5_(protocol_35)-green.svg)](deploy/canton/canton.conf)
 [![Release](https://img.shields.io/badge/Release-v3.3.0-purple.svg)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/dpm_test-385_passing-brightgreen.svg)](daml/test/AryaFi/Test)
+[![Tests](https://img.shields.io/badge/dpm_test-394_passing-brightgreen.svg)](daml/test/AryaFi/Test)
 [![Status](https://img.shields.io/badge/Status-Beta_/_Experimental-orange.svg)](docs/KNOWN_LIMITATIONS.md)
 [![Website](https://img.shields.io/badge/Vercel-Website-black.svg?logo=vercel)](https://aryafi-core.vercel.app)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
@@ -86,7 +86,7 @@ aryafi-core/
 │   ├── compliance-api/            # Compliance interface package (aryafi-compliance-api)
 │   └── test/                      # Test package (aryafi-core-test), depends on the production DAR
 │       ├── daml.yaml
-│       └── AryaFi/Test/           # Daml Script test suite (385 scripts, run by `dpm test`)
+│       └── AryaFi/Test/           # Daml Script test suite (394 scripts, run by `dpm test`)
 │           ├── Unit/              # 21 unit suites across primitives, contracts & compliance
 │           ├── Scenarios/         # 10 end-to-end multi-party lifecycle scenarios
 │           ├── Negative/          # Unauthorized access, violation & invalid transition tests
@@ -127,20 +127,20 @@ aryafi-core/
 - **`Security`**: Tokenized fixed-income and equity safekeeping with the same lock-holder model (`LockSecurity`, `SettleLockedSecurity`).
 - **`Collateral`**: Haircut valuation ($V = M \times (1 - h)$), mark-to-market revaluation, substitution, and default liquidation.
 - **`TokenStandard`**: Cash, securities, and asset positions implement the Canton Network Token Standard `Holding` interfaces (CIP-56 V1 and CIP-0112 V2), so wallets and apps can list them.
-- **`TokenTransfer`**: Cash and securities can be sent with the token standard's V2 transfer interfaces. The bank or custodian creates a `PositionTransferFactory` for its clients; the sender instructs a transfer and the receiver accepts it.
+- **`TokenTransfer`**: Cash and securities can be sent with the token standard's V2 transfer interfaces. The bank or custodian creates a `PositionTransferFactory` for its clients; the sender instructs a transfer and the receiver accepts it. A client can also lock one of its positions to another party for an agreement, such as an escrow (`LockPosition`).
 - **`TokenAllocation`**: Cash and securities can be settled with the token standard's V2 allocation interfaces. Each account allocates its sides of a trade's legs at the bank or custodian (`PositionAllocationFactory`); the settlement agent settles every registry's batch in one transaction.
 - **`TokenDvp`**: Delivery versus payment through the token standard, against AryaFi cash or any other registry's token. The settlement agent alone records the trade and requests allocations; seller and buyer allocate from their own nodes; `ExecuteTokenDvp` settles both legs in one transaction.
 - **`Settlement`**: Atomic Delivery-versus-Payment. `ExecuteDvpSettlement` validates both locked legs and delivers the security and the cash in a single transaction (BIS Model 1).
-- **`Payment`**: Tri-party payment separation with SWIFT UETR and Fedwire IMAD network reference tracking.
+- **`Payment`**: Tri-party payment instructions with SWIFT UETR and Fedwire IMAD network reference tracking; the settlement agent can execute one as a token-standard transfer that the bank's compliance checks screen (`ExecutePayment`).
 
 ### 2. Financial Contracts (`AryaFi.Contracts`)
 - **`Proposal`**: Multi-party proposals. Parties on different nodes agree any AryaFi contract with several signatories, or exercise any choice several of them control (locking a position, rolling a repo, releasing an escrow), one signature at a time; the last signature carries the proposal out.
 - **`Loan`**: Credit facilities with interest computed from rate, day count, and ledger time; drawdowns and repayments can move the cash as token-standard transfers, accepted as the loan records them.
 - **`Repo` & `ReverseRepo`**: Repurchase agreements whose opening and closing legs can settle as token-standard DvPs through the repo, mark-to-market valuation, and closeout.
-- **`SecuritiesLending`**: Stock loans delivered against cash collateral and returned against its pro-rata release as token-standard DvPs, with jointly agreed fees and recalls that persist until satisfied.
-- **`Margin`**: Initial and variation margin calls: the payer submits, the caller confirms receipt; default only after the deadline.
-- **`Subscription` & `Redemption`**: Institutional private credit fund commitments, capital calls, liquidity gates, and NAV redemptions.
-- **`Transfer`, `Pledge` & `Escrow`**: Compliance-gated transfers, tri-party pledges that lock the pledged position to the pledgee until release or enforcement, and conditional holding.
+- **`SecuritiesLending`**: Stock loans delivered against cash collateral and returned against its pro-rata release as token-standard DvPs; fees and rebates computed from the rates and time and paid by transfer; and recalls that persist until satisfied.
+- **`Margin`**: Initial and variation margin calls: the payer submits, or sends the cash as a token-standard transfer, and the caller confirms receipt or accepts it; default only after the deadline.
+- **`Subscription` & `Redemption`**: Institutional private credit fund commitments, capital calls, liquidity gates, and NAV redemptions. The custodian issues fund units as a capital call's cash reaches the fund, and burns them as a redemption's payout reaches the investor.
+- **`Transfer`, `Pledge` & `Escrow`**: Compliance-gated transfers, tri-party pledges that lock the pledged position to the pledgee until release or enforcement, and conditional escrow that holds the deposited cash, locked to the agent, until it is released to the beneficiary or refunded.
 
 ### 3. Compliance & Policy Engine (`AryaFi.Compliance`)
 - **`Gate`**: Compliance checked inside the transactions that move assets. A bank or custodian names the KYC authorities, sanctions screeners, transfer-rule officers, and ownership regulators it relies on; token-standard transfers and allocations, the screened DvP, and screened transfer requests evaluate their attestations and restrictions for both parties in the same transaction, through the `CompliancePolicy` interface (package `aryafi-compliance-api`). A refused movement moves nothing, and every decision is recorded with its reasons.
@@ -164,7 +164,7 @@ aryafi-core/
 # Build both packages: aryafi-core (production) and aryafi-core-test
 dpm build --all
 
-# Run the test suite (385 scripts); --all includes the production templates in the coverage report
+# Run the test suite (394 scripts); --all includes the production templates in the coverage report
 cd daml/test
 dpm test --all --show-coverage
 ```

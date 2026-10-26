@@ -50,9 +50,9 @@ Use **Next step** and **Back**, or click a step in the bar.
 
 **What's inside** describes each area of the library in plain words, with its maturity:
 * **Settlement** (Beta): cash, securities and delivery versus payment. Moves real assets on the ledger.
-* **Financing** (Experimental): loans, repos, securities lending, margin calls, pledges and collateral, funds and escrow. Loans, repos, securities lending, margin calls, pledges and collateral can move the actual cash and securities on the ledger; funds and escrow track the agreement only. Includes a calculator for the collateral a loan needs: `loan × margin ÷ (1 − haircut)`, with illustrative haircuts.
+* **Financing** (Experimental): loans, repos, securities lending, margin calls, pledges and collateral, funds and escrow. Every financing contract can move the actual cash, securities or fund units on the ledger; each can also record a move made elsewhere. Includes a calculator for the collateral a loan needs: `loan × margin ÷ (1 − haircut)`, with illustrative haircuts.
 * **Compliance** (Experimental): KYC and sanctions, transfer rules, eligibility and limits, regulatory reports. KYC, sanctions, transfer rules and ownership limits are checked inside the transfers, settlements and delivery versus payment that move assets, with every decision recorded; eligibility rules are not checked that way yet.
-* **Coming next**: compliance in every workflow, settling against Canton Coin on a Canton Network, funds and escrow on real assets, and an independent audit.
+* **Coming next**: compliance in every workflow, settling against Canton Coin on a Canton Network, lifecycle events and reporting, and an independent audit.
 
 **Developers** has:
 * **Get started**: install the Daml SDK with `dpm`, build, and run the tests.
@@ -77,7 +77,7 @@ dpm version
 # Compile both packages: aryafi-core (production) and aryafi-core-test
 dpm build --all
 
-# Run the test suite (385 scripts; requires Java 17 or 21)
+# Run the test suite (394 scripts; requires Java 17 or 21)
 cd daml/test
 dpm test --all --show-coverage
 cd ../..
