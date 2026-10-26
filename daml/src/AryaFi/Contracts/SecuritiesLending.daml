@@ -13,11 +13,23 @@
 -- Signatory model: lender + borrower + custodian tri-party agreement.
 -- Authorization principle: the borrower can never reduce its own obligations
 -- (fees are confirmed paid by the lender; collateral release is capped pro rata).
+--
+-- Delivery and returns can settle on the ledger as token-standard DvPs, with
+-- the custodian as settlement agent (see AryaFi.Contracts.FinancingLegs). An
+-- agreement created as LendingPendingDelivery is delivered with the
+-- securities going to the borrower against its cash collateral going to the
+-- lender, and becomes Active as they move. A return delivers securities back
+-- against the release of cash collateral, within the pro-rata cap. An
+-- agreement created Active, and ReturnSecurities, record movements settled
+-- elsewhere.
 module AryaFi.Contracts.SecuritiesLending where
 
 import AryaFi.Common.Types (Amount, Currency, Rate)
-import AryaFi.Common.Identifiers (ISIN, AccountId, ReferenceId, CorrelationId)
+import AryaFi.Common.Identifiers (ISIN(..), AccountId(..), ReferenceId, CorrelationId, TradeId(..))
 import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
+import AryaFi.Contracts.FinancingLegs
+import AryaFi.Finance.TokenDvp (RegistryBatch, TokenDvpAllocationRequest, TokenDvpInstruction(..))
+import qualified DA.Text as Text
 import qualified DA.List as List
 
 -- | Lifecycle states of a Securities Lending arrangement.
@@ -34,6 +46,9 @@ data SecLendingStatus
     -- ^ All borrowed securities returned and collateral released.
   | LendingDefaulted Text
     -- ^ Default declared (e.g. failure to return recalled securities).
+  | LendingPendingDelivery
+    -- ^ Agreed; awaiting delivery of the securities against the collateral
+    --   (RequestDelivery, SettleDelivery).
   deriving (Eq, Show)
 
 -- | Institutional Securities Lending Agreement.
@@ -143,29 +158,80 @@ template SecuritiesLendingAgreement
         collateralReleaseAmount : Amount
       controller borrower
       do
-        require (isOpen status)
-          "Agreement must be Active or under Recall to return securities"
-        requirePositive returnedQuantity "returnedQuantity"
-        require (returnedQuantity <= borrowedQuantity) "Return quantity exceeds borrowed quantity"
-        require (collateralReleaseAmount >= 0.0) "Collateral release must be non-negative"
-        require (collateralReleaseAmount <= collateralAmount) "Collateral release exceeds posted collateral"
+        checkReturn this returnedQuantity collateralReleaseAmount
+        create (afterReturn this returnedQuantity collateralReleaseAmount)
 
-        let newBorrowed = borrowedQuantity - returnedQuantity
-        let newCollateral = collateralAmount - collateralReleaseAmount
-        require (newCollateral * borrowedQuantity >= collateralAmount * newBorrowed)
-          "Collateral release exceeds the pro-rata share of the returned securities"
+    -- | Custodian asks for the delivery as a token-standard DvP: the borrowed
+    -- securities from the lender to the borrower's borrowAccountId, against
+    -- the cash collateral from the borrower to the lender at `bank`.
+    nonconsuming choice RequestDelivery : LegRequested
+      with
+        bank : Party
+        -- ^ The bank that keeps the cash collateral.
+        accounts : ExchangeAccounts
+        -- ^ The accounts; the borrower receives the securities in borrowAccountId.
+        settleBefore : Time
+      controller custodian
+      do
+        require (status == LendingPendingDelivery) "Agreement must be PendingDelivery to request delivery"
+        require (accounts.receiverSecurities == unAccountId borrowAccountId)
+          "The securities are delivered to the borrow account"
+        requestExchange (deliveryExchange this) bank accounts settleBefore
 
-        let newStatus = case status of
-              _ | newBorrowed == 0.0 && accruedLendingFee == 0.0 -> LendingClosed
-              LendingRecallIssued{recallQuantity, recallDeadline}
-                | recallQuantity > returnedQuantity && newBorrowed > 0.0 ->
-                    LendingRecallIssued with recallQuantity = recallQuantity - returnedQuantity; recallDeadline
-              _ -> LendingActive
+    -- | Custodian settles the delivery's DvP, and the agreement becomes
+    -- Active, in one transaction.
+    choice SettleDelivery : ContractId SecuritiesLendingAgreement
+      with
+        dvpCid : ContractId TokenDvpInstruction
+        batches : [RegistryBatch]
+        openRequests : [ContractId TokenDvpAllocationRequest]
+      controller custodian
+      do
+        require (status == LendingPendingDelivery) "Agreement must be PendingDelivery to settle delivery"
+        _ <- settleExchange (deliveryExchange this) dvpCid batches openRequests
+        create this with status = LendingActive
 
-        create this with
-          borrowedQuantity = newBorrowed
-          collateralAmount = newCollateral
-          status = newStatus
+    -- | Custodian asks for a return as a token-standard DvP: `returnedQuantity`
+    -- of the securities from the borrower to the lender, against
+    -- `collateralReleaseAmount` of cash collateral from the lender back to the
+    -- borrower at `bank`, within the pro-rata cap. `returnRef` names this
+    -- return, so each return has its own settlement ID.
+    nonconsuming choice RequestReturn : LegRequested
+      with
+        returnRef : Text
+        returnedQuantity : Amount
+        collateralReleaseAmount : Amount
+        bank : Party
+        accounts : ExchangeAccounts
+        settleBefore : Time
+      controller custodian
+      do
+        requireNonEmpty returnRef "returnRef"
+        checkReturn this returnedQuantity collateralReleaseAmount
+        require (collateralReleaseAmount > 0.0)
+          "A return that releases no collateral is a plain transfer: record it with ReturnSecurities"
+        requestExchange (returnExchange this returnRef returnedQuantity collateralReleaseAmount) bank accounts settleBefore
+
+    -- | Custodian settles a return's DvP, and the agreement records the return
+    -- as with ReturnSecurities, in one transaction.
+    choice SettleReturn : ContractId SecuritiesLendingAgreement
+      with
+        dvpCid : ContractId TokenDvpInstruction
+        batches : [RegistryBatch]
+        openRequests : [ContractId TokenDvpAllocationRequest]
+      controller custodian
+      do
+        dvp <- fetch dvpCid
+        let prefix = returnTradeIdPrefix this
+            TradeId tradeId = dvp.tradeId
+            returnedQuantity = dvp.delivery.leg.amount
+            collateralReleaseAmount = dvp.payment.leg.amount
+        require (prefix `Text.isPrefixOf` tradeId) "The DvP is not a return of this agreement"
+        checkReturn this returnedQuantity collateralReleaseAmount
+        let returnRef = Text.drop (Text.length prefix) tradeId
+        _ <- settleExchange (returnExchange this returnRef returnedQuantity collateralReleaseAmount)
+          dvpCid batches openRequests
+        create (afterReturn this returnedQuantity collateralReleaseAmount)
 
     -- | Mark-to-market collateral adjustment agreed between counterparties.
     choice RevalueCollateral : ContractId SecuritiesLendingAgreement
@@ -214,3 +280,67 @@ isRecallIssued _ = False
 isOpen : SecLendingStatus -> Bool
 isOpen s = s == LendingActive || isRecallIssued s
 
+
+-- | Check a return of `returnedQuantity` releasing `collateralReleaseAmount`:
+-- the agreement is open, the quantity is on loan, and the release is within
+-- the posted collateral and the pro-rata share of the returned securities.
+checkReturn : SecuritiesLendingAgreement -> Amount -> Amount -> Update ()
+checkReturn this returnedQuantity collateralReleaseAmount = do
+  require (isOpen this.status)
+    "Agreement must be Active or under Recall to return securities"
+  requirePositive returnedQuantity "returnedQuantity"
+  require (returnedQuantity <= this.borrowedQuantity) "Return quantity exceeds borrowed quantity"
+  require (collateralReleaseAmount >= 0.0) "Collateral release must be non-negative"
+  require (collateralReleaseAmount <= this.collateralAmount) "Collateral release exceeds posted collateral"
+  let newBorrowed = this.borrowedQuantity - returnedQuantity
+      newCollateral = this.collateralAmount - collateralReleaseAmount
+  require (newCollateral * this.borrowedQuantity >= this.collateralAmount * newBorrowed)
+    "Collateral release exceeds the pro-rata share of the returned securities"
+
+-- | The agreement after a return. A partial return under recall reduces the
+-- outstanding recall quantity; nothing left on loan and no fees owed closes it.
+afterReturn : SecuritiesLendingAgreement -> Amount -> Amount -> SecuritiesLendingAgreement
+afterReturn this returnedQuantity collateralReleaseAmount =
+  let newBorrowed = this.borrowedQuantity - returnedQuantity
+      newStatus = case this.status of
+        _ | newBorrowed == 0.0 && this.accruedLendingFee == 0.0 -> LendingClosed
+        LendingRecallIssued{recallQuantity, recallDeadline}
+          | recallQuantity > returnedQuantity && newBorrowed > 0.0 ->
+              LendingRecallIssued with recallQuantity = recallQuantity - returnedQuantity; recallDeadline
+        _ -> LendingActive
+  in this with
+       borrowedQuantity = newBorrowed
+       collateralAmount = this.collateralAmount - collateralReleaseAmount
+       status = newStatus
+
+-- | The delivery: the borrowed securities from the lender to the borrower,
+-- against the cash collateral.
+deliveryExchange : SecuritiesLendingAgreement -> Exchange
+deliveryExchange this = Exchange with
+  agent = this.custodian
+  tradeId = this.lendingId <> "-DELIVERY"
+  deliverer = this.lender
+  receiver = this.borrower
+  custodian = this.custodian
+  instrument = unISIN this.isin
+  quantity = this.borrowedQuantity
+  currency = this.collateralCurrency
+  cashAmount = this.collateralAmount
+
+-- | The settlement IDs of the agreement's returns start with this.
+returnTradeIdPrefix : SecuritiesLendingAgreement -> Text
+returnTradeIdPrefix this = this.lendingId <> "-RETURN-"
+
+-- | A return: securities from the borrower to the lender, against the
+-- release of cash collateral from the lender to the borrower.
+returnExchange : SecuritiesLendingAgreement -> Text -> Amount -> Amount -> Exchange
+returnExchange this returnRef returnedQuantity collateralReleaseAmount = Exchange with
+  agent = this.custodian
+  tradeId = returnTradeIdPrefix this <> returnRef
+  deliverer = this.borrower
+  receiver = this.lender
+  custodian = this.custodian
+  instrument = unISIN this.isin
+  quantity = returnedQuantity
+  currency = this.collateralCurrency
+  cashAmount = collateralReleaseAmount

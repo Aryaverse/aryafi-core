@@ -17,6 +17,14 @@
 -- Authorization principle: a party can never reduce its own obligation.
 -- Repayments are recorded by the lender (the creditor confirms receipt), and
 -- interest is computed by the contract rather than entered by the lender.
+--
+-- The cash can move on the ledger as token-standard transfers. The lender
+-- sends a drawdown to the borrower, and the borrower's DrawdownByTransfer
+-- accepts it and adds exactly the amount received to the principal. The
+-- borrower sends a repayment to the lender, and the lender's ReceiveRepayment
+-- accepts it and applies it to accrued interest first, then to principal.
+-- DrawdownPrincipal, PayAccruedInterest, and PayDownPrincipal record
+-- payments made elsewhere.
 module AryaFi.Contracts.Loan where
 
 import AryaFi.Common.Types (Amount, Currency, Rate, DayCountConvention(..), LifecycleStatus(..))
@@ -24,6 +32,8 @@ import AryaFi.Common.Identifiers (ReferenceId, CorrelationId)
 import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
 import AryaFi.Common.Time (calcAccruedInterestBetween)
 import qualified DA.List as List
+import Splice.Api.Token.MetadataV1 (ExtraArgs)
+import Splice.Api.Token.TransferInstructionV2
 
 -- | Interest accrued on the drawn principal from the loan's
 -- interestAccruedThrough date up to asOf, using its rate and day count.
@@ -103,6 +113,58 @@ template InstitutionalLoan
           drawnPrincipal = drawnPrincipal + drawdownAmount
           accruedInterest = accruedInterest + interestDue this now
           interestAccruedThrough = max now interestAccruedThrough
+
+    -- | Borrower accepts a drawdown the lender sent as a pending token-standard
+    -- transfer, receiving the cash, and the amount is added to the principal,
+    -- in one transaction. `extraArgs` is the choice context the bank asks for.
+    -- If the bank refuses the transfer, the cash goes back to the lender and
+    -- the loan is unchanged.
+    choice DrawdownByTransfer : ContractId InstitutionalLoan
+      with
+        instructionCid : ContractId TransferInstruction
+        extraArgs : ExtraArgs
+      controller borrower
+      do
+        require (status == Active) "Loan must be Active to draw down principal"
+        transfer <- loanTransfer instructionCid lender borrower currency
+        require (drawnPrincipal + transfer.amount <= facilityLimit) "Drawdown exceeds available facility limit"
+        now <- getTime
+        require (now < maturityDate) "Cannot draw down on or after the facility maturity date"
+        received <- acceptLoanTransfer instructionCid borrower extraArgs
+        if not received then create this else
+          create this with
+            drawnPrincipal = drawnPrincipal + transfer.amount
+            accruedInterest = accruedInterest + interestDue this now
+            interestAccruedThrough = max now interestAccruedThrough
+
+    -- | Lender accepts a repayment the borrower sent as a pending
+    -- token-standard transfer, receiving the cash, and applies it to the
+    -- interest accrued up to now first, then to principal, in one transaction.
+    -- The loan closes when nothing is left. If the bank refuses the transfer,
+    -- the cash goes back to the borrower and the loan is unchanged.
+    choice ReceiveRepayment : ContractId InstitutionalLoan
+      with
+        instructionCid : ContractId TransferInstruction
+        extraArgs : ExtraArgs
+      controller lender
+      do
+        require (status == Active || status == Defaulted) "Loan must be Active or Defaulted to receive a repayment"
+        transfer <- loanTransfer instructionCid borrower lender currency
+        now <- getTime
+        let interest = accruedInterest + interestDue this now
+            toInterest = min transfer.amount interest
+            toPrincipal = transfer.amount - toInterest
+        require (toPrincipal <= drawnPrincipal)
+          ("Repayment exceeds the " <> show (interest + drawnPrincipal) <> " owed")
+        received <- acceptLoanTransfer instructionCid lender extraArgs
+        if not received then create this else do
+          let newDrawn = drawnPrincipal - toPrincipal
+              newInterest = interest - toInterest
+          create this with
+            drawnPrincipal = newDrawn
+            accruedInterest = newInterest
+            interestAccruedThrough = max now interestAccruedThrough
+            status = if newDrawn == 0.0 && newInterest == 0.0 then Closed else status
 
     -- | Accrue interest on the drawn principal from interestAccruedThrough to
     -- the current ledger time, using the contractual rate and day count.
@@ -218,3 +280,23 @@ template InstitutionalLoan
       controller lender
       do
         return (status == Active)
+
+-- | The transfer behind a pending loan payment, after checking that it goes
+-- from `sender` to `receiver` in the loan currency.
+loanTransfer : ContractId TransferInstruction -> Party -> Party -> Currency -> Update Transfer
+loanTransfer instructionCid sender receiver currency = do
+  instruction <- view <$> fetch instructionCid
+  let transfer = instruction.transfer
+  require (transfer.sender.owner == Some sender) ("Loan transfer: not sent by " <> partyToText sender)
+  require (transfer.receiver.owner == Some receiver) ("Loan transfer: not sent to " <> partyToText receiver)
+  require (transfer.instrumentId.id == currency) "Loan transfer: not in the loan currency"
+  pure transfer
+
+-- | Accept a pending loan payment as `receiver`: whether the cash was received.
+acceptLoanTransfer : ContractId TransferInstruction -> Party -> ExtraArgs -> Update Bool
+acceptLoanTransfer instructionCid receiver extraArgs = do
+  result <- exercise instructionCid TransferInstruction_Accept with actors = [receiver]; extraArgs
+  case result.output of
+    TransferInstructionResult_Completed _ -> pure True
+    TransferInstructionResult_Failed -> pure False
+    TransferInstructionResult_Pending _ -> abort "The loan transfer is still pending at its registry"

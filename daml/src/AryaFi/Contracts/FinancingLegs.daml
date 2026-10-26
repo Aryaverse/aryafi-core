@@ -1,0 +1,113 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | The legs of financing agreements that exchange securities against cash
+-- (a repo's opening and closing legs, a securities loan's delivery and
+-- return), settled as token-standard DvPs (AryaFi.Finance.TokenDvp).
+--
+-- The agreement's custodian is the settlement agent. It asks for a leg, which
+-- creates a TokenDvpInstruction and an allocation request for each party;
+-- each party allocates from its own node, at the custodian for the securities
+-- and at its bank for the cash; then the custodian settles the leg through
+-- the agreement, which checks that the DvP is the agreement's and updates the
+-- agreement in the same transaction as the assets move.
+module AryaFi.Contracts.FinancingLegs where
+
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
+import Splice.Api.Token.MetadataV1 (emptyMetadata)
+import Splice.Api.Token.AllocationV2 (TransferLeg(..))
+import AryaFi.Common.Errors (require)
+import AryaFi.Common.Identifiers (TradeId(..))
+import AryaFi.Common.Types (SettlementStatus(..))
+import AryaFi.Finance.TokenDvp
+
+-- | An exchange of securities against cash that an agreement settles.
+data Exchange = Exchange
+  with
+    agent : Party
+    -- ^ The settlement agent: the agreement's custodian.
+    tradeId : Text
+    -- ^ The settlement ID, unique to the agreement and the leg.
+    deliverer : Party
+    -- ^ Delivers the securities and receives the cash.
+    receiver : Party
+    -- ^ Receives the securities and pays the cash.
+    custodian : Party
+    -- ^ The securities' registry.
+    instrument : Text
+    -- ^ The ISIN.
+    quantity : Decimal
+    currency : Text
+    cashAmount : Decimal
+  deriving (Eq, Show)
+
+-- | The accounts an exchange uses: the securities accounts at the custodian
+-- and the cash accounts at the bank.
+data ExchangeAccounts = ExchangeAccounts
+  with
+    delivererSecurities : Text
+    receiverSecurities : Text
+    receiverCash : Text
+    delivererCash : Text
+  deriving (Eq, Show)
+
+-- | A leg that has been asked for: its DvP, and the allocation requests the
+-- parties see.
+data LegRequested = LegRequested
+  with
+    dvpCid : ContractId TokenDvpInstruction
+    requests : [ContractId TokenDvpAllocationRequest]
+  deriving (Eq, Show)
+
+-- | Create the exchange's DvP, with the cash at `bank`, and ask both parties
+-- for their allocations. Needs the agent's authority.
+requestExchange : Exchange -> Party -> ExchangeAccounts -> Time -> Update LegRequested
+requestExchange e bank accounts settleBefore = do
+  now <- getTime
+  let account provider owner id = HoldingV2.Account with owner = Some owner; provider = Some provider; id
+  dvpCid <- create TokenDvpInstruction with
+    settlementAgent = e.agent
+    seller = e.deliverer
+    buyer = e.receiver
+    tradeId = TradeId e.tradeId
+    delivery = DvpLeg with
+      admin = e.custodian
+      leg = TransferLeg with
+        transferLegId = "securities"
+        sender = account e.custodian e.deliverer accounts.delivererSecurities
+        receiver = account e.custodian e.receiver accounts.receiverSecurities
+        amount = e.quantity
+        instrumentId = e.instrument
+        meta = emptyMetadata
+    payment = DvpLeg with
+      admin = bank
+      leg = TransferLeg with
+        transferLegId = "cash"
+        sender = account bank e.receiver accounts.receiverCash
+        receiver = account bank e.deliverer accounts.delivererCash
+        amount = e.cashAmount
+        instrumentId = e.currency
+        meta = emptyMetadata
+    requestedAt = now
+    settleBefore
+    status = PendingSettlement
+    observers = []
+  requests <- exercise dvpCid RequestTokenDvpAllocations
+  pure LegRequested with dvpCid; requests
+
+-- | Settle the exchange's DvP, after checking that it is the exchange's: its
+-- agent, parties, trade ID, securities, and cash. Needs the agent's authority.
+settleExchange
+  : Exchange -> ContractId TokenDvpInstruction -> [RegistryBatch] -> [ContractId TokenDvpAllocationRequest]
+  -> Update TokenDvpResult
+settleExchange e dvpCid batches openRequests = do
+  dvp <- fetch dvpCid
+  require (dvp.settlementAgent == e.agent && dvp.tradeId == TradeId e.tradeId)
+    ("Leg: the DvP is not the agreement's " <> e.tradeId)
+  require (dvp.seller == e.deliverer && dvp.buyer == e.receiver) "Leg: the DvP is between other parties"
+  require (dvp.delivery.admin == e.custodian && dvp.delivery.leg.instrumentId == e.instrument
+           && dvp.delivery.leg.amount == e.quantity)
+    "Leg: the DvP delivers other securities"
+  require (dvp.payment.leg.instrumentId == e.currency && dvp.payment.leg.amount == e.cashAmount)
+    "Leg: the DvP pays another amount"
+  exercise dvpCid ExecuteTokenDvp with batches; openRequests
