@@ -1,0 +1,386 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Loans, repos, and securities loans that move their cash and securities.
+-- A loan's drawdowns and repayments are token-standard transfers that the
+-- receiver accepts as the loan records them. A repo's opening and closing
+-- legs, and a securities loan's delivery and returns, are token-standard DvPs
+-- with the custodian as settlement agent, settled through the agreement.
+module AryaFi.Test.Unit.FinancingOnLedgerTest where
+
+import DA.Time (addRelTime, days, minutes)
+import Daml.Script
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
+import Splice.Api.Token.MetadataV1 (emptyMetadata)
+import Splice.Api.Token.TransferInstructionV2
+import AryaFi.Common.Identifiers
+import AryaFi.Common.Types (DayCountConvention(..), LifecycleStatus(..))
+import AryaFi.Contracts.FinancingLegs
+import AryaFi.Contracts.Loan
+import AryaFi.Contracts.Repo
+import AryaFi.Contracts.SecuritiesLending
+import AryaFi.Common.Types (SettlementStatus(..))
+import AryaFi.Finance.TokenDvp (DvpLeg(..), RegistryBatch, TokenDvpInstruction(..))
+import Splice.Api.Token.AllocationV2 (TransferLeg(..))
+import AryaFi.Finance.TokenTransfer
+import AryaFi.Test.Scenarios.DvpSettlementTest (allocateTestParty, bondIsin, setupCashPosition, setupSecurityPosition)
+import AryaFi.Test.Scenarios.TokenDvpTest (Fixture(..), Registry, aryafiRegistry, allocateAsRequested, batchesFor, noExtraArgs)
+import AryaFi.Test.Unit.PledgedHoldingTest (holdingsOf)
+import AryaFi.Test.Unit.TokenTransferTest (submitFailsWith)
+
+-- ---------------------------------------------------------------------------
+-- Loans
+-- ---------------------------------------------------------------------------
+
+data LoanFixture = LoanFixture
+  with
+    bank : Party
+    lender : Party
+    borrower : Party
+    factoryCid : ContractId PositionTransferFactory
+    loanCid : ContractId InstitutionalLoan
+
+setupLoan : Text -> Script LoanFixture
+setupLoan test = do
+  bank <- allocateTestParty "Bank" test
+  lender <- allocateTestParty "Lender" test
+  borrower <- allocateTestParty "Borrower" test
+  factoryCid <- submit bank do
+    createCmd PositionTransferFactory with admin = bank; clients = [lender, borrower]; compliance = None
+  _ <- setupCashPosition bank lender (AccountId "ACC-LENDER") 10000000.0
+  now <- getTime
+  loanCid <- submit (actAs [lender, borrower]) do
+    createCmd InstitutionalLoan with
+      loanId = "LOAN-" <> test; lender; borrower; agentBank = None; currency = "USD"
+      facilityLimit = 5000000.0; drawnPrincipal = 0.0; accruedInterest = 0.0; interestAccruedThrough = now
+      interestRate = 0.05; dayCountConvention = Act360; startDate = now
+      maturityDate = addRelTime now (days 365); collateralPledgeRef = None; status = Active
+      defaultReason = None; correlationId = CorrelationId ("CORR-" <> test); observers = []
+  pure LoanFixture with ..
+
+-- | `sender` instructs a transfer of `amount` USD to `receiver`, from its
+-- unlocked holdings in `fromAccount`.
+sendCash
+  : LoanFixture -> Party -> Text -> Party -> Text -> Decimal -> Script (ContractId TransferInstruction)
+sendCash f sender fromAccount receiver toAccount amount = do
+  holdings <- queryInterface @HoldingV2.Holding sender
+  let inputs = [ cid | (cid, Some v) <- holdings, v.account.owner == Some sender, v.account.id == fromAccount
+               , v.instrumentId.id == "USD", v.lock == None ]
+  now <- getTime
+  result <- submit sender do
+    exerciseCmd (toInterfaceContractId @TransferFactory f.factoryCid) TransferFactory_Transfer with
+      transfer = Transfer with
+        sender = HoldingV2.Account with owner = Some sender; provider = Some f.bank; id = fromAccount
+        receiver = HoldingV2.Account with owner = Some receiver; provider = Some f.bank; id = toAccount
+        amount
+        instrumentId = HoldingV2.InstrumentId with admin = f.bank; id = "USD"
+        requestedAt = addRelTime now (minutes (-1))
+        executeBefore = addRelTime now (days 1)
+        inputHoldingCids = inputs
+        meta = emptyMetadata
+      actors = [sender]
+      extraArgs = noExtraArgs
+  case result.output of
+    TransferInstructionResult_Pending cid -> pure cid
+    other -> abort ("Expected a pending transfer, got " <> show other)
+
+-- The lender's cash reaches the borrower as the drawdown is recorded, and the
+-- borrower's repayment reaches the lender as it is applied.
+testLoanCashMoves : Script ()
+testLoanCashMoves = script do
+  f <- setupLoan "LOAN-CASH"
+  drawdown <- sendCash f f.lender "ACC-LENDER" f.borrower "ACC-BORROWER" 3000000.0
+  drawn <- submit f.borrower do
+    exerciseCmd f.loanCid DrawdownByTransfer with instructionCid = drawdown; extraArgs = noExtraArgs
+  Some loan <- queryContractId f.lender drawn
+  assertMsg "The drawdown is the amount received" (loan.drawnPrincipal == 3000000.0)
+  borrowerHoldings <- holdingsOf f.borrower
+  assertMsg ("Expected the borrower to hold the drawdown, got " <> show borrowerHoldings)
+    (borrowerHoldings == [("ACC-BORROWER", 3000000.0, None)])
+
+  repayment <- sendCash f f.borrower "ACC-BORROWER" f.lender "ACC-LENDER" 3000000.0
+  repaid <- submit f.lender do
+    exerciseCmd drawn ReceiveRepayment with instructionCid = repayment; extraArgs = noExtraArgs
+  Some afterRepayment <- queryContractId f.lender repaid
+  -- Interest that accrued while the test ran is paid first, so on a running
+  -- participant a fraction of a cent of principal can remain
+  assertMsg ("Expected the loan repaid, got " <> show (afterRepayment.drawnPrincipal, afterRepayment.accruedInterest))
+    (afterRepayment.accruedInterest == 0.0 && afterRepayment.drawnPrincipal < 1.0
+      && (afterRepayment.status == Closed) == (afterRepayment.drawnPrincipal == 0.0))
+  lenderHoldings <- holdingsOf f.lender
+  assertMsg ("Expected the lender to have its cash back, got " <> show lenderHoldings)
+    (sum [amount | (_, amount, _) <- lenderHoldings] == 10000000.0)
+
+-- Only the lender's drawdowns within the limit, and repayments up to what is owed.
+testLoanTransferChecks : Script ()
+testLoanTransferChecks = script do
+  f <- setupLoan "LOAN-CHECKS"
+  tooMuch <- sendCash f f.lender "ACC-LENDER" f.borrower "ACC-BORROWER" 6000000.0
+  submitFailsWith "Drawdown exceeds available facility limit" [f.borrower] do
+    exerciseCmd f.loanCid DrawdownByTransfer with instructionCid = tooMuch; extraArgs = noExtraArgs
+  submitFailsWith "Loan transfer: not sent by" [f.lender] do
+    exerciseCmd f.loanCid ReceiveRepayment with instructionCid = tooMuch; extraArgs = noExtraArgs
+  _ <- submit f.borrower do
+    exerciseCmd tooMuch TransferInstruction_Reject with actors = [f.borrower]; extraArgs = noExtraArgs
+  drawdown <- sendCash f f.lender "ACC-LENDER" f.borrower "ACC-BORROWER" 1000000.0
+  drawn <- submit f.borrower do
+    exerciseCmd f.loanCid DrawdownByTransfer with instructionCid = drawdown; extraArgs = noExtraArgs
+  _ <- setupCashPosition f.bank f.borrower (AccountId "ACC-BORROWER") 1000000.0
+  overpay <- sendCash f f.borrower "ACC-BORROWER" f.lender "ACC-LENDER" 2000000.0
+  submitFailsWith "Repayment exceeds the" [f.lender] do
+    exerciseCmd drawn ReceiveRepayment with instructionCid = overpay; extraArgs = noExtraArgs
+
+-- ---------------------------------------------------------------------------
+-- Exchanges of securities against cash
+-- ---------------------------------------------------------------------------
+
+-- | A custodian and a bank, each with an allocation factory for `clients`.
+registries : Party -> Party -> [Party] -> Script (Registry, Registry)
+registries custodian bank clients = do
+  securities <- aryafiRegistry custodian (custodian :: clients)
+  cash <- aryafiRegistry bank (custodian :: clients)
+  pure (securities, cash)
+
+-- | Both parties allocate their sides of a requested leg, as their wallets would.
+allocateLeg : Registry -> Registry -> Party -> Party -> Party -> LegRequested -> Script Fixture
+allocateLeg securities cash agent deliverer receiver requested = do
+  let f = Fixture with
+        custodian = securities; payments = cash; seller = deliverer; buyer = receiver; agent
+        dvpCid = requested.dvpCid; requests = requested.requests
+  _ <- allocateAsRequested f deliverer
+  _ <- allocateAsRequested f receiver
+  pure f
+
+-- ---------------------------------------------------------------------------
+-- Repos
+-- ---------------------------------------------------------------------------
+
+data RepoFixture = RepoFixture
+  with
+    custodian : Party
+    bank : Party
+    seller : Party
+    buyer : Party
+    securities : Registry
+    cash : Registry
+    repoCid : ContractId RepoAgreement
+
+bond : Text
+bond = unISIN bondIsin
+
+setupRepo : Text -> Script RepoFixture
+setupRepo test = do
+  custodian <- allocateTestParty "Custodian" test
+  bank <- allocateTestParty "Bank" test
+  seller <- allocateTestParty "Seller" test
+  buyer <- allocateTestParty "Buyer" test
+  (securities, cash) <- registries custodian bank [seller, buyer]
+  _ <- setupSecurityPosition custodian seller (AccountId "ACC-SELLER-SEC") 5000000.0
+  _ <- setupCashPosition bank seller (AccountId "ACC-SELLER-CASH") 100000.0
+  _ <- setupCashPosition bank buyer (AccountId "ACC-BUYER-CASH") 5000000.0
+  now <- getTime
+  repoCid <- submit (actAs [seller, buyer, custodian]) do
+    createCmd RepoAgreement with
+      repoId = "REPO-" <> test; seller; buyer; tripartyAgent = None; custodian
+      isin = bondIsin; collateralQuantity = 5000000.0; collateralAccountId = AccountId "ACC-SELLER-SEC"
+      haircut = 0.02; currency = "USD"; purchasePrice = 4900000.0; repurchasePrice = 4920000.0
+      repoRate = 0.05; dayCountConvention = Act360; startDate = now; endDate = addRelTime now (days 30)
+      status = RepoPendingOpening; openingSettlementRef = None; closingSettlementRef = None
+      correlationId = CorrelationId ("CORR-" <> test); observers = []
+  pure RepoFixture with ..
+
+openingAccounts, closingAccounts : ExchangeAccounts
+openingAccounts = ExchangeAccounts with
+  delivererSecurities = "ACC-SELLER-SEC"; receiverSecurities = "ACC-BUYER-SEC"
+  receiverCash = "ACC-BUYER-CASH"; delivererCash = "ACC-SELLER-CASH"
+closingAccounts = ExchangeAccounts with
+  delivererSecurities = "ACC-BUYER-SEC"; receiverSecurities = "ACC-SELLER-SEC"
+  receiverCash = "ACC-SELLER-CASH"; delivererCash = "ACC-BUYER-CASH"
+
+-- | The time `n` days from now.
+daysFromNow : Int -> Script Time
+daysFromNow n = do
+  now <- getTime
+  pure (addRelTime now (days n))
+
+-- The opening leg delivers the collateral against the purchase price, and the
+-- closing leg returns it against the repurchase price, each settled through
+-- the repo with the repo's status.
+testRepoLegsMoveAssets : Script ()
+testRepoLegsMoveAssets = script do
+  r <- setupRepo "REPO-LEGS"
+  settleBefore <- daysFromNow 1
+  opening <- submit r.custodian do
+    exerciseCmd r.repoCid RequestOpeningLeg with bank = r.bank; accounts = openingAccounts; settleBefore
+  f <- allocateLeg r.securities r.cash r.custodian r.seller r.buyer opening
+  (batches, disclosures) <- batchesFor f
+  active <- submit (actAs r.custodian <> discloseMany disclosures) do
+    exerciseCmd r.repoCid SettleOpeningLeg with dvpCid = opening.dvpCid; batches; openRequests = []
+  Some repo <- queryContractId r.buyer active
+  assertMsg "The repo is active, with the opening leg's settlement"
+    (repo.status == RepoActive && repo.openingSettlementRef == Some "REPO-REPO-LEGS-OPENING")
+  buyerAfterOpening <- holdingsOf r.buyer
+  assertMsg ("Expected the buyer to hold the collateral and its change, got " <> show buyerAfterOpening)
+    (buyerAfterOpening == [("ACC-BUYER-CASH", 100000.0, None), ("ACC-BUYER-SEC", 5000000.0, None)])
+
+  closingCid <- submit r.seller do exerciseCmd active InitiateClosingLeg
+  closing <- submit r.custodian do
+    exerciseCmd closingCid RequestClosingLeg with bank = r.bank; accounts = closingAccounts; settleBefore
+  g <- allocateLeg r.securities r.cash r.custodian r.buyer r.seller closing
+  (closingBatches, closingDisclosures) <- batchesFor g
+  settled <- submit (actAs r.custodian <> discloseMany closingDisclosures) do
+    exerciseCmd closingCid SettleClosingLeg with dvpCid = closing.dvpCid; batches = closingBatches; openRequests = []
+  Some done <- queryContractId r.seller settled
+  assertMsg "The repo is settled" (done.status == RepoSettled && done.closingSettlementRef == Some "REPO-REPO-LEGS-CLOSING")
+  sellerHoldings <- holdingsOf r.seller
+  assertMsg ("Expected the seller to have its collateral back and to have paid the repurchase price, got "
+      <> show sellerHoldings)
+    (sellerHoldings == [("ACC-SELLER-CASH", 80000.0, None), ("ACC-SELLER-SEC", 5000000.0, None)])
+  buyerHoldings <- holdingsOf r.buyer
+  assertMsg ("Expected the buyer to hold the repurchase price, got " <> show buyerHoldings)
+    (sum [amount | (_, amount, _) <- buyerHoldings] == 5020000.0)
+
+-- The legs follow the repo: the collateral account, the repo's own DvP, and
+-- closing only once initiated or matured.
+testRepoLegChecks : Script ()
+testRepoLegChecks = script do
+  r <- setupRepo "REPO-CHECKS"
+  settleBefore <- daysFromNow 1
+  submitFailsWith "delivers the collateral from the collateral account" [r.custodian] do
+    exerciseCmd r.repoCid RequestOpeningLeg with
+      bank = r.bank; accounts = (openingAccounts with delivererSecurities = "ACC-ELSEWHERE"); settleBefore
+  submitFailsWith "Closing leg requires seller initiation" [r.custodian] do
+    exerciseCmd r.repoCid RequestClosingLeg with bank = r.bank; accounts = closingAccounts; settleBefore
+  -- A DvP that is not the repo's own does not settle its legs
+  now <- getTime
+  let account provider owner id = HoldingV2.Account with owner = Some owner; provider = Some provider; id
+  stray <- submit r.custodian do
+    createCmd TokenDvpInstruction with
+      settlementAgent = r.custodian; seller = r.seller; buyer = r.buyer; tradeId = TradeId "ANOTHER-TRADE"
+      delivery = DvpLeg with
+        admin = r.custodian
+        leg = TransferLeg with
+          transferLegId = "securities"; sender = account r.custodian r.seller "ACC-SELLER-SEC"
+          receiver = account r.custodian r.buyer "ACC-BUYER-SEC"; amount = 5000000.0; instrumentId = bond
+          meta = emptyMetadata
+      payment = DvpLeg with
+        admin = r.bank
+        leg = TransferLeg with
+          transferLegId = "cash"; sender = account r.bank r.buyer "ACC-BUYER-CASH"
+          receiver = account r.bank r.seller "ACC-SELLER-CASH"; amount = 4900000.0; instrumentId = "USD"
+          meta = emptyMetadata
+      requestedAt = now; settleBefore; status = PendingSettlement; observers = []
+  submitFailsWith "Leg: the DvP is not the agreement's REPO-REPO-CHECKS-OPENING" [r.custodian] do
+    exerciseCmd r.repoCid SettleOpeningLeg with dvpCid = stray; batches = []; openRequests = []
+
+-- ---------------------------------------------------------------------------
+-- Securities loans
+-- ---------------------------------------------------------------------------
+
+data LendingFixture = LendingFixture
+  with
+    custodian : Party
+    bank : Party
+    lender : Party
+    borrower : Party
+    securities : Registry
+    cash : Registry
+    lendingCid : ContractId SecuritiesLendingAgreement
+
+setupLending : Text -> Script LendingFixture
+setupLending test = do
+  custodian <- allocateTestParty "Custodian" test
+  bank <- allocateTestParty "Bank" test
+  lender <- allocateTestParty "Lender" test
+  borrower <- allocateTestParty "Borrower" test
+  (securities, cash) <- registries custodian bank [lender, borrower]
+  _ <- setupSecurityPosition custodian lender (AccountId "ACC-LENDER-SEC") 1000000.0
+  _ <- setupCashPosition bank borrower (AccountId "ACC-BORROWER-CASH") 1020000.0
+  now <- getTime
+  lendingCid <- submit (actAs [lender, borrower, custodian]) do
+    createCmd SecuritiesLendingAgreement with
+      lendingId = "SL-" <> test; lender; borrower; custodian; isin = bondIsin
+      borrowedQuantity = 1000000.0; borrowAccountId = AccountId "ACC-BORROWER-SEC"
+      lendingFeeRate = 0.0075; rebateRate = 0.0; collateralCurrency = "USD"; collateralAmount = 1020000.0
+      collateralPledgeRef = None; accruedLendingFee = 0.0; startDate = now; status = LendingPendingDelivery
+      correlationId = CorrelationId ("CORR-" <> test); observers = []
+  pure LendingFixture with ..
+
+deliveryAccounts, returnAccounts : ExchangeAccounts
+deliveryAccounts = ExchangeAccounts with
+  delivererSecurities = "ACC-LENDER-SEC"; receiverSecurities = "ACC-BORROWER-SEC"
+  receiverCash = "ACC-BORROWER-CASH"; delivererCash = "ACC-LENDER-CASH"
+returnAccounts = ExchangeAccounts with
+  delivererSecurities = "ACC-BORROWER-SEC"; receiverSecurities = "ACC-LENDER-SEC"
+  receiverCash = "ACC-LENDER-CASH"; delivererCash = "ACC-BORROWER-CASH"
+
+-- | The custodian settles a requested leg of the loan once both have allocated.
+settleLending
+  : LendingFixture -> Party -> Party -> LegRequested
+  -> (ContractId TokenDvpInstruction -> [RegistryBatch] -> Commands (ContractId SecuritiesLendingAgreement))
+  -> Script (ContractId SecuritiesLendingAgreement)
+settleLending l deliverer receiver requested settle = do
+  f <- allocateLeg l.securities l.cash l.custodian deliverer receiver requested
+  (batches, disclosures) <- batchesFor f
+  submit (actAs l.custodian <> discloseMany disclosures) (settle requested.dvpCid batches)
+
+-- Delivery moves the securities against the cash collateral; returns move
+-- them back against its release, within the pro-rata cap.
+testSecuritiesLoanMovesAssets : Script ()
+testSecuritiesLoanMovesAssets = script do
+  l <- setupLending "SL-LEGS"
+  settleBefore <- daysFromNow 1
+  submitFailsWith "Lending agreement must be Active or under Recall to accrue fees" [l.lender, l.borrower] do
+    exerciseCmd l.lendingCid AccrueLendingFee with additionalFee = 100.0
+  delivery <- submit l.custodian do
+    exerciseCmd l.lendingCid RequestDelivery with bank = l.bank; accounts = deliveryAccounts; settleBefore
+  active <- settleLending l l.lender l.borrower delivery \dvpCid batches ->
+    exerciseCmd l.lendingCid SettleDelivery with dvpCid; batches; openRequests = []
+  Some delivered <- queryContractId l.lender active
+  assertMsg "The loan is active" (delivered.status == LendingActive)
+  borrowerHoldings <- holdingsOf l.borrower
+  assertMsg ("Expected the borrower to hold the securities, got " <> show borrowerHoldings)
+    (borrowerHoldings == [("ACC-BORROWER-SEC", 1000000.0, None)])
+  lenderHoldings <- holdingsOf l.lender
+  assertMsg ("Expected the lender to hold the collateral, got " <> show lenderHoldings)
+    (lenderHoldings == [("ACC-LENDER-CASH", 1020000.0, None)])
+
+  submitFailsWith "pro-rata share" [l.custodian] do
+    exerciseCmd active RequestReturn with
+      returnRef = "1"; returnedQuantity = 100000.0; collateralReleaseAmount = 500000.0
+      bank = l.bank; accounts = returnAccounts; settleBefore
+  partial <- submit l.custodian do
+    exerciseCmd active RequestReturn with
+      returnRef = "1"; returnedQuantity = 400000.0; collateralReleaseAmount = 408000.0
+      bank = l.bank; accounts = returnAccounts; settleBefore
+  afterPartial <- settleLending l l.borrower l.lender partial \dvpCid batches ->
+    exerciseCmd active SettleReturn with dvpCid; batches; openRequests = []
+  Some remaining <- queryContractId l.lender afterPartial
+  assertMsg ("Expected 600,000 on loan against 612,000, got " <> show (remaining.borrowedQuantity, remaining.collateralAmount))
+    (remaining.borrowedQuantity == 600000.0 && remaining.collateralAmount == 612000.0
+      && remaining.status == LendingActive)
+
+  final <- submit l.custodian do
+    exerciseCmd afterPartial RequestReturn with
+      returnRef = "2"; returnedQuantity = 600000.0; collateralReleaseAmount = 612000.0
+      bank = l.bank; accounts = returnAccounts; settleBefore
+  closed <- settleLending l l.borrower l.lender final \dvpCid batches ->
+    exerciseCmd afterPartial SettleReturn with dvpCid; batches; openRequests = []
+  Some done <- queryContractId l.lender closed
+  assertMsg "The loan is closed" (done.status == LendingClosed && done.borrowedQuantity == 0.0)
+  lenderAtEnd <- holdingsOf l.lender
+  assertMsg ("Expected the lender to have its securities back, got " <> show lenderAtEnd)
+    (sum [amount | (account, amount, _) <- lenderAtEnd, account == "ACC-LENDER-SEC"] == 1000000.0
+      && sum [amount | (account, amount, _) <- lenderAtEnd, account == "ACC-LENDER-CASH"] == 0.0)
+  borrowerAtEnd <- holdingsOf l.borrower
+  assertMsg ("Expected the borrower to have its collateral back, got " <> show borrowerAtEnd)
+    (sum [amount | (_, amount, _) <- borrowerAtEnd] == 1020000.0)
+
+-- | Every test in this module, for running against a participant: none sets time.
+runFinancingOnLedgerTests : Script ()
+runFinancingOnLedgerTests = script do
+  testLoanCashMoves
+  testLoanTransferChecks
+  testRepoLegsMoveAssets
+  testRepoLegChecks
+  testSecuritiesLoanMovesAssets

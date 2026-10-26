@@ -12,11 +12,21 @@
 --
 -- Signatory model: seller + buyer + custodian tri-party agreement.
 -- Tri-party agent and trade repository / regulators participate as observers.
+--
+-- The legs can settle on the ledger as token-standard DvPs, with the
+-- custodian as settlement agent (see AryaFi.Contracts.FinancingLegs): the
+-- opening leg delivers the collateral from the seller to the buyer against
+-- the purchase price, and the closing leg returns it against the repurchase
+-- price. Settling a leg through the repo moves the assets and updates the
+-- repo in one transaction. ExecuteOpeningLeg and ExecuteClosingLeg record
+-- legs settled elsewhere.
 module AryaFi.Contracts.Repo where
 
 import AryaFi.Common.Types (Amount, Currency, Rate, DayCountConvention(..))
-import AryaFi.Common.Identifiers (ISIN(..), AccountId, ReferenceId, CorrelationId)
+import AryaFi.Common.Identifiers (ISIN(..), AccountId(..), ReferenceId, CorrelationId)
 import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
+import AryaFi.Contracts.FinancingLegs
+import AryaFi.Finance.TokenDvp (RegistryBatch, TokenDvpAllocationRequest, TokenDvpInstruction)
 import qualified DA.List as List
 
 -- | Comprehensive lifecycle status states for Repurchase Agreements.
@@ -104,6 +114,40 @@ template RepoAgreement
           status = RepoActive
           openingSettlementRef = Some settlementRef
 
+    -- | Custodian asks for the opening leg as a token-standard DvP: the
+    -- collateral from the seller's collateral account to the buyer, against
+    -- the purchase price from the buyer to the seller at `bank`. Seller and
+    -- buyer then allocate; SettleOpeningLeg settles it.
+    nonconsuming choice RequestOpeningLeg : LegRequested
+      with
+        bank : Party
+        -- ^ The bank that keeps the cash.
+        accounts : ExchangeAccounts
+        -- ^ The accounts; the seller's securities account is the collateral account.
+        settleBefore : Time
+      controller custodian
+      do
+        require (status == RepoPendingOpening) "Repo must be PendingOpening to request the opening leg"
+        require (accounts.delivererSecurities == unAccountId collateralAccountId)
+          "The opening leg delivers the collateral from the collateral account"
+        requestExchange (openingExchange this) bank accounts settleBefore
+
+    -- | Custodian settles the opening leg's DvP, and the repo becomes Active,
+    -- in one transaction.
+    choice SettleOpeningLeg : ContractId RepoAgreement
+      with
+        dvpCid : ContractId TokenDvpInstruction
+        batches : [RegistryBatch]
+        openRequests : [ContractId TokenDvpAllocationRequest]
+      controller custodian
+      do
+        require (status == RepoPendingOpening) "Repo must be PendingOpening to settle the opening leg"
+        let exchange = openingExchange this
+        _ <- settleExchange exchange dvpCid batches openRequests
+        create this with
+          status = RepoActive
+          openingSettlementRef = Some exchange.tradeId
+
     -- | Collateral substitution: replace active collateral with equivalent eligible collateral.
     choice SubstituteCollateral : ContractId RepoAgreement
       with
@@ -138,13 +182,47 @@ template RepoAgreement
         settlementRef : ReferenceId
       controller custodian
       do
-        now <- getTime
-        require (status == RepoPendingClosing || (status == RepoActive && now >= endDate))
-          "Closing leg requires seller initiation (PendingClosing) or a matured Active repo"
+        closable <- canClose this
+        require closable "Closing leg requires seller initiation (PendingClosing) or a matured Active repo"
         requireNonEmpty settlementRef "settlementRef"
         create this with
           status = RepoSettled
           closingSettlementRef = Some settlementRef
+
+    -- | Custodian asks for the closing leg as a token-standard DvP: the
+    -- collateral from the buyer back to the seller's collateral account,
+    -- against the repurchase price from the seller to the buyer at `bank`.
+    -- Allowed once the seller has initiated closing, or at/after maturity.
+    nonconsuming choice RequestClosingLeg : LegRequested
+      with
+        bank : Party
+        accounts : ExchangeAccounts
+        -- ^ The accounts; the seller receives the collateral in the collateral account.
+        settleBefore : Time
+      controller custodian
+      do
+        closable <- canClose this
+        require closable "Closing leg requires seller initiation (PendingClosing) or a matured Active repo"
+        require (accounts.receiverSecurities == unAccountId collateralAccountId)
+          "The closing leg returns the collateral to the collateral account"
+        requestExchange (closingExchange this) bank accounts settleBefore
+
+    -- | Custodian settles the closing leg's DvP, and the repo is Settled, in
+    -- one transaction.
+    choice SettleClosingLeg : ContractId RepoAgreement
+      with
+        dvpCid : ContractId TokenDvpInstruction
+        batches : [RegistryBatch]
+        openRequests : [ContractId TokenDvpAllocationRequest]
+      controller custodian
+      do
+        closable <- canClose this
+        require closable "Closing leg requires seller initiation (PendingClosing) or a matured Active repo"
+        let exchange = closingExchange this
+        _ <- settleExchange exchange dvpCid batches openRequests
+        create this with
+          status = RepoSettled
+          closingSettlementRef = Some exchange.tradeId
 
     -- | Roll / extend the repo term with updated rate and maturity date.
     choice RollRepo : ContractId RepoAgreement
@@ -194,3 +272,38 @@ template RepoAgreement
       controller buyer
       do
         return (status == RepoActive)
+
+-- | The opening leg: the collateral from the seller to the buyer, against
+-- the purchase price.
+openingExchange : RepoAgreement -> Exchange
+openingExchange repo = Exchange with
+  agent = repo.custodian
+  tradeId = repo.repoId <> "-OPENING"
+  deliverer = repo.seller
+  receiver = repo.buyer
+  custodian = repo.custodian
+  instrument = unISIN repo.isin
+  quantity = repo.collateralQuantity
+  currency = repo.currency
+  cashAmount = repo.purchasePrice
+
+-- | The closing leg: the collateral from the buyer back to the seller,
+-- against the repurchase price.
+closingExchange : RepoAgreement -> Exchange
+closingExchange repo = Exchange with
+  agent = repo.custodian
+  tradeId = repo.repoId <> "-CLOSING"
+  deliverer = repo.buyer
+  receiver = repo.seller
+  custodian = repo.custodian
+  instrument = unISIN repo.isin
+  quantity = repo.collateralQuantity
+  currency = repo.currency
+  cashAmount = repo.repurchasePrice
+
+-- | Whether the closing leg may settle: once the seller has initiated it, or
+-- at or after maturity.
+canClose : RepoAgreement -> Update Bool
+canClose repo = do
+  now <- getTime
+  pure (repo.status == RepoPendingClosing || (repo.status == RepoActive && now >= repo.endDate))

@@ -3,7 +3,7 @@
 [![Daml](https://img.shields.io/badge/Daml_SDK-3.5.12-blue.svg)](https://docs.digitalasset.com)
 [![Canton](https://img.shields.io/badge/Canton-3.5_(protocol_35)-green.svg)](deploy/canton/canton.conf)
 [![Release](https://img.shields.io/badge/Release-v3.3.0-purple.svg)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/dpm_test-379_passing-brightgreen.svg)](daml/test/AryaFi/Test)
+[![Tests](https://img.shields.io/badge/dpm_test-385_passing-brightgreen.svg)](daml/test/AryaFi/Test)
 [![Status](https://img.shields.io/badge/Status-Beta_/_Experimental-orange.svg)](docs/KNOWN_LIMITATIONS.md)
 [![Website](https://img.shields.io/badge/Vercel-Website-black.svg?logo=vercel)](https://aryafi-core.vercel.app)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
@@ -86,8 +86,8 @@ aryafi-core/
 │   ├── compliance-api/            # Compliance interface package (aryafi-compliance-api)
 │   └── test/                      # Test package (aryafi-core-test), depends on the production DAR
 │       ├── daml.yaml
-│       └── AryaFi/Test/           # Daml Script test suite (379 scripts, run by `dpm test`)
-│           ├── Unit/              # 20 unit suites across primitives, contracts & compliance
+│       └── AryaFi/Test/           # Daml Script test suite (385 scripts, run by `dpm test`)
+│           ├── Unit/              # 21 unit suites across primitives, contracts & compliance
 │           ├── Scenarios/         # 10 end-to-end multi-party lifecycle scenarios
 │           ├── Negative/          # Unauthorized access, violation & invalid transition tests
 │           ├── Privacy/           # Observer visibility tests
@@ -135,9 +135,9 @@ aryafi-core/
 
 ### 2. Financial Contracts (`AryaFi.Contracts`)
 - **`Proposal`**: Multi-party proposals. Parties on different nodes agree any AryaFi contract with several signatories, or exercise any choice several of them control (locking a position, rolling a repo, releasing an escrow), one signature at a time; the last signature carries the proposal out.
-- **`Loan`**: Credit facilities with interest computed from rate, day count, and ledger time; repayments are confirmed by the lender.
-- **`Repo` & `ReverseRepo`**: Repurchase agreements, DvP settlement legs, mark-to-market valuation, and closeout.
-- **`SecuritiesLending`**: Stock loans with jointly agreed fees, recalls that persist until satisfied, and pro-rata-capped collateral release.
+- **`Loan`**: Credit facilities with interest computed from rate, day count, and ledger time; drawdowns and repayments can move the cash as token-standard transfers, accepted as the loan records them.
+- **`Repo` & `ReverseRepo`**: Repurchase agreements whose opening and closing legs can settle as token-standard DvPs through the repo, mark-to-market valuation, and closeout.
+- **`SecuritiesLending`**: Stock loans delivered against cash collateral and returned against its pro-rata release as token-standard DvPs, with jointly agreed fees and recalls that persist until satisfied.
 - **`Margin`**: Initial and variation margin calls: the payer submits, the caller confirms receipt; default only after the deadline.
 - **`Subscription` & `Redemption`**: Institutional private credit fund commitments, capital calls, liquidity gates, and NAV redemptions.
 - **`Transfer`, `Pledge` & `Escrow`**: Compliance-gated transfers, tri-party pledges that lock the pledged position to the pledgee until release or enforcement, and conditional holding.
@@ -164,7 +164,7 @@ aryafi-core/
 # Build both packages: aryafi-core (production) and aryafi-core-test
 dpm build --all
 
-# Run the test suite (379 scripts); --all includes the production templates in the coverage report
+# Run the test suite (385 scripts); --all includes the production templates in the coverage report
 cd daml/test
 dpm test --all --show-coverage
 ```
