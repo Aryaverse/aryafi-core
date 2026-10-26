@@ -155,11 +155,11 @@ testEncumberChecks = script do
   f <- setup "PLG-CHECKS"
   let tryEncumber pledgeCid holdingCid = exerciseCmd pledgeCid EncumberHolding with holdingCid
   small <- pledgeOf f.custodian f.pledgor f.pledgee "PLG-CHECKS-BIG" bond pledgorAccount 6000000.0
-  submitFailsWith "less than the pledged" [f.pledgor] (tryEncumber small f.bondHolding)
+  submitFailsWith "is less than 6000000.0" [f.pledgor] (tryEncumber small f.bondHolding)
   otherAsset <- pledgeOf f.custodian f.pledgor f.pledgee "PLG-CHECKS-ASSET" "US0000000000" pledgorAccount 1000.0
   submitFailsWith "a different asset" [f.pledgor] (tryEncumber otherAsset f.bondHolding)
   otherAccount <- pledgeOf f.custodian f.pledgor f.pledgee "PLG-CHECKS-ACCOUNT" bond "ACC-ELSEWHERE" 1000.0
-  submitFailsWith "not in the pledge's account" [f.pledgor] (tryEncumber otherAccount f.bondHolding)
+  submitFailsWith "not in account ACC-ELSEWHERE" [f.pledgor] (tryEncumber otherAccount f.bondHolding)
   stranger <- allocateTestParty "Stranger" "PLG-CHECKS"
   theirs <- toInterfaceContractId <$> setupSecurityPosition f.custodian stranger (AccountId pledgorAccount) 5000000.0
   -- (the pledgor cannot even see someone else's position)

@@ -51,6 +51,7 @@ Choices of AryaFi's compliance interface (`CompliancePolicy_*`, in the `aryafi-c
 | **`CollateralPosition`** (Collateral.daml) | `collateralProvider, collateralReceiver, custodian` | `observers` | `GetCollateralValue` *(read-only)* | `custodian` | Compute the post-haircut collateral value |
 |  |  |  | `RevalueCollateral` | `custodian` | Revalue the collateral position to reflect current market prices |
 |  |  |  | `SubstituteCollateral` | `collateralProvider, collateralReceiver` | Substitute the collateral with a different eligible asset |
+|  |  |  | `LockCollateralHolding` | `collateralProvider` | Provider locks the collateral asset to the receiver, which activates the collateral: `holdingCid` must be its unlocked security position of the ISIN in the collateral account at the custodian, of at least the quantity |
 |  |  |  | `ActivateCollateral` | `custodian` | Activate collateral after the underlying asset has been confirmed locked |
 |  |  |  | `ReleaseCollateral` | `collateralProvider, collateralReceiver` | Release this collateral position |
 |  |  |  | `LiquidateCollateral` | `collateralReceiver` | Liquidate collateral following an event of default |
@@ -144,6 +145,8 @@ Choices of AryaFi's compliance interface (`CompliancePolicy_*`, in the `aryafi-c
 |  |  |  | `IsLoanActive` *(read-only)* | `lender` | Nonconsuming query to check if the loan is active and operational |
 | **`MarginCall`** (Margin.daml) | `caller, payer` | `custodian, observers` | `SatisfyWithCash` | `payer` | Payer submits a cash payment against the margin call |
 |  |  |  | `SatisfyWithPledge` | `payer` | Payer submits an AssetPledge collateral perfection against the call |
+|  |  |  | `SatisfyWithTransfer` | `payer` | Payer submits a pending token-standard transfer of the required cash to the caller, instructed through its bank's transfer factory |
+|  |  |  | `AcceptMarginTransfer` | `caller` | Caller accepts the submitted transfer, receiving the cash, and the call is satisfied, in one transaction |
 |  |  |  | `ConfirmMarginReceipt` | `caller` | Caller confirms receipt of the submitted cash or pledge |
 |  |  |  | `RejectMarginFulfilment` | `caller` | Caller rejects a submitted fulfilment (e.g. payment not received); the call returns to Issued |
 |  |  |  | `DisputeMarginCall` | `payer` | Payer formally disputes the margin call calculation within deadline |
@@ -280,7 +283,7 @@ These principles hold for the current code and are covered by the negative and a
 - Across separate Canton participants, multi-signatory contracts and joint choices need a `MultiPartyProposal`; without one they need all their parties in one submission. Token-standard transfers and `TokenDvpInstruction` need neither.
 - KYC attestations, sanctions attestations, transfer restriction rules, and ownership restrictions can be evaluated by business workflows through `CompliancePolicy`; eligibility policies and jurisdiction profiles cannot yet. The policies' own evaluation choices (`IsKycValid`, `IsSanctionsClear`, `EvaluateEligibility`, `EvaluateTransfer`, `CheckOwnershipLimit`) remain controlled by the policy owner.
 - A workflow evaluates the evidence its caller supplies. Missing evidence is refused, but the workflow cannot tell that a party has a second, worse attestation, or that a rule by another accepted officer was left out.
-- Loans, repos, collateral, margin calls, and pledges that are not encumbered reference assets and payments by text reference rather than contract ID, so the ledger does not prevent one asset being referenced by several agreements. An encumbered pledge holds the pledged position, locked to the pledgee.
+- Loans, repos, margin calls satisfied by reference, and pledges and collateral that are not locked reference assets and payments by text reference rather than contract ID, so the ledger does not prevent one asset being referenced by several agreements. A locked pledge or collateral position holds its position, locked to the pledgee or receiver, and a margin call paid by transfer receives the cash.
 
 ## 5. Regenerating This Matrix
 

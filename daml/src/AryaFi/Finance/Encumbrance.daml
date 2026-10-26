@@ -1,0 +1,79 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Locking a cash or security position to the party a financing agreement
+-- secures: a pledgee, or the receiver of collateral. A locked position
+-- cannot be moved, split, locked for anything else, or unlocked by its owner;
+-- only the lock holder can unlock it or deliver it. The agreement holds the
+-- locked position's contract ID instead of a text reference to the asset.
+module AryaFi.Finance.Encumbrance
+  ( Encumbrance(..)
+  , encumber
+  , unencumber
+  ) where
+
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
+import AryaFi.Common.Errors (require)
+import AryaFi.Finance.Cash (UnlockCash(..))
+import AryaFi.Finance.Security (UnlockSecurity(..))
+import AryaFi.Finance.TokenRegistry
+
+-- | What an agreement locks, and to whom.
+data Encumbrance = Encumbrance
+  with
+    owner : Party
+    -- ^ Owner of the position, who keeps it while it is locked.
+    keeper : Party
+    -- ^ The bank or custodian that keeps the position.
+    accountId : Text
+    -- ^ The owner's account at the keeper.
+    instrumentId : Text
+    -- ^ The currency or ISIN.
+    amount : Decimal
+    -- ^ The amount or quantity to lock.
+    holder : Party
+    -- ^ The lock holder: the party the agreement secures.
+    reference : Text
+    -- ^ The lock reference, naming the agreement.
+    label : Text
+    -- ^ How errors name the position, e.g. "Pledged holding".
+  deriving (Eq, Show)
+
+-- | Lock `encumbrance.amount` of the position `holdingCid` to the holder:
+-- it must be the owner's unlocked position of the instrument in the account
+-- at the keeper, of at least that amount. Returns the locked position and,
+-- if the position held more, the rest, unlocked, for the owner. Needs the
+-- authority of the owner and the keeper.
+encumber
+  : Encumbrance -> ContractId HoldingV2.Holding
+  -> Update (ContractId HoldingV2.Holding, Optional (ContractId HoldingV2.Holding))
+encumber e holdingCid = do
+  position <- fetchPosition holdingCid
+  let holding = positionView position
+      label = e.label <> ": "
+  require (holding.account.owner == Some e.owner) (label <> "not owned by " <> partyToText e.owner)
+  require (holding.account.provider == Some e.keeper && holding.instrumentId.admin == e.keeper)
+    (label <> "not kept by " <> partyToText e.keeper)
+  require (holding.account.id == e.accountId) (label <> "not in account " <> e.accountId)
+  require (holding.instrumentId.id == e.instrumentId) (label <> "a different asset")
+  require (holding.lock == None) (label <> "already locked")
+  require (holding.amount >= e.amount)
+    (label <> show holding.amount <> " is less than " <> show e.amount)
+  archivePosition position
+  lockedCid <- createPosition position e.owner e.accountId e.amount (Some (e.holder, e.reference))
+    (positionObservers position)
+  changeCid <-
+    if holding.amount > e.amount
+    then Some <$> createPosition position e.owner e.accountId (holding.amount - e.amount) None
+      (positionObservers position)
+    else pure None
+  pure (lockedCid, changeCid)
+
+-- | Unlock a locked position for its owner, keeping its observers. Needs the
+-- authority of the lock holder.
+unencumber : ContractId HoldingV2.Holding -> Update (ContractId HoldingV2.Holding)
+unencumber cid = do
+  position <- fetchPosition cid
+  case position of
+    CashHolding cashCid _ -> toInterfaceContractId <$> exercise cashCid UnlockCash
+    SecurityHolding securityCid _ -> toInterfaceContractId <$> exercise securityCid UnlockSecurity

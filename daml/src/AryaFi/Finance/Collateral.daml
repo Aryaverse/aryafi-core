@@ -8,16 +8,25 @@
 -- and provides controlled choices for substitution, revaluation, and release.
 --
 -- Usage pattern:
---   1. Provider locks a SecurityPosition or AssetHolding (gets a lockRef).
---   2. Provider creates a CollateralPosition referencing that lockRef.
+--   1. Provider, receiver, and custodian create an Allocated CollateralPosition.
+--   2. The provider locks its security position to the receiver with
+--      LockCollateralHolding, which activates the collateral. (Without it, the
+--      custodian activates the collateral with ActivateCollateral once the
+--      asset is locked by other means, and the position is referenced only by
+--      its lockReference.)
 --   3. The financing contract references the CollateralPosition by contract ID.
---   4. On obligation discharge, ReleaseCollateral is exercised, which should
---      trigger UnlockSecurity on the underlying position.
+--   4. Releasing the collateral unlocks the position for the provider;
+--      liquidating it delivers the position to the receiver's account; a
+--      substitution locks the new asset's position and unlocks the old one.
 module AryaFi.Finance.Collateral where
 
+import DA.Foldable (forA_, mapA_)
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
 import AryaFi.Common.Types (Amount, Rate, Currency, AssetClass)
-import AryaFi.Common.Identifiers (AccountId, ISIN, ExternalRef)
+import AryaFi.Common.Identifiers (AccountId(..), ISIN(..), ExternalRef)
 import AryaFi.Common.Errors (require, requirePositive, requireNonNegative)
+import AryaFi.Finance.Encumbrance
+import AryaFi.Finance.TokenRegistry (deliverLocked)
 
 -- ---------------------------------------------------------------------------
 -- Collateral Status State Machine
@@ -46,6 +55,15 @@ data CollateralStatus
 -- open to revaluation, substitution, dispute, release, or liquidation).
 isLiveCollateral : CollateralStatus -> Bool
 isLiveCollateral s = s == Active || s == Substituted
+
+-- | The result of locking a collateral asset.
+data CollateralLocked = CollateralLocked
+  with
+    collateralCid : ContractId CollateralPosition
+    -- ^ The collateral, now Active and holding the locked position.
+    changeCid : Optional (ContractId HoldingV2.Holding)
+    -- ^ What the holding held beyond the quantity, back with the provider.
+  deriving (Eq, Show)
 
 -- ---------------------------------------------------------------------------
 -- CollateralPosition Template
@@ -95,6 +113,9 @@ template CollateralPosition
     -- ^ Tri-party or CSD system reference for this collateral position.
     observers : [Party]
     -- ^ Observers with read access (e.g. tri-party agent, trade repository).
+    lockedHoldingCid : Optional (ContractId HoldingV2.Holding)
+    -- ^ The collateral asset's security position, locked to the receiver,
+    --   once the provider has locked it (LockCollateralHolding).
   where
     signatory collateralProvider, collateralReceiver, custodian
     observer observers
@@ -123,6 +144,8 @@ template CollateralPosition
           "Can only revalue Allocated, Active, or Substituted collateral"
         requirePositive newMarketValue "newMarketValue"
         requirePositive newQuantity "newQuantity"
+        require (lockedHoldingCid == None || newQuantity == quantity)
+          "The collateral holds a locked position: substitute it to change the quantity"
         create this with
           marketValue = newMarketValue
           quantity = newQuantity
@@ -140,6 +163,9 @@ template CollateralPosition
         newHaircut : Rate
         newAssetClass : AssetClass
         newLockReference : Text
+        newHoldingCid : Optional (ContractId HoldingV2.Holding)
+        -- ^ The new asset's position in the collateral account, of exactly
+        --   newQuantity, to lock in place of the locked one.
       controller collateralProvider, collateralReceiver
       do
         require (isLiveCollateral status) "Substitution only allowed on Active or Substituted collateral"
@@ -147,6 +173,16 @@ template CollateralPosition
         requirePositive newMarketValue "newMarketValue"
         requireNonNegative newHaircut "newHaircut"
         require (newHaircut < 1.0) "Haircut must be less than 100%"
+        require (lockedHoldingCid == None || newHoldingCid /= None)
+          "The collateral holds a locked position: give the new asset's position to substitute it"
+        let replaced = this with isin = newIsin; quantity = newQuantity; lockReference = newLockReference
+        newLocked <- case newHoldingCid of
+          None -> pure None
+          Some cid -> do
+            (lockedCid, changeCid) <- lockCollateral replaced cid
+            require (changeCid == None) "The new asset's position must be exactly the new quantity"
+            pure (Some lockedCid)
+        mapA_ unencumber lockedHoldingCid
         create this with
           isin = newIsin
           quantity = newQuantity
@@ -155,6 +191,25 @@ template CollateralPosition
           assetClass = newAssetClass
           lockReference = newLockReference
           status = Substituted
+          lockedHoldingCid = newLocked
+
+    -- | Provider locks the collateral asset to the receiver, which activates
+    -- the collateral: `holdingCid` must be its unlocked security position of
+    -- the ISIN in the collateral account at the custodian, of at least the
+    -- quantity. The quantity is locked under lockReference, and any more goes
+    -- back to the provider.
+    choice LockCollateralHolding : CollateralLocked
+      with
+        holdingCid : ContractId HoldingV2.Holding
+      controller collateralProvider
+      do
+        require (status == Allocated) "Can only lock the asset of Allocated collateral"
+        require (lockReference /= "") "The collateral needs a lockReference to lock its asset under"
+        (lockedCid, changeCid) <- lockCollateral this holdingCid
+        collateralCid <- create this with
+          status = Active
+          lockedHoldingCid = Some lockedCid
+        pure CollateralLocked with collateralCid; changeCid
 
     -- | Activate collateral after the underlying asset has been confirmed locked.
     -- Transitions from Allocated → Active.
@@ -166,22 +221,35 @@ template CollateralPosition
 
     -- | Release this collateral position. Called when the secured obligation
     -- is discharged or the financing contract is terminated.
-    -- Both provider and receiver must agree to release.
+    -- Both provider and receiver must agree to release. A locked position is
+    -- unlocked for the provider.
     choice ReleaseCollateral : ContractId CollateralPosition
       controller collateralProvider, collateralReceiver
       do
         require (isLiveCollateral status)
           "Can only release Active or Substituted collateral"
-        create this with status = Released
+        mapA_ unencumber lockedHoldingCid
+        create this with
+          status = Released
+          lockedHoldingCid = None
 
     -- | Liquidate collateral following an event of default.
-    -- Only the collateral receiver can initiate liquidation.
+    -- Only the collateral receiver can initiate liquidation. A locked position
+    -- is delivered to the receiver's `liquidationAccountId` at the custodian.
     choice LiquidateCollateral : ContractId CollateralPosition
+      with
+        liquidationAccountId : Optional AccountId
+        -- ^ The receiver's account for the locked position, if there is one.
       controller collateralReceiver
       do
         require (isLiveCollateral status)
           "Can only liquidate Active or Substituted collateral"
-        create this with status = Liquidated
+        forA_ lockedHoldingCid \cid -> case liquidationAccountId of
+          Some (AccountId account) -> deliverLocked cid collateralReceiver account
+          None -> abort "The collateral holds a locked position: name the receiver's account to deliver it to"
+        create this with
+          status = Liquidated
+          lockedHoldingCid = None
 
     -- | Raise a valuation dispute on this collateral position.
     -- Raised by the collateral provider against the custodian's valuation.
@@ -213,3 +281,18 @@ template CollateralPosition
       do
         require (newObserver `notElem` observers) "Party is already an observer"
         create this with observers = newObserver :: observers
+
+-- | Lock the collateral's quantity of the provider's position `holdingCid` to
+-- the receiver, and return the locked position and any change.
+lockCollateral
+  : CollateralPosition -> ContractId HoldingV2.Holding
+  -> Update (ContractId HoldingV2.Holding, Optional (ContractId HoldingV2.Holding))
+lockCollateral collateral = encumber Encumbrance with
+  owner = collateral.collateralProvider
+  keeper = collateral.custodian
+  accountId = unAccountId collateral.accountId
+  instrumentId = unISIN collateral.isin
+  amount = collateral.quantity
+  holder = collateral.collateralReceiver
+  reference = collateral.lockReference
+  label = "Collateral holding"

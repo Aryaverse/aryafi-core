@@ -5,6 +5,9 @@
 --
 -- Supports Initial Margin (IM) and Variation Margin (VM) workflows:
 --   - Cash margin settlement or AssetPledge collateral perfection
+--   - Cash margin as a token-standard transfer: the payer sends the cash to
+--     the caller through its bank's transfer factory and submits the pending
+--     transfer; the caller accepts it and confirms receipt in one transaction
 --   - Two-step fulfilment: payer submits, caller confirms receipt
 --   - Formal dispute arbitration and agreed adjustment
 --   - Deadline enforcement: default can only be declared after the deadline
@@ -15,6 +18,8 @@ import AryaFi.Common.Types (Amount, Currency)
 import AryaFi.Common.Identifiers (ReferenceId, CorrelationId)
 import AryaFi.Common.Errors (require, requirePositive, requireNonEmpty)
 import qualified DA.List as List
+import Splice.Api.Token.MetadataV1 (ExtraArgs)
+import Splice.Api.Token.TransferInstructionV2
 
 -- | Classification of margin requirement.
 data MarginType
@@ -30,6 +35,8 @@ data MarginFulfillmentType
     -- ^ Fulfilled via cash settlement reference.
   | CollateralPledgeMargin ReferenceId
     -- ^ Fulfilled via AssetPledge contract reference.
+  | TransferMargin (ContractId TransferInstruction)
+    -- ^ Fulfilled via a token-standard transfer of the cash to the caller.
   deriving (Eq, Show)
 
 -- | Lifecycle states of a margin call.
@@ -110,17 +117,61 @@ template MarginCall
         create this with
           status = MarginCallPendingConfirmation (CollateralPledgeMargin pledgeRef)
 
-    -- | Caller confirms receipt of the submitted cash or pledge.
+    -- | Payer submits a pending token-standard transfer of the required cash to
+    -- the caller, instructed through its bank's transfer factory. The call is
+    -- satisfied when the caller accepts the transfer (AcceptMarginTransfer).
+    choice SatisfyWithTransfer : ContractId MarginCall
+      with
+        instructionCid : ContractId TransferInstruction
+      controller payer
+      do
+        require (status == MarginCallIssued || isDisputed status)
+          "Margin call must be Issued or Disputed to satisfy"
+        instruction <- view <$> fetch instructionCid
+        let transfer = instruction.transfer
+        require (transfer.sender.owner == Some payer) "Margin transfer: not sent by the payer"
+        require (transfer.receiver.owner == Some caller) "Margin transfer: not sent to the caller"
+        require (transfer.instrumentId.id == currency) "Margin transfer: not in the margin currency"
+        require (transfer.amount >= requiredAmount)
+          ("Margin transfer: " <> show transfer.amount <> " is less than the required " <> show requiredAmount)
+        create this with
+          status = MarginCallPendingConfirmation (TransferMargin instructionCid)
+
+    -- | Caller accepts the submitted transfer, receiving the cash, and the
+    -- call is satisfied, in one transaction. `extraArgs` is the choice
+    -- context the cash's registry asks for, such as compliance evidence. If
+    -- the registry refuses the transfer, the cash goes back to the payer and
+    -- the call returns to Issued.
+    choice AcceptMarginTransfer : ContractId MarginCall
+      with
+        extraArgs : ExtraArgs
+      controller caller
+      do
+        instructionCid <- case status of
+          MarginCallPendingConfirmation (TransferMargin cid) -> pure cid
+          _ -> abort "Margin call has no submitted transfer awaiting acceptance"
+        result <- exercise instructionCid TransferInstruction_Accept with actors = [caller]; extraArgs
+        case result.output of
+          TransferInstructionResult_Completed _ ->
+            create this with status = MarginCallSatisfied (TransferMargin instructionCid)
+          TransferInstructionResult_Failed -> create this with status = MarginCallIssued
+          TransferInstructionResult_Pending _ -> abort "The margin transfer is still pending at its registry"
+
+    -- | Caller confirms receipt of the submitted cash or pledge. A submitted
+    -- transfer is accepted with AcceptMarginTransfer instead.
     choice ConfirmMarginReceipt : ContractId MarginCall
       controller caller
       do
         case status of
+          MarginCallPendingConfirmation (TransferMargin _) ->
+            abort "Accept the submitted margin transfer with AcceptMarginTransfer"
           MarginCallPendingConfirmation fulfilment ->
             create this with status = MarginCallSatisfied fulfilment
           _ -> abort "Margin call has no submitted fulfilment awaiting confirmation"
 
     -- | Caller rejects a submitted fulfilment (e.g. payment not received);
-    -- the call returns to Issued.
+    -- the call returns to Issued. A submitted transfer stays pending at its
+    -- registry: the caller rejects it there, or the payer withdraws it.
     choice RejectMarginFulfilment : ContractId MarginCall
       with
         reason : Text

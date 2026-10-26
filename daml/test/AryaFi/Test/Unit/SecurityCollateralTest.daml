@@ -59,6 +59,7 @@ mkCollateral provider receiver custodian accId qty mv haircut =
       status = Allocated
       externalRef = None
       observers = []
+      lockedHoldingCid = None
 
 -- ---------------------------------------------------------------------------
 -- SecurityPosition Tests
@@ -331,6 +332,7 @@ testCollateralSubstitution = script do
       newHaircut = 0.03
       newAssetClass = GovernmentSecurity
       newLockReference = "LOCK-SUBSTITUTE-001"
+      newHoldingCid = None
 
   subData <- queryContractId receiver subCid
   case subData of
@@ -369,7 +371,7 @@ testCollateralLiquidation = script do
   activeCid <- submit custodian do exerciseCmd collCid ActivateCollateral
 
   liqCid <- submit receiver do
-    exerciseCmd activeCid LiquidateCollateral
+    exerciseCmd activeCid LiquidateCollateral with liquidationAccountId = None
 
   liqData <- queryContractId provider liqCid
   case liqData of
@@ -425,6 +427,7 @@ testSubstitutionRequiresActive = script do
       newHaircut = 0.02
       newAssetClass = GovernmentSecurity
       newLockReference = "LOCK-001"
+      newHoldingCid = None
 
 -- Negative: provider cannot liquidate (only receiver can)
 testOnlyReceiverCanLiquidate : Script ()
@@ -438,7 +441,7 @@ testOnlyReceiverCanLiquidate = script do
   activeCid <- submit custodian do exerciseCmd collCid ActivateCollateral
 
   submitMustFail provider do
-    exerciseCmd activeCid LiquidateCollateral
+    exerciseCmd activeCid LiquidateCollateral with liquidationAccountId = None
 
 -- Negative: ensure rejects invalid haircut (>= 1.0)
 testCollateralEnsureHaircutRange : Script ()
@@ -464,6 +467,7 @@ testCollateralEnsureHaircutRange = script do
       status = Allocated
       externalRef = None
       observers = []
+      lockedHoldingCid = None
 
 -- ---------------------------------------------------------------------------
 -- Entry Point

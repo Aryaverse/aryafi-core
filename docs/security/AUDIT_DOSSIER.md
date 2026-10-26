@@ -54,11 +54,11 @@ Each invariant below is argued from the code and exercised by a named test. They
 - A pending token-standard transfer locks the amount to the registry (the bank or custodian). It is delivered to the receiver on acceptance, before `executeBefore`, or unlocked for the sender on rejection or withdrawal.
 - A token-standard allocation locks its funding to the registry, shown to the settlement's executors. It is consumed on settlement, before the settlement deadline, or unlocked for the owner when the executors cancel the allocation or the owner withdraws it (a committed allocation only after its deadline).
 
-- An encumbered `AssetPledge` locks the pledged position to the pledgee. Releasing the pledge unlocks it for the pledgor, enforcing it delivers it to the pledgee, and a substitution locks the new asset's position before unlocking the old one.
+- An encumbered `AssetPledge` locks the pledged position to the pledgee, and a locked `CollateralPosition` locks its position to the receiver, through the same checks (`AryaFi.Finance.Encumbrance`). Releasing unlocks the position for its owner, enforcing or liquidating delivers it to the pledgee or receiver, and a substitution locks the new asset's position before unlocking the old one. The custodian cannot change the quantity of locked collateral by revaluing it.
 
-*Scope limit*: this invariant covers positions. It prevents double-pledging only for encumbered pledges: a pledge that is not encumbered, `CollateralPosition`, and `MarginCall` reference assets by text, so the ledger does not link them to a locked position.
+*Scope limit*: this invariant covers positions. It prevents double-pledging only for locked pledges and collateral: a pledge or collateral position that is not locked, and a `MarginCall` satisfied by reference, name assets by text, so the ledger does not link them to a locked position.
 
-*Tests*: `Scenarios/DvpSettlementTest.daml` (`testLockedLegsCannotBeWithdrawn`), `Authorization/MultiSignatoryTest.daml`, `Negative/UnauthorizedAccessTest.daml`, `Unit/TokenTransferTest.daml` (`testTransferChecks`, `testExpiredTransfer`), `Unit/TokenAllocationTest.daml` (`testCancelAndWithdraw`, `testCommittedAllocation`), `Unit/PledgedHoldingTest.daml` (`testDoublePledgeRefused`, `testEncumberAndRelease`, `testEnforcementDeliversToPledgee`).
+*Tests*: `Scenarios/DvpSettlementTest.daml` (`testLockedLegsCannotBeWithdrawn`), `Authorization/MultiSignatoryTest.daml`, `Negative/UnauthorizedAccessTest.daml`, `Unit/TokenTransferTest.daml` (`testTransferChecks`, `testExpiredTransfer`), `Unit/TokenAllocationTest.daml` (`testCancelAndWithdraw`, `testCommittedAllocation`), `Unit/PledgedHoldingTest.daml` (`testDoublePledgeRefused`, `testEncumberAndRelease`, `testEnforcementDeliversToPledgee`), `Unit/CollateralAndMarginTest.daml` (`testCollateralCannotBeReused`, `testCollateralLockAndRelease`, `testCollateralLiquidation`).
 
 ### Invariant 4: DvP Atomicity
 *Claim*: Either both legs of a DvP settle or neither does.
@@ -98,13 +98,13 @@ Token-standard settlement is atomic in the same way when the settlement agent se
 
 | Measure | Result |
 |:---|:---|
-| Test scripts | 371, all passing |
+| Test scripts | 379, all passing |
 | Templates created | 34 of 34 in `aryafi-core` (100%) |
-| Choices exercised | 162 of 229 in `aryafi-core` (70.7%), counting each template's implicit `Archive`; the report does not count interface choices (the token standard's and `CompliancePolicy`'s), which the tests exercise |
+| Choices exercised | 165 of 232 in `aryafi-core` (71.1%), counting each template's implicit `Archive`; the report does not count interface choices (the token standard's and `CompliancePolicy`'s), which the tests exercise |
 
 | Suite | Files | Focus |
 |:---|:---|:---|
-| `Unit/` | 19 | Types, day counts, primitives, contracts, pledged holdings, compliance policies and the compliance gate, token-standard holdings, transfers, and settlement, multi-party proposals for contracts and joint choices |
+| `Unit/` | 20 | Types, day counts, primitives, contracts, pledged holdings, collateral and margin on real assets, compliance policies and the compliance gate, token-standard holdings, transfers, and settlement, multi-party proposals for contracts and joint choices |
 | `Scenarios/` | 10 | End-to-end DvP (including through the token standard), repo, loan, securities lending, treasury, escrow, private credit, transfer |
 | `Negative/` | 3 | Unauthorized submitters, compliance violations, invalid state transitions |
 | `Authorization/` | 1 | Multi-signatory consent |

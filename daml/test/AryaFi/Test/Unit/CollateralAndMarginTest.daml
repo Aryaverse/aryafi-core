@@ -1,0 +1,274 @@
+-- Copyright (c) 2026 Aryaverse. All rights reserved.
+-- SPDX-License-Identifier: Apache-2.0
+
+-- | Collateral and margin on real assets. A collateral position holds the
+-- provider's security position, locked to the receiver, until it is
+-- released, liquidated, or substituted. A margin call is paid with a
+-- token-standard transfer of the cash, which the caller accepts in the same
+-- transaction that satisfies the call.
+module AryaFi.Test.Unit.CollateralAndMarginTest where
+
+import DA.List (sort)
+import DA.Time (addRelTime, days, minutes)
+import Daml.Script
+import qualified Splice.Api.Token.HoldingV2 as HoldingV2
+import Splice.Api.Token.MetadataV1 (emptyMetadata)
+import Splice.Api.Token.TransferInstructionV2
+import AryaFi.Common.Identifiers
+import AryaFi.Common.Types (AssetClass(..))
+import AryaFi.Compliance.Gate (ComplianceRequirements(..))
+import AryaFi.Contracts.Margin
+import AryaFi.Contracts.Pledge
+import qualified AryaFi.Common.Types as Types
+import AryaFi.Finance.Collateral
+import AryaFi.Finance.TokenTransfer
+import AryaFi.Test.Scenarios.DvpSettlementTest (allocateTestParty, bondIsin, setupCashPosition, setupSecurityPosition)
+import AryaFi.Compliance.KYC (KycStatus(..))
+import AryaFi.Test.Unit.ComplianceGateTest (evidenceArgs, submitWithEvidence)
+import AryaFi.Test.Unit.CompliancePolicyTest (Evidence, issueKyc)
+import AryaFi.Test.Unit.PledgedHoldingTest (holdingsOf)
+import AryaFi.Test.Unit.TokenTransferTest (submitFailsWith)
+
+-- ---------------------------------------------------------------------------
+-- Collateral
+-- ---------------------------------------------------------------------------
+
+data CollateralFixture = CollateralFixture
+  with
+    custodian : Party
+    provider : Party
+    receiver : Party
+    collateralCid : ContractId CollateralPosition
+    bondHolding : ContractId HoldingV2.Holding
+    -- ^ The provider's 6,000,000 of the bond, of which the collateral is 5,000,000.
+
+collateralAccount : Text
+collateralAccount = "ACC-COLL-PROVIDER"
+
+allocatedCollateral : Party -> Party -> Party -> Text -> Script (ContractId CollateralPosition)
+allocatedCollateral custodian provider receiver ref =
+  submit (actAs [provider, receiver, custodian]) do
+    createCmd CollateralPosition with
+      collateralProvider = provider; collateralReceiver = receiver; custodian
+      accountId = AccountId collateralAccount; assetClass = GovernmentSecurity; isin = bondIsin
+      quantity = 5000000.0; marketValue = 4980000.0; haircut = 0.02; settlementCurrency = "USD"
+      obligationRef = "REPO-" <> ref; lockReference = "COLL-" <> ref; status = Allocated
+      externalRef = None; observers = []; lockedHoldingCid = None
+
+setupCollateral : Text -> Script CollateralFixture
+setupCollateral test = do
+  custodian <- allocateTestParty "Custodian" test
+  provider <- allocateTestParty "Provider" test
+  receiver <- allocateTestParty "Receiver" test
+  bondHolding <- toInterfaceContractId <$>
+    setupSecurityPosition custodian provider (AccountId collateralAccount) 6000000.0
+  collateralCid <- allocatedCollateral custodian provider receiver test
+  pure CollateralFixture with ..
+
+lockBond : CollateralFixture -> Script CollateralLocked
+lockBond f = submit f.provider do
+  exerciseCmd f.collateralCid LockCollateralHolding with holdingCid = f.bondHolding
+
+-- Locking activates the collateral; release unlocks the position.
+testCollateralLockAndRelease : Script ()
+testCollateralLockAndRelease = script do
+  f <- setupCollateral "COLL-RELEASE"
+  locked <- lockBond f
+  Some collateral <- queryContractId f.receiver locked.collateralCid
+  assertMsg "Locking activates the collateral" (collateral.status == Active && collateral.lockedHoldingCid /= None)
+  holdings <- holdingsOf f.provider
+  assertMsg ("Expected 5,000,000 locked to the receiver and 1,000,000 free, got " <> show holdings)
+    (holdings == [(collateralAccount, 1000000.0, None), (collateralAccount, 5000000.0, Some [f.receiver])])
+
+  -- The custodian can revalue the collateral, but not change its quantity
+  submitFailsWith "substitute it to change the quantity" [f.custodian] do
+    exerciseCmd locked.collateralCid RevalueCollateral with newMarketValue = 4950000.0; newQuantity = 4000000.0
+  revalued <- submit f.custodian do
+    exerciseCmd locked.collateralCid RevalueCollateral with newMarketValue = 4950000.0; newQuantity = 5000000.0
+
+  released <- submit (actAs [f.provider, f.receiver]) do exerciseCmd revalued ReleaseCollateral
+  Some closed <- queryContractId f.receiver released
+  assertMsg "Released collateral holds nothing" (closed.status == Released && closed.lockedHoldingCid == None)
+  afterRelease <- holdingsOf f.provider
+  assertMsg ("Expected both positions free, got " <> show afterRelease)
+    (afterRelease == [(collateralAccount, 1000000.0, None), (collateralAccount, 5000000.0, None)])
+
+-- Liquidation delivers the locked position to the receiver.
+testCollateralLiquidation : Script ()
+testCollateralLiquidation = script do
+  f <- setupCollateral "COLL-LIQUIDATE"
+  locked <- lockBond f
+  submitFailsWith "name the receiver's account" [f.receiver] do
+    exerciseCmd locked.collateralCid LiquidateCollateral with liquidationAccountId = None
+  liquidated <- submit f.receiver do
+    exerciseCmd locked.collateralCid LiquidateCollateral with liquidationAccountId = Some (AccountId "ACC-COLL-RECEIVER")
+  Some collateral <- queryContractId f.receiver liquidated
+  assertMsg "Liquidated collateral holds nothing" (collateral.status == Liquidated && collateral.lockedHoldingCid == None)
+  receiverHoldings <- holdingsOf f.receiver
+  assertMsg ("Expected the receiver to hold 5,000,000, got " <> show receiverHoldings)
+    (receiverHoldings == [("ACC-COLL-RECEIVER", 5000000.0, None)])
+
+-- Substitution locks the new position and unlocks the old one.
+testCollateralSubstitution : Script ()
+testCollateralSubstitution = script do
+  f <- setupCollateral "COLL-SUBSTITUTE"
+  locked <- lockBond f
+  replacement <- toInterfaceContractId <$>
+    setupSecurityPosition f.custodian f.provider (AccountId collateralAccount) 4000000.0
+  let substitute newHoldingCid = exerciseCmd locked.collateralCid SubstituteCollateral with
+        newIsin = bondIsin; newQuantity = 4000000.0; newMarketValue = 3990000.0; newHaircut = 0.02
+        newAssetClass = GovernmentSecurity; newLockReference = "COLL-COLL-SUBSTITUTE-2"; newHoldingCid
+  submitFailsWith "give the new asset's position" [f.provider, f.receiver] (substitute None)
+  substituted <- submit (actAs [f.provider, f.receiver]) (substitute (Some replacement))
+  Some collateral <- queryContractId f.receiver substituted
+  assertMsg "The collateral is substituted" (collateral.status == Substituted && collateral.quantity == 4000000.0)
+  holdings <- holdingsOf f.provider
+  assertMsg ("Expected only the replacement locked, got " <> show holdings)
+    (holdings == sort [ (collateralAccount, 1000000.0, None), (collateralAccount, 5000000.0, None)
+                      , (collateralAccount, 4000000.0, Some [f.receiver]) ])
+
+-- A position locked as collateral cannot be locked again, as collateral or as a pledge.
+testCollateralCannotBeReused : Script ()
+testCollateralCannotBeReused = script do
+  f <- setupCollateral "COLL-REUSE"
+  locked <- lockBond f
+  Some collateral <- queryContractId f.provider locked.collateralCid
+  Some lockedCid <- pure collateral.lockedHoldingCid
+  second <- allocatedCollateral f.custodian f.provider f.receiver "COLL-REUSE-2"
+  submitFailsWith "Collateral holding: already locked" [f.provider] do
+    exerciseCmd second LockCollateralHolding with holdingCid = lockedCid
+  pledgeCid <- submit (actAs [f.provider, f.receiver, f.custodian]) do
+    createCmd AssetPledge with
+      pledgeId = "PLG-COLL-REUSE"; pledgor = f.provider; pledgee = f.receiver; custodian = f.custodian
+      accountId = AccountId collateralAccount; assetId = unISIN bondIsin; quantity = 5000000.0
+      perfectionReference = "UCC-1-COLL-REUSE"; correlationId = CorrelationId "CORR-COLL-REUSE"
+      status = Types.Active; enforceTimestamp = None; observers = []; pledgedHoldingCid = None
+  submitFailsWith "Pledged holding: already locked" [f.provider] do
+    exerciseCmd pledgeCid EncumberHolding with holdingCid = lockedCid
+  -- Only Allocated collateral locks its asset
+  submitFailsWith "Can only lock the asset of Allocated collateral" [f.provider] do
+    exerciseCmd locked.collateralCid LockCollateralHolding with holdingCid = lockedCid
+
+-- ---------------------------------------------------------------------------
+-- Margin calls paid by token-standard transfer
+-- ---------------------------------------------------------------------------
+
+data MarginFixture = MarginFixture
+  with
+    bank : Party
+    caller : Party
+    payer : Party
+    other : Party
+    factoryCid : ContractId PositionTransferFactory
+    payerCash : ContractId HoldingV2.Holding
+    -- ^ The payer's 2,000,000 USD; the call is for 1,500,000.
+    callCid : ContractId MarginCall
+
+setupMargin : Text -> Optional ComplianceRequirements -> Script MarginFixture
+setupMargin test compliance = do
+  bank <- allocateTestParty "Bank" test
+  caller <- allocateTestParty "Caller" test
+  payer <- allocateTestParty "Payer" test
+  other <- allocateTestParty "Other" test
+  factoryCid <- submit bank do
+    createCmd PositionTransferFactory with admin = bank; clients = [caller, payer, other]; compliance
+  payerCash <- toInterfaceContractId <$> setupCashPosition bank payer (AccountId "ACC-PAYER") 2000000.0
+  now <- getTime
+  callCid <- submit (actAs [caller, payer]) do
+    createCmd MarginCall with
+      marginCallId = "MC-" <> test; caller; payer; custodian = bank; marginType = VariationMargin
+      relatedAgreementRef = "REPO-" <> test; currency = "USD"; requiredAmount = 1500000.0
+      deadline = addRelTime now (days 1); status = MarginCallIssued
+      correlationId = CorrelationId ("CORR-" <> test); observers = []
+  pure MarginFixture with ..
+
+-- | The payer instructs a transfer of `amount` USD from `holding` to
+-- `receiver`, passing `evidence` to the bank; returns the pending
+-- instruction and the payer's change.
+sendMargin
+  : MarginFixture -> Party -> Decimal -> ContractId HoldingV2.Holding -> [Evidence]
+  -> Script (ContractId TransferInstruction, [ContractId HoldingV2.Holding])
+sendMargin f receiver amount holding evidence = do
+  now <- getTime
+  result <- submitWithEvidence f.payer evidence do
+    exerciseCmd (toInterfaceContractId @TransferFactory f.factoryCid) TransferFactory_Transfer with
+      transfer = Transfer with
+        sender = HoldingV2.Account with owner = Some f.payer; provider = Some f.bank; id = "ACC-PAYER"
+        receiver = HoldingV2.Account with owner = Some receiver; provider = Some f.bank; id = "ACC-MARGIN"
+        amount
+        instrumentId = HoldingV2.InstrumentId with admin = f.bank; id = "USD"
+        requestedAt = addRelTime now (minutes (-1))
+        executeBefore = addRelTime now (days 1)
+        inputHoldingCids = [holding]
+        meta = emptyMetadata
+      actors = [f.payer]
+      extraArgs = evidenceArgs evidence
+  case result.output of
+    TransferInstructionResult_Pending cid -> pure (cid, result.senderChangeCids)
+    other -> abort ("Expected a pending transfer, got " <> show other)
+
+-- The caller accepts the posted cash and the call is satisfied, in one transaction.
+testMarginPaidByTransfer : Script ()
+testMarginPaidByTransfer = script do
+  f <- setupMargin "MC-TRANSFER" None
+  (instructionCid, _) <- sendMargin f f.caller 1500000.0 f.payerCash []
+  submitted <- submit f.payer do exerciseCmd f.callCid SatisfyWithTransfer with instructionCid
+  submitFailsWith "Accept the submitted margin transfer with AcceptMarginTransfer" [f.caller] do
+    exerciseCmd submitted ConfirmMarginReceipt
+  satisfied <- submit f.caller do exerciseCmd submitted AcceptMarginTransfer with extraArgs = evidenceArgs []
+  Some call <- queryContractId f.caller satisfied
+  assertMsg ("Expected the call satisfied, got " <> show call.status)
+    (call.status == MarginCallSatisfied (TransferMargin instructionCid))
+  callerHoldings <- holdingsOf f.caller
+  assertMsg ("Expected the caller to hold the margin, got " <> show callerHoldings)
+    (callerHoldings == [("ACC-MARGIN", 1500000.0, None)])
+  payerHoldings <- holdingsOf f.payer
+  assertMsg ("Expected the payer to keep its change, got " <> show payerHoldings)
+    (payerHoldings == [("ACC-PAYER", 500000.0, None)])
+
+-- The posted transfer must come from the payer, go to the caller, and cover the call.
+testMarginTransferChecks : Script ()
+testMarginTransferChecks = script do
+  f <- setupMargin "MC-CHECKS" None
+  submitFailsWith "Margin call has no submitted transfer awaiting acceptance" [f.caller] do
+    exerciseCmd f.callCid AcceptMarginTransfer with extraArgs = evidenceArgs []
+  (short, [change]) <- sendMargin f f.caller 1000000.0 f.payerCash []
+  submitFailsWith "is less than the required 1500000.0" [f.payer] do
+    exerciseCmd f.callCid SatisfyWithTransfer with instructionCid = short
+  (elsewhere, _) <- sendMargin f f.other 1000000.0 change []
+  submitFailsWith "Margin transfer: not sent to the caller" [f.payer] do
+    exerciseCmd f.callCid SatisfyWithTransfer with instructionCid = elsewhere
+
+-- If the bank refuses the transfer when the caller accepts it, the cash goes
+-- back to the payer and the call returns to Issued.
+testRefusedMarginTransfer : Script ()
+testRefusedMarginTransfer = script do
+  kycAuthority <- allocateTestParty "KycAuthority" "MC-REFUSED"
+  let requirements = ComplianceRequirements with
+        kycAuthorities = [kycAuthority]; sanctionsAuthorities = []; transferRuleOfficers = []
+        ownershipRegulators = []; restrictedInstruments = []
+  f <- setupMargin "MC-REFUSED" (Some requirements)
+  payerKyc <- issueKyc kycAuthority f.payer KycVerified 365
+  callerKyc <- issueKyc kycAuthority f.caller KycVerified 365
+  (instructionCid, _) <- sendMargin f f.caller 1500000.0 f.payerCash [payerKyc, callerKyc]
+  submitted <- submit f.payer do exerciseCmd f.callCid SatisfyWithTransfer with instructionCid
+  -- The caller accepts without the evidence the bank asks for
+  reissued <- submit f.caller do exerciseCmd submitted AcceptMarginTransfer with extraArgs = evidenceArgs []
+  Some call <- queryContractId f.caller reissued
+  assertMsg ("Expected the call issued again, got " <> show call.status) (call.status == MarginCallIssued)
+  payerHoldings <- holdingsOf f.payer
+  assertMsg ("Expected the cash back with the payer, got " <> show payerHoldings)
+    (sort payerHoldings == [("ACC-PAYER", 500000.0, None), ("ACC-PAYER", 1500000.0, None)])
+  callerHoldings <- holdingsOf f.caller
+  assertMsg "The caller received nothing" (null callerHoldings)
+
+-- | Every test in this module, for running against a participant: none sets time.
+runCollateralAndMarginTests : Script ()
+runCollateralAndMarginTests = script do
+  testCollateralLockAndRelease
+  testCollateralLiquidation
+  testCollateralSubstitution
+  testCollateralCannotBeReused
+  testMarginPaidByTransfer
+  testMarginTransferChecks
+  testRefusedMarginTransfer
