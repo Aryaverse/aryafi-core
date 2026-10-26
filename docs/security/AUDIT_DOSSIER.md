@@ -10,6 +10,7 @@ This dossier is the briefing package for an independent security review of **Ary
   - `daml/src/AryaFi/Common/`: Domain types, day-count conventions, error helpers, identifiers, audit events, policy decisions.
   - `daml/src/AryaFi/Finance/`: `CashPosition`, `SecurityPosition`, `AssetHolding`, `Account`, `InstitutionalParty`, `CollateralPosition`, `FinancialObligation`, `PaymentInstruction`, `DvpInstruction`, and the Canton Network Token Standard implementation: the `Holding` views (`TokenStandard`), `PositionTransferFactory` and `PositionTransferInstruction` (`TokenTransfer`), `PositionAllocationFactory` and `PositionAllocation` (`TokenAllocation`), `TokenDvpInstruction` and `TokenDvpAllocationRequest` (`TokenDvp`), and their shared helpers (`TokenRegistry`).
   - `daml/src/AryaFi/Contracts/Proposal.daml`: `MultiPartyProposal`, which collects the signatures for a contract or a joint choice one party at a time.
+  - `daml/src/AryaFi/Contracts/FinancingLegs.daml` and `daml/src/AryaFi/Finance/Encumbrance.daml`: the shared helpers that settle financing legs as token-standard DvPs and lock positions for pledges and collateral.
   - The token-standard interface packages in `daml/deps/splice` are vendored from Splice 0.8.3 and are out of scope, as is Splice's reference token (`splice-test-token-v2`), which only the tests use.
   - `daml/src/AryaFi/Contracts/`: `InstitutionalLoan`, `RepoAgreement`, `ReverseRepoPosition`, `SecuritiesLendingAgreement`, `MarginCall`, `AssetPledge`, `ConditionalEscrow`, `AssetTransferRequest`, `FundSubscription`, `AssetRedemption`.
   - `daml/src/AryaFi/Compliance/`: `KycAttestation`, `SanctionsAttestation`, `JurisdictionProfile`, `EligibilityPolicy`, `TransferRestrictionRule`, `OwnershipRestriction`, `RegulatoryReportRecord`, and the compliance gate (`Gate`), which the token-standard factories and `DvpInstruction` use to evaluate them.
@@ -65,14 +66,16 @@ Each invariant below is argued from the code and exercised by a named test. They
 
 *Argument*: `ExecuteDvpSettlement` fetches both locked legs, checks owner, account, ISIN, quantity, currency, amount, lock holder, and lock reference against the instruction, then exercises `SettleLockedSecurity` and `SettleLockedCash` and records `Settled`, all within one Daml transaction. Any failed check aborts the whole transaction.
 
+A repo's opening and closing legs and a securities loan's delivery and returns settle as token-standard DvPs through the agreement (`SettleOpeningLeg`, `SettleClosingLeg`, `SettleDelivery`, `SettleReturn`, via `AryaFi.Contracts.FinancingLegs`), so the agreement's new status is part of the same transaction as both legs: if the DvP fails, the agreement does not change. Each checks first that the DvP is the agreement's (agent, parties, trade ID, securities, cash).
+
 Token-standard settlement is atomic in the same way when the settlement agent settles every registry's batch in one transaction, as `ExecuteTokenDvp` does: if any registry rejects its batch, the transaction fails and no registry settles. `ExecuteTokenDvp` first checks that it has exactly one batch for each registry of the trade's legs.
 
-*Tests*: `Scenarios/DvpSettlementTest.daml` (`testDvpFullLifecycle`, `testDvpRejectsMismatchedLegs`, `testCannotReExecuteSettledDvp`), `Scenarios/TreasuryDvpScenario.daml`, `Unit/TokenAllocationTest.daml` (`testDvpThroughAllocations`, `testSettlementChecks`), `Scenarios/TokenDvpTest.daml` (`testTokenDvpWithAryaFiCash`, `testTokenDvpWithAnotherToken`, `testTokenDvpNeedsBothSides`).
+*Tests*: `Unit/FinancingOnLedgerTest.daml` (`testRepoLegsMoveAssets`, `testRepoLegChecks`, `testSecuritiesLoanMovesAssets`), `Scenarios/DvpSettlementTest.daml` (`testDvpFullLifecycle`, `testDvpRejectsMismatchedLegs`, `testCannotReExecuteSettledDvp`), `Scenarios/TreasuryDvpScenario.daml`, `Unit/TokenAllocationTest.daml` (`testDvpThroughAllocations`, `testSettlementChecks`), `Scenarios/TokenDvpTest.daml` (`testTokenDvpWithAryaFiCash`, `testTokenDvpWithAnotherToken`, `testTokenDvpNeedsBothSides`).
 
 ### Invariant 5: No Party Reduces Its Own Obligation
 *Claim*: An obligor cannot record its own payment, and a creditor cannot unilaterally increase what is owed.
 
-*Argument*: `PayDownPrincipal` and `PayAccruedInterest` are controlled by the lender; `AccrueInterest` computes interest from the contract's rate, day count, and ledger time and takes no amount; `AccrueLendingFee` needs lender and borrower; `PayLendingFee` is controlled by the lender; margin fulfilment is only satisfied when the caller runs `ConfirmMarginReceipt`; `ReturnSecurities` caps collateral release pro rata; `DischargeObligation` is controlled by the obligee.
+*Argument*: `PayDownPrincipal`, `PayAccruedInterest`, and `ReceiveRepayment` are controlled by the lender, and `ReceiveRepayment` reduces the debt only by the cash it accepts; `DrawdownByTransfer` adds to the principal exactly the cash the borrower accepts; `AccrueInterest` computes interest from the contract's rate, day count, and ledger time and takes no amount; `AccrueLendingFee` needs lender and borrower; `PayLendingFee` is controlled by the lender; margin fulfilment is only satisfied when the caller runs `ConfirmMarginReceipt`; `ReturnSecurities` caps collateral release pro rata; `DischargeObligation` is controlled by the obligee.
 
 *Tests*: `Unit/LoanTest.daml` (`testBorrowerCannotRecordOwnRepayment`), `Unit/SecuritiesLendingTest.daml` (`testBorrowerCannotReduceOwnObligations`), `Unit/RepoMarginTest.daml` (`testMarginCallPledgeFulfillment`, `testMarginDeadlineAndRejection`).
 
@@ -98,13 +101,13 @@ Token-standard settlement is atomic in the same way when the settlement agent se
 
 | Measure | Result |
 |:---|:---|
-| Test scripts | 379, all passing |
+| Test scripts | 385, all passing |
 | Templates created | 34 of 34 in `aryafi-core` (100%) |
-| Choices exercised | 165 of 232 in `aryafi-core` (71.1%), counting each template's implicit `Archive`; the report does not count interface choices (the token standard's and `CompliancePolicy`'s), which the tests exercise |
+| Choices exercised | 175 of 242 in `aryafi-core` (72.3%), counting each template's implicit `Archive`; the report does not count interface choices (the token standard's and `CompliancePolicy`'s), which the tests exercise |
 
 | Suite | Files | Focus |
 |:---|:---|:---|
-| `Unit/` | 20 | Types, day counts, primitives, contracts, pledged holdings, collateral and margin on real assets, compliance policies and the compliance gate, token-standard holdings, transfers, and settlement, multi-party proposals for contracts and joint choices |
+| `Unit/` | 21 | Types, day counts, primitives, contracts, pledged holdings, collateral, margin, loans, repos, and securities loans on real assets, compliance policies and the compliance gate, token-standard holdings, transfers, and settlement, multi-party proposals for contracts and joint choices |
 | `Scenarios/` | 10 | End-to-end DvP (including through the token standard), repo, loan, securities lending, treasury, escrow, private credit, transfer |
 | `Negative/` | 3 | Unauthorized submitters, compliance violations, invalid state transitions |
 | `Authorization/` | 1 | Multi-signatory consent |

@@ -133,6 +133,8 @@ Choices of AryaFi's compliance interface (`CompliancePolicy_*`, in the `aryafi-c
 |  |  |  | `AddEscrowObserver` | `escrowAgent` | Add an observer to this escrow (e.g. regulator, auditor) |
 |  |  |  | `IsEscrowTerminal` *(read-only)* | `escrowAgent` | Nonconsuming query: has this escrow reached a terminal state? |
 | **`InstitutionalLoan`** (Loan.daml) | `lender, borrower` | `observers, agentBank (if set)` | `DrawdownPrincipal` | `borrower` | Borrower executes a drawdown against the remaining facility limit |
+|  |  |  | `DrawdownByTransfer` | `borrower` | Borrower accepts a drawdown the lender sent as a pending token-standard transfer, receiving the cash, and the amount is added to the principal, in one transaction |
+|  |  |  | `ReceiveRepayment` | `lender` | Lender accepts a repayment the borrower sent as a pending token-standard transfer, receiving the cash, and applies it to the interest accrued up to now first, then to principal, in one transaction |
 |  |  |  | `AccrueInterest` | `lender` | Accrue interest on the drawn principal from interestAccruedThrough to the current ledger time, using the contractual rate and day count |
 |  |  |  | `PayAccruedInterest` | `lender` | Lender records receipt of an interest payment from the borrower |
 |  |  |  | `PayDownPrincipal` | `lender` | Lender records receipt of a principal repayment from the borrower |
@@ -174,9 +176,13 @@ Choices of AryaFi's compliance interface (`CompliancePolicy_*`, in the `aryafi-c
 |  |  |  | `AddRedemptionObserver` | `fundManager` | Add authorized observer (e.g. transfer agent) |
 |  |  |  | `IsRedemptionSettled` *(read-only)* | `fundManager` | Nonconsuming query to check if redemption is settled |
 | **`RepoAgreement`** (Repo.daml) | `seller, buyer, custodian` | `observers, tripartyAgent (if set)` | `ExecuteOpeningLeg` | `custodian` | Custodian confirms completion of opening leg DvP settlement |
+|  |  |  | `RequestOpeningLeg` *(read-only)* | `custodian` | Custodian asks for the opening leg as a token-standard DvP: the collateral from the seller's collateral account to the buyer, against the purchase price from the buyer to the seller at `bank` |
+|  |  |  | `SettleOpeningLeg` | `custodian` | Custodian settles the opening leg's DvP, and the repo becomes Active, in one transaction |
 |  |  |  | `SubstituteCollateral` | `seller, buyer` | Collateral substitution: replace active collateral with equivalent eligible collateral |
 |  |  |  | `InitiateClosingLeg` | `seller` | Seller initiates the closing (repurchase) leg, at maturity or as an early repurchase at the agreed repurchase price |
 |  |  |  | `ExecuteClosingLeg` | `custodian` | Custodian confirms completion of closing leg repurchase settlement |
+|  |  |  | `RequestClosingLeg` *(read-only)* | `custodian` | Custodian asks for the closing leg as a token-standard DvP: the collateral from the buyer back to the seller's collateral account, against the repurchase price from the seller to the buyer at `bank` |
+|  |  |  | `SettleClosingLeg` | `custodian` | Custodian settles the closing leg's DvP, and the repo is Settled, in one transaction |
 |  |  |  | `RollRepo` | `seller, buyer` | Roll / extend the repo term with updated rate and maturity date |
 |  |  |  | `DeclareRepoDefault` | `declaringParty` | Declare default upon failure to settle closing repurchase or post margin |
 |  |  |  | `AddRepoObserver` | `seller, buyer` | Add an authorized observer (e.g. regulator, central clearing counterparty) |
@@ -189,6 +195,10 @@ Choices of AryaFi's compliance interface (`CompliancePolicy_*`, in the `aryafi-c
 |  |  |  | `PayLendingFee` | `lender` | Lender confirms receipt of a lending fee payment from the borrower |
 |  |  |  | `RecallSecurities` | `lender` | Lender issues a formal recall for partial or full lent securities |
 |  |  |  | `ReturnSecurities` | `borrower` | Borrower returns securities, releasing collateral |
+|  |  |  | `RequestDelivery` *(read-only)* | `custodian` | Custodian asks for the delivery as a token-standard DvP: the borrowed securities from the lender to the borrower's borrowAccountId, against the cash collateral from the borrower to the lender at `bank` |
+|  |  |  | `SettleDelivery` | `custodian` | Custodian settles the delivery's DvP, and the agreement becomes Active, in one transaction |
+|  |  |  | `RequestReturn` *(read-only)* | `custodian` | Custodian asks for a return as a token-standard DvP: `returnedQuantity` of the securities from the borrower to the lender, against `collateralReleaseAmount` of cash collateral from the lender back to the borrower at `bank`, within the pro-rata cap |
+|  |  |  | `SettleReturn` | `custodian` | Custodian settles a return's DvP, and the agreement records the return as with ReturnSecurities, in one transaction |
 |  |  |  | `RevalueCollateral` | `lender, borrower` | Mark-to-market collateral adjustment agreed between counterparties |
 |  |  |  | `DeclareSecLendingDefault` | `lender` | Lender declares default upon failure to satisfy recall deadline |
 |  |  |  | `AddSecLendingObserver` | `lender, borrower` | Add authorized observer |
